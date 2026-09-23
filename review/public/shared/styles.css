@@ -5,28 +5,32 @@
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("../assets/orbitron-600.ttf") format('truetype');
+  src: url("../assets/orbitron-600.woff") format('woff'),
+    url("../assets/orbitron-600.ttf") format('truetype');
 }
 @font-face {
   font-family: 'Rajdhani';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("../assets/rajdhani-400.ttf") format('truetype');
+  src: url("../assets/rajdhani-400.woff") format('woff'),
+    url("../assets/rajdhani-400.ttf") format('truetype');
 }
 @font-face {
   font-family: 'Rajdhani';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("../assets/rajdhani-600.ttf") format('truetype');
+  src: url("../assets/rajdhani-600.woff") format('woff'),
+    url("../assets/rajdhani-600.ttf") format('truetype');
 }
 @font-face {
   font-family: 'Rajdhani';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url("../assets/rajdhani-700.ttf") format('truetype');
+  src: url("../assets/rajdhani-700.woff") format('woff'),
+    url("../assets/rajdhani-700.ttf") format('truetype');
 }
 
 /* Shared UI: foundation, navigation, board, decisions, page controls. */

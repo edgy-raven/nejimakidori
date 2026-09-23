@@ -59,7 +59,11 @@ def run(args):
     )
     plan = {
         **vars(args),
-        "devices": "1" if args.experiment else "1,2,3,4",
+        "devices": (
+            args.training_devices.split(",")[0]
+            if args.experiment
+            else args.training_devices
+        ),
         "evaluation_games": 4 if args.experiment else 10000,
         "selection": "fresh_duplicate_games",
         "evaluation_format": "riichienv_duplicate_south",
@@ -140,6 +144,7 @@ if __name__ == "__main__":
     inputs.add_argument("--data")
     inputs.add_argument("--archives")
     parser.add_argument("--experiment", action="store_true")
+    parser.add_argument("--training-devices", default="0,2,3,4")
     parser.add_argument(
         "--dealership-advice-strength", type=float, default=0.25
     )

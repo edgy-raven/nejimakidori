@@ -110,6 +110,20 @@ def test_component_targets_alternatives_masks_and_detached_advice():
         numpy.log1p(0.7) ** 2 / 2,
         rtol=1e-6,
     )
+    # Observed-outcome metrics exclude counterfactual alternative actions.
+    numpy.testing.assert_allclose(
+        result["placement_observed_mse"], (1 - prior) ** 2, rtol=1e-6
+    )
+    numpy.testing.assert_allclose(
+        result["points_observed_mse"],
+        numpy.log1p(0.7) ** 2 / 2,
+        rtol=1e-6,
+    )
+    for component in ("placement", "points"):
+        numpy.testing.assert_allclose(
+            result[component + "_observed_mse"],
+            result[component + "_prior_mse"],
+        )
     gradient = tape.gradient(
         result["payoff_critic_loss"], outputs["payoff_action_values"]
     ).numpy()
@@ -147,6 +161,14 @@ def test_component_targets_alternatives_masks_and_detached_advice():
     assert float(changed["dealership_advice_strength"]) == 0
     numpy.testing.assert_allclose(
         changed["placement_critic_loss"], result["placement_critic_loss"]
+    )
+    numpy.testing.assert_allclose(
+        changed["points_observed_mse"],
+        (2 - numpy.log1p(0.7)) ** 2 / 2,
+        rtol=1e-6,
+    )
+    numpy.testing.assert_allclose(
+        changed["points_prior_mse"], result["points_prior_mse"]
     )
 
 

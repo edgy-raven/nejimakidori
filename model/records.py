@@ -258,11 +258,24 @@ def validate_summary(data):
             raise ValueError(f"dataset {name} requires regeneration")
 
 
-def dataset(data, batch_size, training=False, sampling="natural"):
+def game_partition(rows, partition):
+    """Reserve five percent of complete games for validation."""
+    game = tf.io.parse_example(
+        rows, {"meta/game_id": tf.io.FixedLenFeature([], tf.string)}
+    )["meta/game_id"]
+    validation = (
+        tf.strings.to_hash_bucket_strong(game, 20, key=[239, 20260923]) == 0
+    )
+    return {"train": ~validation, "validation": validation}[partition]
+
+
+def dataset(
+    data, batch_size, training=False, sampling="natural", partition=None
+):
     validate_summary(data)
     files = sorted(pathlib.Path(data).glob("*.tfrecord.gz"))
     paths = tf.data.Dataset.from_tensor_slices([str(path) for path in files])
-    if training:
+    if training or partition == "validation":
         paths = paths.shuffle(len(files), seed=17)
     stream = paths.interleave(
         lambda path: tf.data.TFRecordDataset(path, compression_type="GZIP"),
@@ -270,6 +283,17 @@ def dataset(data, batch_size, training=False, sampling="natural"):
         num_parallel_calls=tf.data.AUTOTUNE,
         deterministic=True,
     )
+    if partition is not None:
+        stream = (
+            stream.batch(1024)
+            .map(
+                lambda rows: tf.boolean_mask(
+                    rows, game_partition(rows, partition)
+                ),
+                num_parallel_calls=tf.data.AUTOTUNE,
+            )
+            .unbatch()
+        )
     if sampling == "focused":
         stream = (
             stream.batch(1024)
@@ -288,6 +312,8 @@ def dataset(data, batch_size, training=False, sampling="natural"):
         )
     if training:
         stream = stream.shuffle(100000, seed=17).repeat()
+    elif partition == "validation":
+        stream = stream.shuffle(50000, seed=239, reshuffle_each_iteration=False)
     options = tf.data.Options()
     options.threading.private_threadpool_size = 4
     return (

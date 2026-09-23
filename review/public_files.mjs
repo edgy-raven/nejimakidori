@@ -8,6 +8,7 @@ export function publicFiles(directory) {
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".ttf": "font/ttf",
+    ".woff": "font/woff",
     ".jpg": "image/jpeg",
     ".png": "image/png",
     ".json": "application/json",

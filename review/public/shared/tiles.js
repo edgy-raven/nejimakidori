@@ -1,7 +1,7 @@
 import { tileBase } from "./tile_values.js";
 export { tileBase } from "./tile_values.js";
 
-const tileRects = await fetch("../assets/tiles_rects.json").then((response) =>
+const tileRects = await fetch("../assets/tiles_rects.json?v=tile-atlas-20260923").then((response) =>
   response.json()
 );
 
@@ -76,7 +76,7 @@ export function tileElement(tile, options = {}) {
     : 27 + Number(base?.[0]);
   const rect = tileRects[tileId - 1];
   if (rect) {
-    element.style.backgroundImage = 'url("../assets/tiles.png")';
+    element.style.backgroundImage = 'url("../assets/tiles.png?v=tile-atlas-20260923")';
     scaleTileSprite(element);
   } else {
     element.textContent = tile || "?";

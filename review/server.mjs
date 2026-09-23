@@ -86,12 +86,12 @@ const redirects = new Map([
   ["/live", "live/"],
 ]);
 
-function send(response, status, body, contentType) {
+function send(response, status, body, contentType, cacheControl = "no-store") {
   const value = Buffer.isBuffer(body) ? body : Buffer.from(body);
   response.writeHead(status, {
     "Content-Type": contentType,
     "Content-Length": value.length,
-    "Cache-Control": "no-store",
+    "Cache-Control": cacheControl,
     "X-Content-Type-Options": "nosniff",
   });
   response.end(value);
@@ -190,7 +190,16 @@ function staticFile(response, pathname) {
     sendJson(response, 404, { error: "not_found" });
     return;
   }
-  send(response, 200, fs.readFileSync(file[0]), file[1]);
+  send(
+    response,
+    200,
+    fs.readFileSync(file[0]),
+    file[1],
+    ["text/html; charset=utf-8", "text/javascript; charset=utf-8",
+      "text/css; charset=utf-8", "application/json"].includes(file[1])
+      ? "no-store"
+      : "public, max-age=3600",
+  );
 }
 
 function sendLiveState(response) {

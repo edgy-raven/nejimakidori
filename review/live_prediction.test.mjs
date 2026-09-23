@@ -45,7 +45,7 @@ test('live riichi survives forced draws, long rivers and the next hand', async t
       name.endsWith('png') ? 'image/png' : 'application/json']);
   }
   const server = http.createServer(async (request, response) => {
-    const file = files.get(request.url);
+    const file = files.get(new URL(request.url, 'http://localhost').pathname);
     if (!file) return response.writeHead(404).end();
     response.writeHead(200, {'Content-Type': file[1]});
     response.end(await fs.readFile(file[0]));

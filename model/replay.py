@@ -396,7 +396,7 @@ class Replay:
                 self.decision_index += 1
 
     def observations(self):
-        from . import actions, features, ron_targets, training_targets
+        from . import actions, features, training_targets
 
         self.targets = training_targets.round_targets(
             Replay.from_start(self.game_id, self.events[0]), self.events
@@ -495,6 +495,8 @@ class Replay:
                         else next_event["pai"]
                     )
             training_targets.attach(observation, self, index, action_index)
-            for name, value in ron_targets.labels(self, actor, phase).items():
+            for name, value in training_targets.ron_labels(
+                self, actor, phase
+            ).items():
                 setattr(observation, name, value)
             yield observation

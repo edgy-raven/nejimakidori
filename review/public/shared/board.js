@@ -1,7 +1,7 @@
 import { shantenDistribution, placementBar } from "./probabilities.js";
 import { accountRankText } from "./ranks.js";
 import { displayHand } from "./replay.js";
-import { tileElement, tilesElement, sortTiles } from "./tiles.js";
+import { tileElement, tilesElement, sortTiles } from "./tiles.js?v=tile-atlas-20260923";
 import { actionName, seatName } from "./labels.js";
 import { fitRack } from "./board-layout.js";
 

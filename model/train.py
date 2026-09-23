@@ -662,8 +662,8 @@ class GroupedModel(tf.keras.Model):
 class TopCheckpoints:
     """Save phase records in imitation accuracy, with one global cooldown."""
 
-    def __init__(self, actor, root):
-        self.actor = actor
+    def __init__(self, learner, root):
+        self.learner = learner
         self.root = pathlib.Path(root)
         self.best = {}
         self.last_saved = -float("inf")
@@ -676,7 +676,8 @@ class TopCheckpoints:
             return
         path = self.root / "top" / f"{phase}-{step:09d}"
         path.mkdir(parents=True)
-        self.actor.save(path / "model.keras")
+        self.learner.actor.save(path / "model.keras")
+        self.learner.save_weights(path / "learner.weights.h5")
         (path / "checkpoint.json").write_text(
             json.dumps(
                 {
@@ -766,6 +767,13 @@ def run(data, output, experiment=False, advice_strength=0.25):
                 "top_checkpoint_scope": "per_phase",
                 "top_checkpoint_window_updates": 100,
                 "top_checkpoint_cooldown_seconds": 1800,
+                "validation": {
+                    "game_fraction": 0 if experiment else 0.05,
+                    "game_hash": "strong_bucket_20_key_239_20260923_zero",
+                    "batches": 8,
+                    "interval_updates": 2000,
+                    "smoke_test_only": experiment,
+                },
                 "optimizer": tf.keras.optimizers.serialize(optimizer),
             },
             indent=2,
@@ -846,14 +854,53 @@ def run(data, output, experiment=False, advice_strength=0.25):
             for name, value in zip(losses, tf.unstack(reduced))
         }
 
-    checkpoints = TopCheckpoints(actor, root)
+    @tf.function
+    def validate(batch):
+        inputs, labels, weights = batch
+        _, metrics = learner.loss_and_metrics(
+            x=inputs,
+            y=labels,
+            y_pred=learner(inputs, training=False),
+            sample_weight=weights,
+            payoff_weight=0.0,
+        )
+        return {
+            name: metrics[name]
+            for name in (
+                "placement_observed_mse",
+                "placement_prior_mse",
+                "points_observed_mse",
+                "points_prior_mse",
+                "policy_loss",
+                "imitation_accuracy",
+            )
+        }
+
+    validation = (
+        []
+        if experiment
+        else list(
+            records.dataset(
+                data=data,
+                batch_size=512,
+                training=False,
+                sampling="natural",
+                partition="validation",
+            ).take(8)
+        )
+    )
+    checkpoints = TopCheckpoints(learner, root)
     for phase in phases:
         print(
             f"phase={phase['phase']} epochs={phase['epochs']} steps={phase['steps_per_epoch']}",
             flush=True,
         )
         stream = records.dataset(
-            data, batch_size, training=True, sampling=phase["sampling"]
+            data=data,
+            batch_size=batch_size,
+            training=True,
+            sampling=phase["sampling"],
+            partition=None if experiment else "train",
         )
         iterator = iter(strategy.experimental_distribute_dataset(stream))
         with (root / (phase["phase"] + ".csv")).open("w", newline="") as output:
@@ -877,6 +924,42 @@ def run(data, output, experiment=False, advice_strength=0.25):
                     loss = values["loss"]
                     if not math.isfinite(loss):
                         raise FloatingPointError("nonfinite training objective")
+                    step_count = int(optimizer.iterations.numpy())
+                    if validation and (
+                        step_count == 1 or step_count % 2000 == 0
+                    ):
+                        validation_values = [
+                            validate(batch) for batch in validation
+                        ]
+                        validation_metrics = {
+                            name: float(
+                                numpy.average(
+                                    [
+                                        float(values[name])
+                                        for values in validation_values
+                                    ],
+                                    weights=[
+                                        len(batch[2]) for batch in validation
+                                    ],
+                                )
+                            )
+                            for name in validation_values[0]
+                        }
+                        with (root / "validation.jsonl").open("a") as log:
+                            log.write(
+                                json.dumps(
+                                    {"step": step_count, **validation_metrics}
+                                )
+                                + "\n"
+                            )
+                        print(
+                            f"validation_step={step_count} "
+                            + " ".join(
+                                f"{name}={value:.6f}"
+                                for name, value in validation_metrics.items()
+                            ),
+                            flush=True,
+                        )
                     for name, value in values.items():
                         totals[name] = totals.get(name, 0) + value
                     if (index + 1) % 100 == 0 or index + 1 == phase[
@@ -996,8 +1079,8 @@ if __name__ == "__main__":
     arguments = parser.parse_args()
     if arguments.dealership_advice_strength < 0:
         parser.error("dealership advice strength must be nonnegative")
-    os.environ["CUDA_VISIBLE_DEVICES"] = (
-        "1" if arguments.experiment else "1,2,3,4"
+    os.environ.setdefault(
+        "CUDA_VISIBLE_DEVICES", "0" if arguments.experiment else "0,2,3,4"
     )
     run(
         arguments.data,

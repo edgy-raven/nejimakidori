@@ -12,6 +12,8 @@ control, and three isolated Discord-summoned friendly accounts.
 - [Review](review/README.md): replay review and live display.
 - [Live](live/README.md): browser controllers and vision.
 - [Friendly bots](bots/README.md): isolated account fleet and Discord commands.
+- [Audit archive](../nejimakidori-audits/README.md): dated investigations,
+  benchmarks and supporting evidence; not operational instructions.
 
 ## Verification
 

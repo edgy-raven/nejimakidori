@@ -7,7 +7,7 @@ import { observeBoard } from "../shared/board-layout.js";
 import { kyokuNotice } from "../shared/kyoku-notice.js";
 import { seatName, winText, englishLabel, actionName, roundText } from "../shared/labels.js";
 import { topModelAction } from "../shared/policy.js";
-import { renderSeat as drawSeat, renderRiver as drawRiver, renderDora } from "../shared/board.js";
+import { renderSeat as drawSeat, renderRiver as drawRiver, renderDora } from "../shared/board.js?v=tile-atlas-20260923";
 import { PredictionView } from "../shared/prediction.js";
 import { tileText } from "../shared/tiles.js";
 import { playbackState, displayHand } from "../shared/replay.js";

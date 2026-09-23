@@ -3,7 +3,7 @@ import { renderHandResult, renderMatchResult } from "../shared/results.js";
 import { observeBoard } from "../shared/board-layout.js";
 import { kyokuNotice } from "../shared/kyoku-notice.js";
 import { seatName, roundText } from "../shared/labels.js";
-import { renderSeat, renderRiver, renderDora } from "../shared/board.js";
+import { renderSeat, renderRiver, renderDora } from "../shared/board.js?v=tile-atlas-20260923";
 import { PredictionView } from "../shared/prediction.js";
 import { accountRankText } from "../shared/ranks.js";
 import { playbackState } from "../shared/replay.js";

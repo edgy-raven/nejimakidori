@@ -14,6 +14,17 @@ import tensorboard.plugins.text.summary
 import tensorboard.summary.writer.event_file_writer
 
 CHARTS = {
+    "Validation": {
+        "Placement prediction versus prior": [
+            "validation/placement_observed_mse",
+            "validation/placement_prior_mse",
+        ],
+        "Points prediction versus zero": [
+            "validation/points_observed_mse",
+            "validation/points_prior_mse",
+        ],
+        "Policy": ["validation/policy_loss", "validation/imitation_accuracy"],
+    },
     "Training": {
         "Loss": ["total_loss", "policy_loss"],
         "Discard agreement": ["discard_match", "discard_top3"],
@@ -22,6 +33,14 @@ CHARTS = {
             "training_parameters/offline_policy_mix",
         ],
         "Value error": ["payoff_critic_loss", "payoff_baseline_loss"],
+        "Placement prediction versus prior": [
+            "placement_observed_mse",
+            "placement_prior_mse",
+        ],
+        "Points prediction versus zero": [
+            "points_observed_mse",
+            "points_prior_mse",
+        ],
     },
     "Attack and defense": {
         "Policy imitation": [
@@ -108,6 +127,32 @@ class Monitor:
         )
         writer.close()
 
+    def write_scalars(self, phase, step, scalars, now):
+        if (phase, step) in self.recorded:
+            return
+        if phase not in self.writers:
+            self.writers[phase] = (
+                tensorboard.summary.writer.event_file_writer.EventFileWriter(
+                    str(self.root / "tensorboard" / phase / "live")
+                )
+            )
+        self.writers[phase].add_event(
+            tensorboard.compat.proto.event_pb2.Event(
+                wall_time=now,
+                step=step,
+                summary=tensorboard.compat.proto.summary_pb2.Summary(
+                    value=[
+                        tensorboard.compat.proto.summary_pb2.Summary.Value(
+                            tag=name, simple_value=value
+                        )
+                        for name, value in scalars.items()
+                    ]
+                ),
+            )
+        )
+        self.writers[phase].flush()
+        self.recorded.add((phase, step))
+
     def poll(self, now):
         config_path = self.root / "candidate/run_config.json"
         if not config_path.exists():
@@ -177,6 +222,17 @@ class Monitor:
                 phase = line.split()[0].split("=")[1]
             elif line.startswith("Epoch "):
                 epoch = int(line.split()[1].split("/")[0]) - 1
+            elif line.startswith("validation_step="):
+                values = dict(re.findall(r"(\w+)=([-+\d.e]+)", line))
+                self.write_scalars(
+                    phase="validation",
+                    step=int(values.pop("validation_step")),
+                    scalars={
+                        "validation/" + name: float(value)
+                        for name, value in values.items()
+                    },
+                    now=now,
+                )
             elif line.startswith("step="):
                 values = dict(re.findall(r"(\w+)=([-+\d.e]+)", line))
                 local_step = int(values["step"])
@@ -192,45 +248,20 @@ class Monitor:
                     + local_step
                 )
                 throughput = float(values["examples_per_second"])
-                key = (phase, step)
-                if key not in self.recorded:
-                    if phase not in self.writers:
-                        self.writers[phase] = (
-                            tensorboard.summary.writer.event_file_writer.EventFileWriter(
-                                str(self.root / "tensorboard" / phase / "live")
+                scalars = {}
+                for charts in CHARTS.values():
+                    for tags in charts.values():
+                        for tag in tags:
+                            name = (
+                                "loss"
+                                if tag == "total_loss"
+                                else tag.removeprefix("training_parameters/")
                             )
-                        )
-                    writer = self.writers[phase]
-                    scalars = {}
-                    for charts in CHARTS.values():
-                        for tags in charts.values():
-                            for tag in tags:
-                                name = (
-                                    "loss"
-                                    if tag == "total_loss"
-                                    else tag.removeprefix(
-                                        "training_parameters/"
-                                    )
-                                )
-                                if name in values:
-                                    scalars[tag] = float(values[name])
-                    writer.add_event(
-                        tensorboard.compat.proto.event_pb2.Event(
-                            wall_time=now,
-                            step=step,
-                            summary=tensorboard.compat.proto.summary_pb2.Summary(
-                                value=[
-                                    tensorboard.compat.proto.summary_pb2.Summary.Value(
-                                        tag=name,
-                                        simple_value=value,
-                                    )
-                                    for name, value in scalars.items()
-                                ]
-                            ),
-                        )
-                    )
-                    writer.flush()
-                    self.recorded.add(key)
+                            if name in values:
+                                scalars[tag] = float(values[name])
+                self.write_scalars(
+                    phase=phase, step=step, scalars=scalars, now=now
+                )
         if phase:
             history = self.root / "candidate" / (phase + ".csv")
             if history.exists():

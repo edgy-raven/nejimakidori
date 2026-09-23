@@ -352,6 +352,28 @@ async function watchOverlays() {
 }
 
 function handleGameMessage(message) {
+  if (message.method === "Runtime.exceptionThrown") {
+    output("browser_exception", {
+      text: message.params.exceptionDetails.text,
+      description: message.params.exceptionDetails.exception?.description,
+    });
+    return;
+  }
+  if (message.method === "Log.entryAdded" &&
+      ["error", "warning"].includes(message.params.entry.level)) {
+    output("browser_log", {
+      level: message.params.entry.level,
+      text: message.params.entry.text,
+    });
+    return;
+  }
+  if (message.method === "Network.loadingFailed") {
+    output("network_failure", {
+      error: message.params.errorText,
+      url: message.params.requestId,
+    });
+    return;
+  }
   if (
     !["Network.webSocketFrameReceived", "Network.webSocketFrameSent"].includes(message.method) ||
     message.params.response.opcode !== 2
@@ -587,6 +609,7 @@ async function openBrowser() {
       "--disable-dev-shm-usage",
       "--enable-webgl",
       "--enable-unsafe-swiftshader",
+      "--autoplay-policy=no-user-gesture-required",
       "--ignore-gpu-blocklist",
       "--use-angle=swiftshader",
       "--remote-debugging-pipe",
@@ -612,6 +635,8 @@ async function openBrowser() {
   output("startup", { stage: "page_enabled" });
   await send("Network.enable");
   output("startup", { stage: "network_enabled" });
+  await send("Runtime.enable");
+  await send("Log.enable");
   await send("Emulation.setDeviceMetricsOverride", {
     width: 1280,
     height: 720,

@@ -531,6 +531,19 @@ def offline_policy_terms(
                     ),
                     valid,
                 ),
+                component_name
+                + "_observed_mse": mean(
+                    tf.square(
+                        tf.add_n(selected_values)
+                        + component_prior
+                        - targets[component]
+                    ),
+                    valid,
+                ),
+                component_name
+                + "_prior_mse": mean(
+                    tf.square(targets[component] - component_prior), valid
+                ),
                 component_name + "_advantage": mean(advantage, valid),
                 component_name
                 + "_known_alternatives": mean(tf.add_n(counts), decisions),

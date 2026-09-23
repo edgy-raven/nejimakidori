@@ -1,0 +1,125 @@
+{
+  "actor": 2,
+  "round": {
+    "prevailingWind": 1,
+    "eastOnly": false,
+    "kyoku": 1,
+    "honba": 0,
+    "riichiSticks": 0,
+    "scores": [
+      24000,
+      6500,
+      29500,
+      40000
+    ],
+    "doraIndicators": [
+      "6p"
+    ],
+    "hands": [
+      [
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?"
+      ],
+      [
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?"
+      ],
+      [
+        "8p",
+        "9p",
+        "4m",
+        "2s",
+        "4z",
+        "8m",
+        "4m",
+        "4m",
+        "0m",
+        "5p",
+        "7p",
+        "4m",
+        "3z"
+      ],
+      [
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?"
+      ]
+    ],
+    "events": [
+      {
+        "type": "draw",
+        "seat": 0,
+        "tile": "?",
+        "remaining": 69,
+        "doras": [
+          "6p"
+        ],
+        "liqi": null
+      },
+      {
+        "type": "discard",
+        "seat": 0,
+        "tile": "2p",
+        "tsumogiri": false,
+        "riichi": false,
+        "doras": []
+      },
+      {
+        "type": "draw",
+        "seat": 1,
+        "tile": "?",
+        "remaining": 68,
+        "doras": [],
+        "liqi": null
+      },
+      {
+        "type": "discard",
+        "seat": 1,
+        "tile": "4z",
+        "tsumogiri": false,
+        "riichi": false,
+        "doras": []
+      },
+      {
+        "type": "draw",
+        "seat": 2,
+        "tile": "2s",
+        "remaining": 67,
+        "doras": [],
+        "liqi": null
+      }
+    ]
+  }
+}

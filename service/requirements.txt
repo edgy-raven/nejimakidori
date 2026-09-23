@@ -1,0 +1,3 @@
+-r ../model/requirements.txt
+aiohttp>=3.10,<4
+werkzeug>=3,<4

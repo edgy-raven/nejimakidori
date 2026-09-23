@@ -1,0 +1,676 @@
+{
+  "label": "South 4",
+  "prevailingWind": 1,
+  "kyoku": 4,
+  "honba": 0,
+  "riichiSticks": 0,
+  "scores": [
+    10200,
+    41300,
+    40900,
+    7600
+  ],
+  "doraIndicators": [
+    "9m"
+  ],
+  "hands": [
+    [
+      "5m",
+      "3s",
+      "3p",
+      "6m",
+      "3m",
+      "7m",
+      "4s",
+      "9m",
+      "7p",
+      "8m",
+      "1z",
+      "4p",
+      "7m"
+    ],
+    [
+      "5z",
+      "3m",
+      "7s",
+      "0p",
+      "2m",
+      "7s",
+      "5p",
+      "8p",
+      "6s",
+      "7z",
+      "1m",
+      "4m",
+      "1s"
+    ],
+    [
+      "2p",
+      "7s",
+      "3s",
+      "8p",
+      "1p",
+      "2z",
+      "8m",
+      "2m",
+      "0m",
+      "8s",
+      "8p",
+      "6p",
+      "1s"
+    ],
+    [
+      "9s",
+      "1z",
+      "6z",
+      "2m",
+      "6s",
+      "6p",
+      "5m",
+      "8p",
+      "8m",
+      "3z",
+      "4m",
+      "7p",
+      "4s"
+    ]
+  ],
+  "events": [
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "3p",
+      "remaining": 69,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "9s",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "6m",
+      "remaining": 68,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "1z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "3s",
+      "remaining": 67,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "7z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "5p",
+      "remaining": 66,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "2z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "4z",
+      "remaining": 65,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "3z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "6m",
+      "remaining": 64,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "7p",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "5s",
+      "remaining": 63,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "5z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "4p",
+      "remaining": 62,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "8m",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "3s",
+      "remaining": 61,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "4z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "2z",
+      "remaining": 60,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "2z",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "8s",
+      "remaining": 59,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "8p",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "1s",
+      "remaining": 58,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "1s",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "8s",
+      "remaining": 57,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "1z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "2s",
+      "remaining": 56,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "3m",
+      "tsumogiri": false,
+      "riichi": true,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "2z",
+      "remaining": 55,
+      "doras": [],
+      "liqi": {
+        "seat": 0,
+        "score": 9200,
+        "sticks": 1
+      }
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "2z",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "2s",
+      "remaining": 54,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "2m",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "4m",
+      "remaining": 53,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "6z",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "9p",
+      "remaining": 52,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "9p",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "4s",
+      "remaining": 51,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "3m",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "6z",
+      "remaining": 50,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "6z",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "5s",
+      "remaining": 49,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "8m",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "6p",
+      "remaining": 48,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "6p",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "9s",
+      "remaining": 47,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "2m",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "3z",
+      "remaining": 46,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "3z",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "5m",
+      "remaining": 45,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "2m",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "1m",
+      "remaining": 44,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "1m",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "2s",
+      "remaining": 43,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "1m",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "5s",
+      "remaining": 42,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "5s",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 3,
+      "tile": "7p",
+      "remaining": 41,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "7p",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 0,
+      "tile": "1p",
+      "remaining": 40,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 0,
+      "tile": "1p",
+      "tsumogiri": true,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 1,
+      "tile": "3p",
+      "remaining": 39,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 1,
+      "tile": "5s",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "draw",
+      "seat": 2,
+      "tile": "6s",
+      "remaining": 38,
+      "doras": [],
+      "liqi": null
+    },
+    {
+      "type": "discard",
+      "seat": 2,
+      "tile": "0m",
+      "tsumogiri": false,
+      "riichi": true,
+      "doras": []
+    },
+    {
+      "type": "call",
+      "seat": 3,
+      "callType": "pon",
+      "tiles": [
+        "5m",
+        "5m",
+        "0m"
+      ],
+      "froms": [
+        3,
+        3,
+        2
+      ],
+      "liqi": {
+        "seat": 2,
+        "score": 39900,
+        "sticks": 2
+      }
+    },
+    {
+      "type": "discard",
+      "seat": 3,
+      "tile": "3p",
+      "tsumogiri": false,
+      "riichi": false,
+      "doras": []
+    },
+    {
+      "type": "agari",
+      "hules": [
+        {
+          "seat": 2,
+          "tile": "3p",
+          "hand": [
+            "1p",
+            "2p",
+            "4p",
+            "5p",
+            "6p",
+            "8p",
+            "8p",
+            "1s",
+            "2s",
+            "3s",
+            "6s",
+            "7s",
+            "8s"
+          ],
+          "zimo": false,
+          "title": "Win",
+          "han": 2,
+          "fu": 40,
+          "yaku": [
+            {
+              "name": "Riichi",
+              "value": 1,
+              "yakuman": false
+            },
+            {
+              "name": "Ura Dora",
+              "value": 1,
+              "yakuman": false
+            }
+          ]
+        }
+      ],
+      "scores": [
+        9200,
+        41300,
+        44500,
+        5000
+      ],
+      "deltas": [
+        0,
+        0,
+        4600,
+        -2600
+      ]
+    }
+  ]
+}

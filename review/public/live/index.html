@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nejimakidori live game</title>
+    <link rel="stylesheet" href="../shared/styles.css">
+  </head>
+  <body>
+    <main class="live-page">
+      <section class="live-toolbar">
+        <div class="live-control-form">
+          <label>Control PIN
+            <input id="live-control-key" type="password" required
+              inputmode="numeric" pattern="[0-9]{4}" maxlength="4"
+              autocomplete="off" placeholder="4-digit PIN">
+          </label>
+          <button id="live-login" type="button">Login</button>
+          <button id="live-autoqueue" type="button" aria-pressed="false">Autoqueue: off</button>
+          <span id="live-login-status" role="status"></span>
+        </div>
+        <div class="live-connection-status">
+          <span id="live-indicator" class="live-indicator"></span>
+          <strong id="live-status" role="status">Connecting…</strong>
+        </div>
+        <span id="live-ranked-status" role="status">Rank and copper awaiting login</span>
+        <span id="live-updated">Waiting for controller state</span>
+      </section>
+
+
+      <section id="live-browser" hidden>
+        <p>Enter the control PIN above, then click the screenshot to control the browser.</p>
+        <p id="live-click-status" role="status"></p>
+        <img id="live-screenshot" alt="Current Mahjong Soul browser screen"
+          draggable="false" width="1280" height="720">
+      </section>
+
+      <section id="live-view" class="live-layout" hidden>
+        <div class="board-viewport">
+        <div class="board">
+          <article class="seat seat-2" data-live-seat="2"></article>
+          <article class="seat seat-3" data-live-seat="3"></article>
+          <section class="table-field" aria-label="Live discard rivers">
+            <div class="table-river table-river-2"
+              data-live-river="2"></div>
+            <div class="table-river table-river-3"
+              data-live-river="3"></div>
+            <section class="center">
+      <section id="final-match-result" class="final-match-result" hidden aria-live="polite">
+        <h2>Final rankings</h2>
+        <table><thead><tr><th>Place</th><th>Player</th><th>Score</th></tr></thead><tbody></tbody></table>
+      </section>
+
+              <p id="live-round">—</p>
+              <div class="dora">
+                <div id="live-dora"></div>
+              </div>
+            </section>
+            <div class="table-river table-river-1"
+              data-live-river="1"></div>
+            <div class="table-river table-river-0"
+              data-live-river="0"></div>
+          </section>
+          <article class="seat seat-1" data-live-seat="1"></article>
+          </div>
+
+          </div>
+          <article class="main-hand seat seat-0" data-live-seat="0"></article>
+        <aside class="live-analysis">
+          <section class="game-outcome-section">
+            <table class="hand-outcomes balanced-outcomes">
+              <colgroup><col style="width:25%"><col style="width:25%"><col style="width:50%"></colgroup>
+              <thead><tr><th scope="colgroup" colspan="2">Last hand</th><th scope="col">This hand</th></tr></thead>
+              <tbody id="game-outcome">
+                <tr><th scope="row">Self</th><td data-last-seat="0">—</td><td class="ranked-outcome" data-outcome-rank="0">—</td></tr>
+                <tr><th scope="row">Right</th><td data-last-seat="1">—</td><td class="ranked-outcome" data-outcome-rank="1">—</td></tr>
+                <tr><th scope="row">Across</th><td data-last-seat="2">—</td><td class="ranked-outcome" data-outcome-rank="2">—</td></tr>
+                <tr><th scope="row">Left</th><td data-last-seat="3">—</td><td class="ranked-outcome" data-outcome-rank="3">—</td></tr>
+              </tbody>
+              <tfoot><tr><td colspan="2" id="live-hand-result" class="last-hand-detail" aria-live="polite"></td><td></td></tr></tfoot>
+            </table>
+          </section>
+          <div class="live-decision-heading">
+            <h2 id="live-decision-label">Model decision</h2>
+          </div>
+          <section id="live-recommendation" class="live-recommendation" aria-live="polite">
+            Waiting for the model.
+          </section>
+          <dl class="live-metrics">
+            <div><dt>Difficulty</dt><dd id="live-difficulty">—</dd></div>
+            <div><dt>Model latency</dt><dd id="live-latency">—</dd></div>
+          </dl>
+          <section>
+            <h2>Action distribution</h2>
+            <div id="live-actions"></div>
+          </section>
+
+
+
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

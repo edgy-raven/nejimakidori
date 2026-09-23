@@ -1,0 +1,30 @@
+{
+  "position": {
+    "action": "ActionDealTile",
+    "hand": {
+      "concealed": [
+        "1m",
+        "2p",
+        "4m",
+        "1p",
+        "6p",
+        "2m",
+        "6m",
+        "7p",
+        "5m",
+        "4p",
+        "1m",
+        "0p",
+        "8s"
+      ],
+      "drawn": "8m",
+      "meldCount": 0,
+      "riichi": false
+    }
+  },
+  "action": {
+    "actor": 1,
+    "pai": "8m",
+    "type": "dahai"
+  }
+}

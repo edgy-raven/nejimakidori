@@ -1,0 +1,23 @@
+#board { position: relative; }
+.kyoku-notice { position: absolute; z-index: 20; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(520px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; padding: 16px 20px; border: 2px solid #caa869; border-radius: 4px; background: #182631; color: #ede6d7; box-shadow: 0 4px 20px #0009; }
+.kyoku-notice header { display: flex; justify-content: space-between; gap: 12px; }
+.kyoku-notice header strong { font-size: 20px; }
+.kyoku-notice header button { position: absolute; top: 12px; right: 12px; padding: 2px 8px; font-size: 20px; line-height: 1; }
+.kyoku-notice h3 { margin: 12px 0 8px; font-size: 16px; }
+.kyoku-notice ul { padding-left: 20px; columns: 2; font-size: 14px; }
+.kyoku-notice li { break-inside: avoid; }
+.kyoku-tiles { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; margin: 8px 0; }
+.kyoku-tiles > span:not(.tile) { min-width: 40px; }
+.kyoku-winning { margin-left: 8px; }
+.kyoku-notice table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.kyoku-notice th, .kyoku-notice td { padding: 4px; text-align: right; border-bottom: 1px solid var(--line); }
+.kyoku-notice th:first-child, .kyoku-notice td:first-child { text-align: left; }
+
+.kyoku-meld { display: inline-flex; gap: 1px; margin-left: 8px; }
+
+.kyoku-indicators { display: grid; gap: 2px; margin: 8px auto; width: max-content; }
+.kyoku-indicator-row { display: flex; align-items: center; gap: 1px; }
+.kyoku-indicator-row .tile-back { background-image: none !important; background-color: #b58a45; box-shadow: inset 0 0 0 2px #e0d5bd, inset 0 -4px 0 #76552e; }
+
+.kyoku-win-summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.kyoku-points { margin-left: auto; text-align: right; white-space: nowrap; font-size: 20px; color: #f4cb65; font-variant-numeric: tabular-nums; }

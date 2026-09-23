@@ -1,0 +1,19 @@
+.score-center { --center-width: calc(7 * var(--tile-width, 25px)); position: relative; padding: 0; background: #172b36; }
+.score-center .center-details { position: absolute; inset: 40px; border: 1px solid #9a7343; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 13px; }
+.score-center .center-details p { margin: 0; }
+.score-center #live-round { font-size: 15px; line-height: 1.1; }
+.score-center .center-details > div { border: 0; padding: 0; display: flex; justify-content: center; gap: 3px; }
+.score-center .dora { zoom: .65; }
+.score-center .center-player { position: absolute; left: 50%; top: 50%; width: 118px; height: 40px; display: grid; grid-template-columns: auto 1fr; grid-template-rows: 21px 16px; align-items: baseline; column-gap: 3px; border-bottom: 3px solid transparent; text-align: center; font-variant-numeric: tabular-nums; }
+.score-center .center-player-0 { transform: translate(-50%, -50%) translateY(calc(var(--center-width) / 2 - 21px)); }
+.score-center .center-player-1 { transform: translate(-50%, -50%) rotate(-90deg) translateY(calc(var(--center-width) / 2 - 21px)); }
+.score-center .center-player-2 { transform: translate(-50%, -50%) rotate(180deg) translateY(calc(var(--center-width) / 2 - 21px)); }
+.score-center .center-player-3 { transform: translate(-50%, -50%) rotate(90deg) translateY(calc(var(--center-width) / 2 - 21px)); }
+.score-center .center-player.is-acting { border-bottom-color: #ef4747; }
+.score-center .center-direction { align-self: center; font-size: 15px; color: #dfc78e; }
+.score-center .center-score { font-size: 20px; font-weight: 500; line-height: 1; color: #f4f0e7; white-space: nowrap; }
+.score-center .points-value small { font-size: .55em; margin-left: 2px; color: #a5b0b8; }
+.score-center .center-ev { grid-column: 1 / -1; font-size: 15px; line-height: 1; color: #b8c8d3; white-space: nowrap; }
+.table-center.score-center { width: var(--center-width); height: var(--center-width); justify-self: center; }
+
+.score-center .center-details > .center-bank { display: flex; flex-direction: row; gap: 4px; font-size: 12px; white-space: nowrap; }

@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+node_modules/
+.env.local
+.live-control-pin
+*.ses
+.pytest_cache/
+
+.native/

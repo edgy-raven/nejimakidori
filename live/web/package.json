@@ -1,0 +1,20 @@
+{
+  "name": "nejimakidori-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "control": "node --env-file-if-exists=.env.local live_client.mjs",
+    "live": "node --env-file-if-exists=.env.local mahjongsoul_live.mjs",
+    "friendly": "node --env-file-if-exists=.env.local mahjongsoul_friendly_live.mjs",
+    "test:controller": "node --test browser_transport.test.mjs controller_contract.test.mjs failure_capture.test.mjs live_control.test.mjs mahjongsoul_friendly.test.mjs mahjongsoul_protocol.test.mjs mahjongsoul_targeting.test.mjs mahjongsoul_terminal.test.mjs mahjongsoul_ui_controls.test.mjs match_notifier.test.mjs ranked_runtime.test.mjs red_call_choices.test.mjs"
+  },
+  "dependencies": {
+    "mjsoul": "2.3.0",
+    "protobufjs": "8.8.0"
+  },
+  "overrides": {
+    "protobufjs": "8.8.0",
+    "ws": "8.21.3"
+  }
+}

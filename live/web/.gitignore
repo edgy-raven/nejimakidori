@@ -1,0 +1,5 @@
+.env.local
+.live-control-pin
+node_modules/
+replay.log
+.review-cache/

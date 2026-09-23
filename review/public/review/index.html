@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nejimakidori log review</title>
+    <link rel="stylesheet" href="../shared/styles.css">
+  </head>
+  <body class="review-page">
+    <main class="live-page">
+      <form id="load-form" class="live-toolbar review-toolbar">
+        <div class="load-row">
+          <label for="log-url">Link</label>
+          <input id="log-url" name="url" type="text" inputmode="url" required autocomplete="off"
+            placeholder="Paste a replay link or Mahjong Soul Game Log text">
+          <label for="pov-select">POV</label>
+          <select id="pov-select" name="seat" aria-label="Player's starting seat">
+            <option value="auto">Auto</option>
+            <option value="0">East</option>
+            <option value="1">South</option>
+            <option value="2">West</option>
+            <option value="3">North</option>
+          </select>
+          <button type="submit">Load log</button>
+        </div>
+      </form>
+
+      <p id="review-error" role="alert"></p>
+      <section id="review-loading" hidden aria-live="polite" aria-busy="true">
+        <label id="review-loading-label" for="review-progress">Loading…</label>
+        <progress id="review-progress" aria-label="Review progress"></progress>
+      </section>
+      <section id="replay" hidden>
+        <div class="live-layout">
+          <div class="board-viewport">
+        <div class="board">
+            <article class="seat seat-2" data-live-seat="2"></article>
+            <article class="seat seat-3" data-live-seat="3"></article>
+            <section class="table-field" aria-label="Discard rivers">
+              <div class="table-river table-river-2"
+                data-live-river="2"></div>
+              <div class="table-river table-river-3"
+                data-live-river="3"></div>
+              <section class="center">
+                <p id="live-round"></p>
+                <div class="dora"><div id="live-dora"></div></div>
+              </section>
+              <div class="table-river table-river-1"
+                data-live-river="1"></div>
+              <div class="table-river table-river-0"
+                data-live-river="0"></div>
+            </section>
+            <article class="seat seat-1" data-live-seat="1"></article>
+          </div>
+
+          </div>
+          <article class="main-hand seat seat-0" data-live-seat="0"></article>
+        <aside class="live-analysis">
+          <section class="review-grade" aria-label="Selected player model match">
+            <div class="grade-metric">
+              <span class="grade-label">Match</span>
+              <span class="grade-result"><span id="grade-count">—</span><strong id="grade-match">—</strong></span>
+            </div>
+            <div class="grade-metric">
+              <span class="grade-label">Grade</span>
+              <span class="grade-result"><strong id="grade-letter" aria-label="Letter grade">—</strong><strong id="grade-score">—</strong></span>
+            </div>
+            <div class="penalty-filters" role="group" aria-label="Error categories">
+              <label data-penalty-category="blunder"><input type="checkbox" data-penalty-filter="blunder" checked> Blunders <strong data-penalty-count="blunder">0</strong></label>
+              <label data-penalty-category="mistake"><input type="checkbox" data-penalty-filter="mistake" checked> Mistakes <strong data-penalty-count="mistake">0</strong></label>
+              <label data-penalty-category="inaccuracy"><input type="checkbox" data-penalty-filter="inaccuracy" checked> Inaccuracies <strong data-penalty-count="inaccuracy">0</strong></label>
+            </div>
+            <nav class="mistake-nav" aria-label="Error navigation">
+              <button id="previous-mistake" type="button" aria-label="Previous error" disabled>‹ Previous error</button>
+              <button id="next-mistake" type="button" aria-label="Next error" disabled>Next error ›</button>
+            </nav>
+          </section>
+            <nav class="controls" aria-label="Replay controls">
+              <select id="round-select" aria-label="Round"></select>
+              <button id="previous-round" type="button">‹ Prev round</button>
+              <button id="next-round" type="button">Next round ›</button>
+              <button id="previous-choice" type="button">‹ Prev choice</button>
+              <button id="next-choice" type="button">Next choice ›</button>
+              <button id="previous" type="button">‹ Prev</button>
+              <button id="next" type="button">Next ›</button>
+            </nav>
+            <div class="timeline">
+              <button id="play" type="button">Play</button>
+              <input id="cursor" aria-label="Replay position" type="range" min="0" value="0">
+              <output id="progress">0 / 0</output>
+            </div>
+          <section class="review-decisions">
+            <h2 class="grade-breakdown-heading">
+              <span id="live-decision-label">Grade breakdown</span>
+              <span id="decision-category" aria-live="polite"></span>
+            </h2>
+            <table class="review-choices" aria-label="Player and model choices">
+              <tbody>
+                <tr><th scope="row">Player choice</th><td id="player-choice">—</td></tr>
+                <tr><th scope="row">Model choice</th><td id="live-recommendation" aria-live="polite">—</td></tr>
+              </tbody>
+            </table>
+            <div id="prediction-status" role="status">—</div>
+            <section>
+              <h2>Action distribution</h2>
+              <div id="live-actions"></div>
+            </section>
+          </section>
+
+          </aside>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV HOME=/tmp
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=riichienv_wheels /riichienv-0.4.10+duplicate-cp313-cp313-manylinux_2_34_x86_64.whl /tmp/wheels/
+COPY docker/model-requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --find-links=/tmp/wheels -r /tmp/requirements.txt \
+    && rm -rf /tmp/wheels
+COPY feature_vector.py /app/feature_vector.py
+COPY model /app/model
+COPY log_dataset /app/log_dataset
+COPY service /app/service
+COPY docker/model_entrypoint.py /app/model_entrypoint.py
+RUN python -c "from log_dataset import shanten; shanten.native()"
+
+ENTRYPOINT ["python", "/app/model_entrypoint.py"]
+CMD ["python", "-B", "-u", "-m", "service.serve"]

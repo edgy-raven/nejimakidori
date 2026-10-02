@@ -1,0 +1,18 @@
+{
+  "name": "nejimakidori-review",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env.local server.mjs",
+    "test": "node --test account_ranks.test.mjs board_layout.test.mjs live_prediction.test.mjs outcomes.test.mjs replay_record.test.mjs review_cache.test.mjs review_grade.test.mjs review_link.test.mjs"
+  },
+  "dependencies": {
+    "mjsoul": "2.3.0",
+    "protobufjs": "8.8.0"
+  },
+  "overrides": {
+    "protobufjs": "8.8.0",
+    "ws": "8.21.3"
+  }
+}

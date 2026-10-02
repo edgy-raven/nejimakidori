@@ -1,0 +1,109 @@
+/* Geometry shared by live and review. The self rack is a separate scene row. */
+.live-layout {
+  --board-scale: 1;
+  --board-min-width: 800px;
+  --self-height: 130px;
+  --hand-gap: 6px;
+  --hand-top: 24px;
+  --bar-height: 22px;
+  --bar-width: calc(14 * var(--tile-width) + 18px);
+  --card-height: 48px;
+  --card-width: 112px;
+  --seat-clearance: 12px;
+  --card-offset: calc(var(--center-width) / 2 + var(--card-width) + var(--seat-clearance) - var(--bar-width) / 2);
+  --river-depth: calc(3 * var(--tile-height) + 2px);
+  --field-width: calc(var(--center-width) + 2 * var(--river-depth));
+  --edge-depth: calc(16px + var(--tile-height) + 2px + var(--bar-height) + var(--seat-clearance));
+  --board-height: calc(var(--field-width) + var(--edge-depth) + var(--bar-height) + 4px);
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-rows: calc(var(--board-height) * var(--board-scale)) calc((var(--self-height) + var(--hand-gap)) * var(--board-scale));
+  column-gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+.live-layout > .live-analysis { grid-column: 2; grid-row: 1 / span 2; max-height: 100%; min-height: 0; overflow: auto; }
+.board-viewport { position: relative; min-width: 0; overflow: hidden; }
+.board {
+  position: absolute;
+  left: 50%;
+  width: var(--board-min-width);
+  height: var(--board-height);
+  transform-origin: top center;
+  transform: translateX(-50%) scale(var(--board-scale));
+  background: var(--table-background);
+  border-radius: 3px;
+}
+.board::after { content: ""; position: absolute; inset: 0; border: 12px solid #173654; border-bottom: 0; border-radius: 3px 3px 0 0; pointer-events: none; }
+.table-field {
+  position: absolute;
+  left: 50%; top: var(--edge-depth);
+  width: var(--field-width); height: var(--field-width);
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: var(--river-depth) var(--center-width) var(--river-depth);
+  grid-template-rows: var(--river-depth) var(--center-width) var(--river-depth);
+  grid-template-areas: ". river-top ." "river-left table-center river-right" ". river-bottom .";
+}
+.table-river { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: max-content; height: max-content; }
+.river-row { display: flex; justify-content: flex-start; gap: 2px; height: 39px; }
+.river-slot { display: grid; place-items: center; width: 25px; height: 39px; flex: 0 0 25px; }
+.river-riichi-slot { width: 39px; flex-basis: 39px; }
+.riichi-tile { transform: rotate(90deg); }
+.table-river-0 { grid-area: river-bottom; align-self: start; justify-self: start; }
+.table-river-2 { grid-area: river-top; align-self: end; justify-self: end; transform: rotate(180deg); }
+.table-river-1, .table-river-3 { position: absolute; transform-origin: 0 0; }
+.table-river-1 { grid-area: river-right; top: 100%; left: 0; transform: rotate(-90deg); }
+.table-river-3 { grid-area: river-left; top: 0; left: 100%; transform: rotate(90deg); }
+.seat { position: absolute; padding: 0; }
+.seat-1, .seat-3 { width: 0; height: 0; }
+.seat-1 { right: 36px; top: calc(var(--edge-depth) + var(--field-width) / 2 + var(--card-offset)); }
+.seat-2 { left: calc(50% + var(--card-offset)); top: 16px; }
+.seat-3 { left: 36px; top: calc(var(--edge-depth) + var(--field-width) / 2 - var(--card-offset)); }
+.seat-rack { position: relative; width: calc(14 * var(--tile-width) + 18px); }
+.seat-1 .seat-rack { transform: translate(-50%, -50%) rotate(-90deg); }
+.seat-2 .seat-rack { transform: translateX(-50%) rotate(180deg); }
+.seat-3 .seat-rack { transform: translate(-50%, -50%) rotate(90deg); }
+.seat-rack-content { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: var(--tile-height); }
+.seat-info { position: absolute; left: 0; bottom: calc(100% + 2px); width: var(--bar-width); }
+.seat-bar { width: 100%; height: var(--bar-height); }
+.main-hand { --tile-width: 37.5px; --tile-height: 58.5px; position: relative; grid-column: 1; justify-self: center; margin-top: calc(var(--hand-gap) * var(--board-scale)); padding: 0; border-radius: 3px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.main-hand .seat-rack { position: absolute; left: 15%; top: calc(var(--hand-top) * var(--board-scale)); transform-origin: top left; transform: scale(var(--board-scale)); }
+.main-hand > .seat-info { left: calc(50% - (var(--center-width) / 2 + var(--card-width) + var(--seat-clearance)) * var(--board-scale)); top: calc(-1 * (var(--hand-gap) + var(--bar-height) + 2px) * var(--board-scale)); bottom: auto; transform: scale(var(--board-scale)); transform-origin: top left; }
+.hand, .melds, .meld { display: flex; flex-wrap: nowrap; align-items: center; width: max-content; gap: 1px; flex-shrink: 0; }
+.hand { position: relative; min-height: var(--tile-height); }
+.melds { gap: 6px; justify-content: flex-end; }
+.main-hand .melds { --tile-width: 25px; --tile-height: 39px; align-self: flex-end; }
+.melds:empty { display: none; }
+.meld-called-tile { display: grid; place-items: center; width: var(--tile-height); height: var(--tile-height); flex: 0 0 var(--tile-height); }
+.meld-called-tile .tile { transform: rotate(90deg); }
+.drawn-slot { display: inline-flex; width: var(--tile-width); height: var(--tile-height); flex: 0 0 var(--tile-width); margin-left: 5px; }
+.player-card { position: absolute; left: 0; bottom: 100%; width: var(--card-width); height: var(--card-height); padding: 3px 5px; border-radius: 3px; background: var(--panel); text-align: center; }
+.seat-2 .player-card { transform: rotate(180deg); }
+.player-name { display: block; white-space: nowrap; font-size: 20px; line-height: 26px; }
+.player-rank-row { display: flex; justify-content: center; gap: 6px; font-size: 14px; line-height: 16px; white-space: nowrap; }
+.player-rank-row small { font-size: inherit; }
+/* Bar width and seat anchors never depend on concealed tile count. */
+.seat-probabilities, .placement-probabilities { display: grid; width: 100%; gap: 2px; }
+.speed-labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
+.speed-labels .probability { display: flex; justify-content: center; gap: 4px; font-size: 11px; line-height: 13px; color: #bbc4cc; background: #17212b; border-radius: 999px; padding: 0 5px; white-space: nowrap; }
+.speed-labels .probability i { display: none; }
+.speed-bar { display: flex; height: 5px; overflow: hidden; background: #ffffff18; }
+.seat-2 .speed-labels .probability { transform: rotate(180deg); }
+.seat-probabilities .speed-bar > span:nth-child(1) { background: #ff6677; }
+.seat-probabilities .speed-bar > span:nth-child(2) { background: #ffd25f; }
+.seat-probabilities .speed-bar > span:nth-child(n+3) { background: #69dc98; }
+.seat-probabilities .speed-mode:nth-child(1) { color: #ff6677; }
+.seat-probabilities .speed-mode:nth-child(2) { color: #ffd25f; }
+.seat-probabilities .speed-mode:nth-child(n+3) { color: #69dc98; }
+.placement-probabilities .speed-bar > span:nth-child(1) { background: #6ec49c; }
+.placement-probabilities .speed-bar > span:nth-child(2) { background: #71b4df; }
+.placement-probabilities .speed-bar > span:nth-child(3) { background: #e9c65c; }
+.placement-probabilities .speed-bar > span:nth-child(4) { background: #ef6676; }
+.placement-probabilities .probability:nth-child(-n+2) { color: #69dc98; }
+.placement-probabilities .probability:nth-child(3) { color: #ffd25f; }
+.placement-probabilities .probability:nth-child(4) { color: #ff6677; }
+
+.tile-policy-title { position: absolute; left: -8px; transform: translateX(-100%); font-size: 12px; line-height: 16px; }
+[data-policy-head="defense"] { color: #71b4df; }
+[data-policy-head="attack"] { color: #ffd25f; }

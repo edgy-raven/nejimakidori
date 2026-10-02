@@ -1,0 +1,47 @@
+[
+  {
+    "modeId": 2,
+    "name": "Bronze",
+    "length": "East",
+    "rankMin": 10101,
+    "rankMax": 10203,
+    "copperMin": 0,
+    "fee": 0
+  },
+  {
+    "modeId": 5,
+    "name": "Silver",
+    "length": "East",
+    "rankMin": 10201,
+    "rankMax": 10303,
+    "copperMin": 2500,
+    "fee": 500
+  },
+  {
+    "modeId": 9,
+    "name": "Gold",
+    "length": "South",
+    "rankMin": 10301,
+    "rankMax": 10403,
+    "copperMin": 7000,
+    "fee": 1400
+  },
+  {
+    "modeId": 12,
+    "name": "Jade",
+    "length": "South",
+    "rankMin": 10401,
+    "rankMax": 10503,
+    "copperMin": 14000,
+    "fee": 2800
+  },
+  {
+    "modeId": 16,
+    "name": "Throne",
+    "length": "South",
+    "rankMin": 10501,
+    "rankMax": 10720,
+    "copperMin": 14000,
+    "fee": 2800
+  }
+]

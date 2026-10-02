@@ -1,0 +1,10 @@
+{
+  "timeZone": "Asia/Manila",
+  "windows": [
+    {"startHour": 8, "endHour": 11},
+    {"startHour": 12, "endHour": 17},
+    {"startHour": 18, "endHour": 23}
+  ],
+  "continuationBase": 0.75,
+  "breakMinutes": {"minimum": 5, "range": 10}
+}

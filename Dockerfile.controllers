@@ -1,0 +1,31 @@
+FROM node:22-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHON_PATH=/usr/bin/python3
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    python3 \
+    python3-pip \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY vision/requirements.txt /workspace/vision/requirements.txt
+COPY bots/requirements.txt /workspace/bots/requirements.txt
+RUN pip3 install --break-system-packages \
+    -r /workspace/vision/requirements.txt \
+    -r /workspace/bots/requirements.txt
+
+COPY live/web /workspace/live/web
+COPY vision /workspace/vision
+COPY mahjongsoul.py /workspace/mahjongsoul.py
+COPY bots /workspace/bots
+COPY review /workspace/review
+COPY vision/static /workspace/vision/static
+WORKDIR /workspace/live/web
+RUN npm ci --omit=dev
+WORKDIR /workspace/review
+RUN npm ci --omit=dev
+
+CMD ["node", "/workspace/review/server.mjs"]

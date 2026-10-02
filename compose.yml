@@ -1,0 +1,298 @@
+services:
+  model:
+    build:
+      context: .
+      dockerfile: Dockerfile.model
+      additional_contexts:
+        riichienv_wheels: ${RIICHIENV_WHEELS:-/home/fen/projects/riichienv/target/wheels}
+    image: nejimakidori-model:latest
+    network_mode: host
+    runtime: nvidia
+    gpus: all
+    restart: unless-stopped
+    environment:
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+      GPU_MEMORY_LIMIT_MB: ${GPU_MEMORY_LIMIT_MB:-3072}
+      TF_NUM_INTRAOP_THREADS: "2"
+      TF_NUM_INTEROP_THREADS: "2"
+      OMP_NUM_THREADS: "2"
+      MODEL_PATH: /model
+      HOST: 127.0.0.1
+      PORT: "8797"
+    volumes:
+      - ${MODEL_PATH:-/mnt/drv1/nejimakidori/releases/joint-critic-specialists-300852/saved_model}:/model:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8797/health', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
+  friendly-1: &friendly-controller
+    build:
+      context: .
+      dockerfile: Dockerfile.controllers
+    image: nejimakidori-controllers:latest
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    depends_on:
+      model:
+        condition: service_healthy
+    environment:
+      HOME: /state
+    command: ["/bin/sh", "/state/vision.sh"]
+    volumes:
+      - >-
+        ${FLEET_ROOT:-/home/fen/projects/codex_env/state/nejimakidori/friendly-bots}/friendly-1:/state
+
+  friendly-2:
+    <<: *friendly-controller
+    volumes:
+      - >-
+        ${FLEET_ROOT:-/home/fen/projects/codex_env/state/nejimakidori/friendly-bots}/friendly-2:/state
+
+  friendly-3:
+    <<: *friendly-controller
+    volumes:
+      - >-
+        ${FLEET_ROOT:-/home/fen/projects/codex_env/state/nejimakidori/friendly-bots}/friendly-3:/state
+
+  debug-1: &debug-controller
+    image: nejimakidori-controllers:latest
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    working_dir: /workspace/live/web
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        export MAHJONG_SOUL_CONTROL_PIN="$(cat /state/control-pin)";
+        exec node mahjongsoul_friendly_live.mjs
+    environment:
+      HOME: /state
+      CHROME_PATH: /usr/bin/chromium
+      MODEL_URL: http://127.0.0.1:8797
+      MAHJONG_SOUL_INSTANCE_ID: njmkdrdebug1
+      MAHJONG_SOUL_EXPECTED_ACCOUNT_ID: "121789651"
+      MAHJONG_SOUL_EXPECTED_NICKNAME: njmkdrdebug1
+      MAHJONG_SOUL_RIICHI_ONLY: "on"
+      MAHJONG_SOUL_BOT_ACCOUNT_IDS: "121789651,121810211,121811297,121810212"
+      MAHJONG_SOUL_PROFILE: /state/profile
+      MAHJONG_SOUL_SCREENSHOT: /state/screenshot.png
+      MAHJONG_SOUL_LIVE_STATE: /state/live.json
+      MAHJONG_SOUL_CONTROL_URL: http://127.0.0.1:8821
+      MAHJONG_SOUL_BUTTON_CAPTURES: /state/button-captures
+      MAHJONG_SOUL_AUTOPLAY: "on"
+    volumes:
+      - /home/fen/projects/codex_env/state/nejimakidori/debug-bots/njmkdrdebug1:/state
+
+  debug-2:
+    <<: *debug-controller
+    environment:
+      HOME: /state
+      CHROME_PATH: /usr/bin/chromium
+      MODEL_URL: http://127.0.0.1:8797
+      MAHJONG_SOUL_INSTANCE_ID: njmkdrdebug2
+      MAHJONG_SOUL_EXPECTED_ACCOUNT_ID: "121810211"
+      MAHJONG_SOUL_EXPECTED_NICKNAME: njmkdrdebug2
+      MAHJONG_SOUL_RIICHI_ONLY: "on"
+      MAHJONG_SOUL_BOT_ACCOUNT_IDS: "121789651,121810211,121811297,121810212"
+      MAHJONG_SOUL_PROFILE: /state/profile
+      MAHJONG_SOUL_SCREENSHOT: /state/screenshot.png
+      MAHJONG_SOUL_LIVE_STATE: /state/live.json
+      MAHJONG_SOUL_CONTROL_URL: http://127.0.0.1:8822
+      MAHJONG_SOUL_BUTTON_CAPTURES: /state/button-captures
+      MAHJONG_SOUL_AUTOPLAY: "on"
+    volumes:
+      - /home/fen/projects/codex_env/state/nejimakidori/debug-bots/njmkdrdebug2:/state
+
+  debug-3:
+    <<: *debug-controller
+    environment:
+      HOME: /state
+      CHROME_PATH: /usr/bin/chromium
+      MODEL_URL: http://127.0.0.1:8797
+      MAHJONG_SOUL_INSTANCE_ID: njmkdrdebug3
+      MAHJONG_SOUL_EXPECTED_ACCOUNT_ID: "121811297"
+      MAHJONG_SOUL_EXPECTED_NICKNAME: njmkdrdebug3
+      MAHJONG_SOUL_RIICHI_ONLY: "on"
+      MAHJONG_SOUL_BOT_ACCOUNT_IDS: "121789651,121810211,121811297,121810212"
+      MAHJONG_SOUL_PROFILE: /state/profile
+      MAHJONG_SOUL_SCREENSHOT: /state/screenshot.png
+      MAHJONG_SOUL_LIVE_STATE: /state/live.json
+      MAHJONG_SOUL_CONTROL_URL: http://127.0.0.1:8823
+      MAHJONG_SOUL_BUTTON_CAPTURES: /state/button-captures
+      MAHJONG_SOUL_AUTOPLAY: "on"
+    volumes:
+      - /home/fen/projects/codex_env/state/nejimakidori/debug-bots/njmkdrdebug3:/state
+
+  debug-4:
+    <<: *debug-controller
+    environment:
+      HOME: /state
+      CHROME_PATH: /usr/bin/chromium
+      MODEL_URL: http://127.0.0.1:8797
+      MAHJONG_SOUL_INSTANCE_ID: njmkdrdebug4
+      MAHJONG_SOUL_EXPECTED_ACCOUNT_ID: "121810212"
+      MAHJONG_SOUL_EXPECTED_NICKNAME: njmkdrdebug4
+      MAHJONG_SOUL_RIICHI_ONLY: "on"
+      MAHJONG_SOUL_BOT_ACCOUNT_IDS: "121789651,121810211,121811297,121810212"
+      MAHJONG_SOUL_PROFILE: /state/profile
+      MAHJONG_SOUL_SCREENSHOT: /state/screenshot.png
+      MAHJONG_SOUL_LIVE_STATE: /state/live.json
+      MAHJONG_SOUL_CONTROL_URL: http://127.0.0.1:8824
+      MAHJONG_SOUL_BUTTON_CAPTURES: /state/button-captures
+      MAHJONG_SOUL_AUTOPLAY: "on"
+    volumes:
+      - /home/fen/projects/codex_env/state/nejimakidori/debug-bots/njmkdrdebug4:/state
+
+  discord-bot:
+    image: nejimakidori-controllers:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["python3", "-m", "bots.discord_bot", "/state/config.json"]
+    environment:
+      FLEET_DOCKERIZED: "1"
+      CHROME_PATH: /usr/bin/chromium
+    depends_on:
+      model:
+        condition: service_healthy
+      friendly-1:
+        condition: service_started
+      friendly-2:
+        condition: service_started
+      friendly-3:
+        condition: service_started
+    volumes:
+      - ${FLEET_ROOT:-/home/fen/projects/codex_env/state/nejimakidori/friendly-bots}:/state
+
+  ranked-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.controllers
+    image: nejimakidori-controllers:latest
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    depends_on:
+      model:
+        condition: service_healthy
+    command: ["node", "/workspace/live/web/mahjongsoul_live.mjs"]
+    environment:
+      HOME: /runtime
+      PYTHON_PATH: /usr/bin/python3
+      CHROME_PATH: /usr/bin/chromium
+      MODEL_URL: http://127.0.0.1:8797
+      MAHJONG_SOUL_AUTOSTART: "off"
+      MAHJONG_SOUL_AUTOPLAY: "off"
+      MAHJONG_SOUL_RUNTIME_STATE: /home/fen/projects/codex_env/state/nejimakidori/ranked-runtime.json
+      MAHJONG_SOUL_DISCORD_CONFIG: /home/fen/projects/codex_env/state/nejimakidori/live-discord.json
+      MAHJONG_SOUL_PROFILE: /home/fen/projects/codex_env/state/mahjongsoul/bajirisuku-profile
+      MAHJONG_SOUL_SCREENSHOT: /home/fen/projects/codex_env/state/nejimakidori/ranked-screenshot.png
+      MAHJONG_SOUL_LIVE_STATE: /home/fen/projects/codex_env/state/nejimakidori/ranked-live-state.json
+      MAHJONG_SOUL_BUTTON_CAPTURES: /home/fen/projects/codex_env/state/nejimakidori/button-captures
+      MAHJONG_SOUL_CONTROL_URL: http://127.0.0.1:8795
+      MAHJONG_SOUL_EXPECTED_NICKNAME: Bajirisuku
+      MAHJONG_SOUL_EXPECTED_ACCOUNT_ID: "121789573"
+    volumes:
+      - /home/fen/projects/codex_env/state/nejimakidori:/home/fen/projects/codex_env/state/nejimakidori
+      - /home/fen/projects/codex_env/state/mahjongsoul/bajirisuku-profile:/home/fen/projects/codex_env/state/mahjongsoul/bajirisuku-profile
+      - ./live/web/.live-control-pin:/workspace/live/web/.live-control-pin:ro
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.controllers
+    image: nejimakidori-controllers:latest
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      model:
+        condition: service_healthy
+    command: ["node", "/workspace/review/server.mjs"]
+    env_file:
+      - ./review/.env.local
+    environment:
+      HOST: 127.0.0.1
+      PORT: "8793"
+      MODEL_URL: http://127.0.0.1:8797
+      MAHJONG_SOUL_LIVE_STATE: /home/fen/projects/codex_env/state/nejimakidori/ranked-live-state.json
+      MAHJONG_SOUL_SCREENSHOT: /home/fen/projects/codex_env/state/nejimakidori/ranked-screenshot.png
+      MAHJONG_SOUL_REVIEW_ACCOUNTS: /home/fen/projects/codex_env/state/nejimakidori/log-review/reviewer-accounts.json
+      MAHJONG_SOUL_REVIEW_CACHE: /home/fen/projects/codex_env/state/nejimakidori/log-review/cache
+    volumes:
+      - /home/fen/projects/codex_env/state/nejimakidori:/home/fen/projects/codex_env/state/nejimakidori:ro
+      - /home/fen/projects/codex_env/state/nejimakidori/log-review/cache:/home/fen/projects/codex_env/state/nejimakidori/log-review/cache
+      - ./live/web/.live-control-pin:/workspace/live/web/.live-control-pin:ro
+
+  training-monitor:
+    image: nejimakidori-model:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /workspace
+    command:
+      - python
+      - -u
+      - -m
+      - service.training_monitor
+      - --root
+      - /run-data
+    volumes:
+      - ${TENSORBOARD_ROOT:-/home/fen/projects/nejimakidori-runs/offline-20260922-200501-split-critic-symlog}:/run-data
+
+  tensorboard:
+    image: nejimakidori-model:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /workspace
+    command:
+      - python
+      - -u
+      - /workspace/service/dashboard.py
+      - --root
+      - /run-data
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8794"
+    volumes:
+      - ${TENSORBOARD_ROOT:-/home/fen/projects/nejimakidori-runs/offline-20260922-200501-split-critic-symlog}:/run-data
+
+  reverse-ssh:
+    build:
+      context: .
+      dockerfile: Dockerfile.tunnel
+    image: nejimakidori-reverse-ssh:latest
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      THOTH_SSH: ${THOTH_SSH:-fen@34.123.50.212}
+      LOCAL_PORT: ${LOCAL_PORT:-8793}
+      REMOTE_PORT: ${REMOTE_PORT:-8793}
+    volumes:
+      - ${SSH_DIRECTORY:-/home/fen/.ssh}:/root/.ssh:ro
+
+  tensorboard-reverse-ssh:
+    build:
+      context: .
+      dockerfile: Dockerfile.tunnel
+    image: nejimakidori-reverse-ssh:latest
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      THOTH_SSH: ${THOTH_SSH:-fen@34.123.50.212}
+      LOCAL_PORT: "8794"
+      REMOTE_PORT: "8794"
+      AUTOSSH_GATETIME: "0"
+      AUTOSSH_POLL: "30"
+    volumes:
+      - ${SSH_DIRECTORY:-/home/fen/.ssh}:/root/.ssh:ro

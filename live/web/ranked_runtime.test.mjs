@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import {Autoqueue} from "./mahjongsoul_ui_controls.mjs";
+import {RankedRuntime} from "./ranked_runtime.mjs";
+
+test("ranked service defaults to queueing and preserves breaks and explicit stops across restarts", t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ranked-runtime-"));
+  t.after(() => fs.rmSync(directory, {recursive: true}));
+  const filename = path.join(directory, "runtime.json");
+  const runtime = new RankedRuntime(filename);
+  let queue = new Autoqueue(() => 0.99);
+  assert.equal(runtime.restore(queue, true), true);
+  assert.equal(queue.enabled, true);
+  queue.finish("game-one", Date.now());
+  runtime.save(true, queue);
+  const deadline = queue.pauseUntil;
+  queue = new Autoqueue();
+  assert.equal(new RankedRuntime(filename).restore(queue, false), true);
+  assert.equal(queue.enabled, true);
+  assert.equal(queue.pauseUntil, deadline);
+  assert.equal(queue.completedGameId, "game-one");
+  queue.stop("Action mismatch saved; requeue disabled.");
+  runtime.save(true, queue);
+  queue = new Autoqueue();
+  assert.equal(new RankedRuntime(filename).restore(queue, false), true);
+  assert.equal(queue.enabled, false);
+  assert.match(queue.error, /Action mismatch/);
+  runtime.save(false, queue);
+  assert.equal(new RankedRuntime(filename).restore(new Autoqueue(), true), false);
+});

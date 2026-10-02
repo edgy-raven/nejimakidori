@@ -1,0 +1,60 @@
+# Nejimakidori
+
+Mahjong model training and inference, Mahjong Soul replay review and browser
+control, and three isolated Discord-summoned friendly accounts.
+
+- [Model card](MODEL_CARD.md): records, training and game evaluation.
+- [Dataset pipeline](log_dataset/README.md): archive download, rank enrichment
+  and corpus rebuild.
+- [Batch jobs](#batch-jobs): explicit data, training, export and evaluation
+  entry points, including the frozen candidate pipeline.
+- [Services](service/README.md): model HTTP API and training dashboard.
+- [Review](review/README.md): replay review and live display.
+- [Live](live/README.md): browser controllers and vision.
+- [Friendly bots](bots/README.md): isolated account fleet and Discord commands.
+- [Audit archive](../nejimakidori-audits/README.md): dated investigations,
+  benchmarks and supporting evidence; not operational instructions.
+
+## Verification
+
+Run from this repository root using the shared Python environment. Tests use
+fixtures and temporary state; browser and HTTP scenarios need localhost access.
+They do not need production accounts, model weights or GPUs.
+
+```sh
+CUDA_VISIBLE_DEVICES=-1 TF_NUM_INTRAOP_THREADS=2 TF_NUM_INTEROP_THREADS=2 \
+  OMP_NUM_THREADS=2 python -m pytest -q
+node --test integration/*.test.mjs
+```
+
+Python integration scenarios exercise real replay/features, data conversion,
+learning/checkpoint/export, service concurrency, friendly fleet
+isolation and live-controller recognition. Node scenarios exercise protocol,
+review/cache/grading, HTTP controls and actual browser cache preservation.
+Chrome cache tests use disposable profiles and synthetic login storage.
+
+Software checks do not establish playing strength. Full GPU training, matched
+playing-strength evaluation and upstream account acceptance are separate work.
+
+## Batch jobs
+
+Run the top-level scripts directly, for example `python build_dataset.py --help`.
+They handle command-line arguments and launch settings, then call reusable code
+in `model` and `log_dataset`.
+
+| Job | Purpose |
+| --- | --- |
+| [`download_dataset.py`](download_dataset.py) | Download and verify the source archives. |
+| [`enrich_ranks.py`](enrich_ranks.py) | Merge historical player ranks into archives. |
+| [`import_riichilab.py`](import_riichilab.py) | Import our bots' games against approved teachers. |
+| [`build_dataset.py`](build_dataset.py) | Build the staged corpus cache and training records. |
+| [`export_dataset.py`](export_dataset.py) | Export cached selections as TFRecords. |
+| [`build_critic_dataset.py`](build_critic_dataset.py) | Build critic records with same-hand scoring labels. |
+| [`train_policy.py`](train_policy.py) | Train and export the retained policy comparator. |
+| [`train_joint.py`](train_joint.py) | Train the joint policy and payment critic. |
+| [`export_policy.py`](export_policy.py) | Export and verify a trained joint policy. |
+| [`evaluate.py`](evaluate.py) | Run duplicate matches and paired evaluation. |
+| [`train.py`](train.py) | Freeze source, prepare data, train, and evaluate a candidate. |
+
+The training pipeline freezes the scripts needed for its stages alongside model
+and dataset code. Existing frozen runs retain their original entry points.

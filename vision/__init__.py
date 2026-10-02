@@ -1,0 +1,1 @@
+"""Mahjong Soul screenshot recognition."""

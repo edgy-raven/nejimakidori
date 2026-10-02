@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nejimakidori run progress</title>
+<style>
+:root{color-scheme:light;font:14px system-ui;background:#fafafa;color:#263238}*{box-sizing:border-box}body{margin:0}header{padding:12px 24px;border-bottom:1px solid #dce1e5;background:#fff}.heading{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:17px;margin:0;font-weight:600}nav{display:flex;gap:18px}a{color:#345c80;text-decoration:none}a:hover{text-decoration:underline}#progress{display:flex;gap:20px;flex-wrap:wrap;margin:10px 0 0;font-size:12px;color:#52616b}progress{display:block;width:100%;height:3px;margin-top:10px;accent-color:#527a96}iframe{display:block;border:0;width:100%;height:calc(100dvh - 105px);min-height:480px}#error{color:#ad3429}#error:empty,#stage-note:empty{display:none}@media(max-width:600px){header{padding:12px}.heading{align-items:flex-start}nav{gap:10px;font-size:12px}#progress{gap:6px 14px}}
+[hidden]{display:none!important}#games{padding:20px 24px}table{border-collapse:collapse;width:100%;max-width:1000px}th,td{text-align:right;padding:12px;border-bottom:1px solid #dce1e5}th:first-child,td:first-child{text-align:left}caption{text-align:left;font-size:18px;font-weight:600;margin-bottom:12px}.note{color:#52616b;max-width:900px;line-height:1.5}button{padding:8px 12px;cursor:pointer}iframe{height:calc(100dvh - 150px)}
+</style>
+<header><div class="heading"><h1>Nejimakidori run progress</h1><nav>
+<a href="/tensorboard/charts/#scalars&amp;_smoothingWeight=0" target="_blank" rel="noopener">All scalars</a>
+<a href="/tensorboard/charts/#custom_scalars&amp;_smoothingWeight=0" target="_blank" rel="noopener">Open charts ↗</a>
+</nav></div>
+<div id="progress" aria-live="polite">Loading progress…</div><progress id="bar" hidden></progress>
+<p id="stage-note" role="status"></p>
+<p id="error" role="status"></p></header>
+<section id="games" hidden>
+<table><caption>Candidate vs reference</caption><thead><tr><th>Metric</th><th>Candidate</th><th>Reference</th><th>Difference</th><th>95% interval for difference</th></tr></thead><tbody id="game-metrics"></tbody></table>
+<p class="note">First-place rate and rank points: higher is better. Last-place rate: lower is better. An interval crossing zero does not establish an advantage. Results are provisional while games are running.</p>
+<p id="game-sample" class="note"></p>
+<button id="show-charts" type="button">Show training and detailed charts</button>
+</section>
+<iframe title="TensorBoard charts" src="/tensorboard/charts/#custom_scalars&amp;_smoothingWeight=0"></iframe>
+<script>
+const progress = document.querySelector('#progress');
+let detailedCharts = false;
+document.querySelector('#show-charts').addEventListener('click', () => {
+  detailedCharts = !detailedCharts;
+  document.querySelector('iframe').hidden = !detailedCharts;
+  document.querySelector('#show-charts').textContent = detailedCharts
+    ? 'Hide detailed charts' : 'Show training and detailed charts';
+});
+async function refresh() {
+  try {
+    const response = await fetch('/tensorboard/status.json', {cache:'no-store'});
+    if (!response.ok) throw new Error('Progress is not available yet.');
+    const status = await response.json();
+    const training = status.training;
+    const stage = status.stage ?? status.pipeline?.stage ?? 'Running';
+    const values = [status.run, stage === 'records' ? 'Preparing training records' : stage].filter(Boolean);
+    if (status.progress_percent != null) values.push(`${status.progress_percent.toFixed(1)}% complete`);
+    if (status.games) {
+      values.push(`${status.games.completed.toLocaleString()} / ${status.games.total.toLocaleString()} games`);
+      if (status.games.per_hour != null) values.push(`${Math.round(status.games.per_hour).toLocaleString()} games/hour`);
+    }
+    if (!status.games && training?.step != null) values.push(`Update ${training.step.toLocaleString()}${training.total_steps ? ' / '+training.total_steps.toLocaleString() : ''}`);
+    if (status.eta_seconds != null) values.push(`Estimated remaining: ${Math.ceil(status.eta_seconds / 60)} min`);
+    progress.replaceChildren(...values.map(value => { const span=document.createElement('span'); span.textContent=value; return span; }));
+    const bar=document.querySelector('#bar');
+    bar.hidden=status.progress_percent == null && !training?.total_steps;
+    if (status.progress_percent != null) {bar.max=100;bar.value=status.progress_percent;}
+    else if (training?.total_steps) {bar.max=training.total_steps;bar.value=training.step;}
+    document.querySelector('#stage-note').textContent = stage === 'records'
+      ? 'Training charts will appear after record preparation finishes.' : '';
+    document.querySelector('#games').hidden = !status.games;
+    document.querySelector('iframe').hidden = stage === 'records' || (!!status.games && !detailedCharts);
+    const comparison = status.games?.comparison;
+    if (comparison) {
+      const rows = ['first', 'fourth', 'rank_points'].map(metric => {
+        const row = document.createElement('tr');
+        const format = value => metric === 'rank_points'
+          ? value.toFixed(2) : `${(100 * value).toFixed(2)}%`;
+        const difference = comparison.models.new[metric] - comparison.models.old[metric];
+        const bounds = comparison.paired_bounds[metric];
+        const label = {first:'First-place rate', fourth:'Last-place rate', rank_points:'Rank points / game'}[metric];
+        const delta = value => `${value > 0 ? '+' : ''}${(value * (metric === 'rank_points' ? 1 : 100)).toFixed(2)}${metric === 'rank_points' ? '' : ' pp'}`;
+        for (const text of [label, format(comparison.models.new[metric]), format(comparison.models.old[metric]), delta(difference), `${delta(bounds[0])} to ${delta(bounds[1])}`]) {
+          const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
+        }
+        return row;
+      });
+      document.querySelector('#game-metrics').replaceChildren(...rows);
+      document.querySelector('#game-sample').textContent = `${comparison.seed_groups.toLocaleString()} seed groups. Throughput and ETA use completed batches from the current evaluator launch.`;
+    }
+    document.querySelector('#error').textContent='';
+  } catch(error) { document.querySelector('#error').textContent=error.message; }
+  setTimeout(refresh,3000);
+}
+refresh();
+</script></html>

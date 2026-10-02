@@ -1,0 +1,7 @@
+FROM alpine:3.22
+
+RUN apk add --no-cache autossh openssh-client bash
+COPY live/web/forward_to_thoth.sh /usr/local/bin/forward_to_thoth
+RUN chmod 755 /usr/local/bin/forward_to_thoth
+
+ENTRYPOINT ["/usr/local/bin/forward_to_thoth"]

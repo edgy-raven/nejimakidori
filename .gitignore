@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+node_modules/
+.env
+.env.local
+.live-control-pin
+.pytest_cache/
+.native/
+.coverage
+htmlcov/
+*.weights.h5
+*.tfrecord*
+*.sqlite*
+artifacts/
+AGENTS.md

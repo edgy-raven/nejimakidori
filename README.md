@@ -1,4 +1,4 @@
-# Nejimakidori
+# Nejimakidori v1
 
 Mahjong model, dataset builder, training pipeline and local Mahjong Soul client.
 The reviewer website and hosted bot orchestration are separate projects.
@@ -7,9 +7,10 @@ The reviewer website and hosted bot orchestration are separate projects.
 
 Download the pinned [production weights](weights/README.md) into a separate
 weights directory outside this checkout. The bundle contains `saved_model/`,
-its matching `source/`, and a checksum manifest. The current
-training source is candidate development code; it is not interchangeable with
-production inference source.
+its matching `source/`, and a checksum manifest. `main` contains the source
+for the released v1 model. Phasic self-play
+development lives on [`v2`](https://github.com/edgy-raven/nejimakidori/tree/v2).
+Use each release with its bundled source.
 
 Build the local model runtime using Docker BuildKit and the release directory:
 
@@ -44,12 +45,13 @@ python train.py --data /path/to/dataset/data --output /path/to/run \
 
 The reserve file is `{"games": [{"game_id": "..."}]}`; an empty list excludes
 nothing. Archives and training data are not distributed with model weights.
-Belief initialization must match the candidate architecture; the production
+Belief initialization must match the model architecture; the production
 SavedModel is an inference artifact, not a substitute for that initialization.
+The release also includes `final.weights.h5` for joint-model fine-tuning.
 A new full training run still requires compatible belief weights. See
 [dataset inputs](log_dataset/README.md) and [training contracts](model/README.md).
 
-Build the candidate job image independently of the release runtime:
+Build the training job image independently of the release runtime:
 
 ```sh
 docker build -f docker/Dockerfile.model --target training \

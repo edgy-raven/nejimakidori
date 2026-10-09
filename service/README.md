@@ -23,5 +23,6 @@ declaration before its discard. Difficulty retains the complete action's joint
 probability.
 
 Source and weights must share a feature/output contract. Production local play
-uses the frozen source supplied with its release; the checkout's candidate
-training code produces future exports. See the [root instructions](../README.md).
+uses the frozen source supplied with its release. The `main` checkout contains
+v1 training and inference code; phasic
+development lives on `v2`. See the [root instructions](../README.md).

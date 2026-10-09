@@ -1,0 +1,45 @@
+FROM rust:1.92-slim-bookworm AS rust
+
+FROM python:3.13-slim-bookworm AS native
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup
+ENV PATH=/usr/local/cargo/bin:$PATH
+RUN apt-get update && apt-get install -y --no-install-recommends git g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/riichienv.patch /tmp/riichienv.patch
+RUN git clone https://github.com/smly/RiichiEnv.git /tmp/riichienv \
+    && cd /tmp/riichienv \
+    && git checkout 479c1faeb33d082965eef8198f63261a79c0fce3 \
+    && git apply /tmp/riichienv.patch \
+    && pip wheel --no-deps --wheel-dir=/wheels .
+
+FROM python:3.13-slim-bookworm AS dependencies
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=native /wheels /tmp/wheels
+COPY model/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --find-links=/tmp/wheels -r /tmp/requirements.txt \
+    && rm -rf /tmp/wheels
+COPY docker/model_entrypoint.py /app/model_entrypoint.py
+ENTRYPOINT ["python", "/app/model_entrypoint.py"]
+
+FROM dependencies AS training
+WORKDIR /workspace
+COPY model /workspace/model
+COPY log_dataset /workspace/log_dataset
+COPY dataset.py train.py /workspace/
+COPY docker /workspace/docker
+RUN python -c "from log_dataset import shanten; shanten.native()"
+CMD ["python", "train.py", "--help"]
+
+FROM dependencies AS runtime
+RUN pip install --no-cache-dir mahjong==2.0.0
+# The release owns the exact inference source paired with its weights.
+COPY --from=release /source /app/release
+WORKDIR /app/release
+RUN python -c "from log_dataset import shanten; shanten.native()"
+ENV MODEL_PATH=/model HOST=0.0.0.0 PORT=8792
+EXPOSE 8792
+CMD ["python", "-B", "-u", "-m", "service.serve"]

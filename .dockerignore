@@ -1,0 +1,14 @@
+.git
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+**/.native
+**/*.pyc
+.env
+.env.local
+**/.env
+**/.env.local
+**/.live-control-pin
+artifacts
+*.weights.h5
+weights

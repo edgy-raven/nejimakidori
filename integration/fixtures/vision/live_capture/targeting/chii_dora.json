@@ -1,0 +1,66 @@
+{
+  "position": {
+    "action": "ActionChiPengGang",
+    "hand": {
+      "concealed": [
+        "4m",
+        "3m",
+        "5s",
+        "7p",
+        "2m",
+        "6p",
+        "9p",
+        "7p",
+        "5p",
+        "5s",
+        "4p"
+      ],
+      "drawn": null,
+      "meldCount": 1,
+      "riichi": false
+    },
+    "round": {
+      "doraIndicators": [
+        "7s"
+      ],
+      "events": [
+        {
+          "type": "draw",
+          "seat": 1,
+          "tile": "?",
+          "remaining": 69,
+          "doras": [
+            "7s"
+          ],
+          "liqi": null
+        },
+        {
+          "type": "draw",
+          "seat": 1,
+          "tile": "?",
+          "remaining": 37,
+          "doras": [
+            "7s"
+          ],
+          "liqi": null
+        },
+        {
+          "type": "discard",
+          "seat": 1,
+          "tile": "4m",
+          "tsumogiri": false,
+          "riichi": false,
+          "doras": [
+            "7s",
+            "4s"
+          ]
+        }
+      ]
+    }
+  },
+  "action": {
+    "actor": 2,
+    "pai": "9p",
+    "type": "dahai"
+  }
+}

@@ -1,0 +1,2 @@
+docker/riichienv.patch -whitespace
+log_dataset/nyanten/vendor/** linguist-vendored

@@ -1,0 +1,1946 @@
+diff --git a/README.md b/README.md
+index 6dd74c2..3ef06d4 100644
+--- a/README.md
++++ b/README.md
+@@ -84,6 +84,15 @@ By default, the environment runs a single round (kyoku). For game rules supporti
+ 
+ ### Observation
+ 
++For incremental full-information replay, use `env.mjai_log_since(cursor)`
++and advance `cursor` by the returned event count. This decodes only the new
++events, including concealed hands and draws, while `env.mjai_log` still returns
++the complete log. An offset equal to the log length returns `[]`; an offset
++beyond the log length raises `IndexError`, and a negative offset raises
++`OverflowError`. Cursors belong to the current environment log; restart at zero
++when replacing or clearing that log. These events are for training and replay,
++not player observations.
++
+ The `Observation` object provides all relevant information to a player, including the current game state and available legal actions.
+ 
+ `obs.new_events() -> list[str]` returns a list of MJAI JSON events that are new for that player since their previous observation. On a player's first observation in a hand, this can include `start_game`, `start_kyoku`, and earlier events from the hand. The full history for that observation window is accessible via `obs.events`.
+@@ -141,6 +150,13 @@ while not env.done():
+ print(env.scores(), env.ranks())
+ ```
+ 
++### Duplicate evaluation
++
++Set `GameRule.duplicate = True` for fixed per-seat draw queues and scheduled
++rounds in four-player evaluation. See [the duplicate contract](docs/DUPLICATE.md)
++for kan, exhaustion, seed, and match rules. This is an opt-in evaluation
++variant, not ordinary riichi.
++
+ ### Game Rules and Modes
+ 
+ RiichiEnv separates high-level game flow configuration (Mode) from detailed game mechanics (Rules).
+@@ -364,6 +380,22 @@ if obs is not None:
+         print(a.to_mjai())  # e.g. pon, pass
+ ```
+ 
++## Native collection
++
++Rust consumers can depend on `riichienv-core` with `default-features = false`.
++`GameState` exposes game state and stepping without constructing Python objects.
++For original, unmasked events without JSON string logs, set
++`state.skip_mjai_logging = true` and `state.event_buffer = Some(Vec::new())`
++before calling `reset()` and `_initialize_round(...)`. Call
++`state.drain_events()` after initialization and each step. Capture is disabled
++by default; draining requires capture to be enabled. Reset clears captured
++history and emits the new game's opening event.
++
++`Observation::yaku_possibility()` returns the same `[4][21][2]` public-information
++flags as Python's `encode_yaku_possibility()`, without requiring Python or NumPy.
++`Observation::replace_legal_actions(...)` updates the action list for consumers
++that canonicalize physical tile copies.
++
+ ## 🛠 Development
+ 
+ For more architectural details and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md).
+diff --git a/docs/RULES.md b/docs/RULES.md
+index 02973e2..b05c0f6 100644
+--- a/docs/RULES.md
++++ b/docs/RULES.md
+@@ -98,3 +98,10 @@ Differences in standard ranked match rules across major platforms.
+ | `.sanchaho_is_draw` | `True` | `False` |
+ 
+ The same presets apply to both 4-player and 3-player (sanma) games. The number of players is determined automatically from the game mode or replay data.
++
++## Duplicate evaluation
++
++`GameRule.duplicate` defaults to `False` for both presets. When enabled,
++four-player games use fixed per-seat draws and scheduled dealer progression.
++See [DUPLICATE.md](DUPLICATE.md) for the full wall, kan, exhaustion, and match
++contract.
+diff --git a/pyproject.toml b/pyproject.toml
+index d848ee0..5a787a7 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "riichienv"
+-version = "0.4.10"
++version = "0.4.10+duplicate"
+ authors = [
+     { name="Kohei Ozaki", email="19337+smly@users.noreply.github.com" },
+ ]
+diff --git a/riichienv-core/src/hand_evaluator.rs b/riichienv-core/src/hand_evaluator.rs
+index e6bb97f..b4a8331 100644
+--- a/riichienv-core/src/hand_evaluator.rs
++++ b/riichienv-core/src/hand_evaluator.rs
+@@ -21,55 +21,46 @@ impl HandEvaluator {
+         Ok(Self::new(tiles, melds))
+     }
+ 
+-    pub fn new(tiles_136: Vec<u8>, melds: Vec<Meld>) -> Self {
++    pub fn new(tiles_136: Vec<u8>, mut melds: Vec<Meld>) -> Self {
+         let mut aka_dora_count = 0;
+-        let mut tiles_34 = Vec::with_capacity(tiles_136.len());
++        let mut full_hand = Hand::default();
+ 
+         for &t in &tiles_136 {
+             if t == 16 || t == 52 || t == 88 {
+                 aka_dora_count += 1;
+             }
+-            tiles_34.push(t / 4);
++            full_hand.add(t / 4);
+         }
+ 
+-        let mut full_hand = Hand::new(Some(tiles_34));
+         let mut hand = full_hand.clone();
+ 
+-        let mut internal_melds = Vec::with_capacity(melds.len());
+-
+-        for meld in &melds {
+-            let mut new_meld = meld.clone();
+-
+-            if new_meld.meld_type == MeldType::Daiminkan
+-                || new_meld.meld_type == MeldType::Ankan
+-                || new_meld.meld_type == MeldType::Kakan
++        for meld in &mut melds {
++            if meld.meld_type == MeldType::Daiminkan
++                || meld.meld_type == MeldType::Ankan
++                || meld.meld_type == MeldType::Kakan
+             {
+-                let t_34 = new_meld.tiles[0] / 4;
++                let t_34 = meld.tiles[0] / 4;
+                 if hand.counts[t_34 as usize] == 4 {
+                     hand.counts[t_34 as usize] = 3;
+                 }
+             }
+ 
+-            let mut meld_tiles_34 = Vec::with_capacity(new_meld.tiles.len());
+-            for &t in &new_meld.tiles {
+-                if t == 16 || t == 52 || t == 88 {
++            for tile in &mut meld.tiles {
++                if *tile == 16 || *tile == 52 || *tile == 88 {
+                     aka_dora_count += 1;
+                 }
+-                let t_34 = t / 4;
+-                meld_tiles_34.push(t_34);
+-                full_hand.add(t_34);
++                *tile /= 4;
++                full_hand.add(*tile);
+             }
+-            new_meld.tiles = meld_tiles_34;
+-            if new_meld.meld_type == MeldType::Chi {
+-                new_meld.tiles.sort();
++            if meld.meld_type == MeldType::Chi {
++                meld.tiles.sort();
+             }
+-            internal_melds.push(new_meld);
+         }
+ 
+         Self {
+             hand,
+             full_hand,
+-            melds: internal_melds,
++            melds,
+             aka_dora_count,
+         }
+     }
+@@ -80,6 +71,16 @@ impl HandEvaluator {
+         dora_indicators: Vec<u8>,
+         ura_indicators: Vec<u8>,
+         conditions: Option<Conditions>,
++    ) -> WinResult {
++        self.calc_with_indicators(win_tile, &dora_indicators, &ura_indicators, conditions)
++    }
++
++    pub fn calc_with_indicators(
++        &self,
++        win_tile: u8,
++        dora_indicators: &[u8],
++        ura_indicators: &[u8],
++        conditions: Option<Conditions>,
+     ) -> WinResult {
+         let win_tile_136 = win_tile;
+         let conditions = conditions.unwrap_or_default();
+@@ -102,13 +103,13 @@ impl HandEvaluator {
+         }
+ 
+         let mut dora_count = 0;
+-        for &indicator_136 in &dora_indicators {
++        for &indicator_136 in dora_indicators {
+             let next_tile_34 = get_next_tile(indicator_136 / 4);
+             dora_count += full_hand_14.counts[next_tile_34 as usize];
+         }
+ 
+         let mut ura_dora_count = 0;
+-        for &indicator_136 in &ura_indicators {
++        for &indicator_136 in ura_indicators {
+             let next_tile_34 = get_next_tile(indicator_136 / 4);
+             ura_dora_count += full_hand_14.counts[next_tile_34 as usize];
+         }
+@@ -136,7 +137,6 @@ impl HandEvaluator {
+             is_menzen: self.melds.iter().all(|m| !m.opened),
+         };
+ 
+-        let _divisions = agari::find_divisions(&hand_14);
+         let yaku_res = yaku::calculate_yaku(&hand_14, &self.melds, &ctx, win_tile_34);
+ 
+         let is_oya = conditions.player_wind == Wind::East;
+@@ -159,15 +159,13 @@ impl HandEvaluator {
+             .iter()
+             .any(|&id| id != yaku::ID_DORA && id != yaku::ID_AKADORA && id != yaku::ID_URADORA);
+ 
+-        let official_yaku: Vec<u32> = yaku_res.yaku_ids.into_iter().collect();
+-
+         WinResult {
+             is_win: (has_yaku || yaku_res.yakuman_count > 0) && yaku_res.han >= 1,
+             yakuman: yaku_res.yakuman_count > 0,
+             ron_agari: score_res.pay_ron,
+             tsumo_agari_oya: score_res.pay_tsumo_oya,
+             tsumo_agari_ko: score_res.pay_tsumo_ko,
+-            yaku: official_yaku,
++            yaku: yaku_res.yaku_ids,
+             han: yaku_res.han as u32,
+             fu: yaku_res.fu as u32,
+             pao_payer: None,
+diff --git a/riichienv-core/src/lib.rs b/riichienv-core/src/lib.rs
+index ee6325d..57a0ece 100644
+--- a/riichienv-core/src/lib.rs
++++ b/riichienv-core/src/lib.rs
+@@ -18,7 +18,6 @@ pub mod rule;
+ pub mod shanten;
+ pub mod state;
+ pub mod state_3p;
+-#[cfg(feature = "python")]
+ mod yaku_checker;
+ 
+ pub use hand_evaluator::check_riichi_candidates;
+diff --git a/riichienv-core/src/observation/encode.rs b/riichienv-core/src/observation/encode.rs
+index ef22e47..16680cf 100644
+--- a/riichienv-core/src/observation/encode.rs
++++ b/riichienv-core/src/observation/encode.rs
+@@ -107,7 +107,9 @@ impl Observation {
+         }
+         tiles_used += self.hands[self.player_id as usize].len();
+         tiles_used += self.dora_indicators.len();
+-        let tiles_left = (136_i32 - tiles_used as i32).max(0) as f32;
++        let tiles_left = self
++            .tiles_left
++            .map_or_else(|| (136_i32 - tiles_used as i32).max(0) as f32, f32::from);
+         broadcast_scalar(buf, ch_offset, 30, tiles_left / 70.0);
+ 
+         // Riichi (ch 31-34)
+diff --git a/riichienv-core/src/observation/mod.rs b/riichienv-core/src/observation/mod.rs
+index 7e24d6c..0c987f6 100644
+--- a/riichienv-core/src/observation/mod.rs
++++ b/riichienv-core/src/observation/mod.rs
+@@ -8,6 +8,7 @@ pub(crate) mod mjai_select;
+ mod python;
+ #[cfg(feature = "python")]
+ pub(crate) mod sequence_features;
++mod yaku;
+ 
+ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+ use serde::{Deserialize, Serialize};
+@@ -57,6 +58,9 @@ pub struct Observation {
+     /// the drawn tile. Keep drawn_tile available for winning and hand features.
+     #[serde(default)]
+     pub forced_tedashi: bool,
++    /// Exact public draw count for duplicate boards; absent in ordinary observations.
++    #[serde(default)]
++    pub tiles_left: Option<u8>,
+ }
+ 
+ /// Pure Rust methods (no PyO3 dependency).
+@@ -99,6 +103,7 @@ impl Observation {
+             _legal_actions: legal_actions,
+             events,
+             cached_progression: None,
++            tiles_left: None,
+             honba,
+             riichi_sticks,
+             round_wind,
+@@ -115,6 +120,11 @@ impl Observation {
+         }
+     }
+ 
++    /// Replace legal actions after canonicalizing physical tile copies.
++    pub fn replace_legal_actions(&mut self, actions: Vec<Action>) {
++        self._legal_actions = actions;
++    }
++
+     pub fn legal_actions_method(&self) -> Vec<Action> {
+         self._legal_actions.clone()
+     }
+diff --git a/riichienv-core/src/observation/python.rs b/riichienv-core/src/observation/python.rs
+index 8ce3849..377c14d 100644
+--- a/riichienv-core/src/observation/python.rs
++++ b/riichienv-core/src/observation/python.rs
+@@ -5,7 +5,6 @@ use pyo3::types::{PyDict, PyDictMethods};
+ use crate::action::{Action, ActionEncoder, ActionType};
+ use crate::shanten;
+ use crate::types::{Meld, MeldType};
+-use crate::yaku_checker;
+ 
+ use super::Observation;
+ use super::helpers::get_next_tile;
+@@ -332,130 +331,14 @@ impl Observation {
+         &self,
+         py: Python<'py>,
+     ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+-        const NUM_YAKU: usize = 21;
+-        let mut arr = Array3::<f32>::ones((4, NUM_YAKU, 2));
+-
+-        // Combine all visible tiles for each player
+-        let all_discards: [Vec<u32>; 4] = self.discards.clone();
+-
+-        // Encode for each player
+-        for player_idx in 0..4 {
+-            let melds = &self.melds[player_idx];
+-            let discards = &all_discards[player_idx];
+-
+-            // Yaku 0: Tanyao
+-            let tanyao = yaku_checker::check_tanyao(melds);
+-            arr[[player_idx, 0, 0]] = tanyao.to_f32();
+-            arr[[player_idx, 0, 1]] = tanyao.to_f32();
+-
+-            // Yaku 1-3: Yakuhai (dragons: White=31, Green=32, Red=33)
+-            for (yaku_idx, &tile_type) in [31, 32, 33].iter().enumerate() {
+-                let yakuhai =
+-                    yaku_checker::check_yakuhai(tile_type, melds, discards, &self.dora_indicators);
+-                arr[[player_idx, 1 + yaku_idx, 0]] = yakuhai.to_f32();
+-                arr[[player_idx, 1 + yaku_idx, 1]] = yakuhai.to_f32();
+-            }
+-
+-            // Yaku 4: Yakuhai (round wind)
+-            let round_wind_type = 27 + self.round_wind as usize;
+-            let yakuhai_round = yaku_checker::check_yakuhai(
+-                round_wind_type,
+-                melds,
+-                discards,
+-                &self.dora_indicators,
+-            );
+-            arr[[player_idx, 4, 0]] = yakuhai_round.to_f32();
+-            arr[[player_idx, 4, 1]] = yakuhai_round.to_f32();
+-
+-            // Yaku 5: Yakuhai (seat wind)
+-            let seat = (player_idx as u8 + 4 - self.oya) % 4;
+-            let seat_wind_type = 27 + seat as usize;
+-            let yakuhai_seat =
+-                yaku_checker::check_yakuhai(seat_wind_type, melds, discards, &self.dora_indicators);
+-            arr[[player_idx, 5, 0]] = yakuhai_seat.to_f32();
+-            arr[[player_idx, 5, 1]] = yakuhai_seat.to_f32();
+-
+-            // Yaku 6-7: Honitsu, Chinitsu
+-            let (honitsu, chinitsu) = yaku_checker::check_flush(melds);
+-            arr[[player_idx, 6, 0]] = honitsu.to_f32();
+-            arr[[player_idx, 6, 1]] = honitsu.to_f32();
+-            arr[[player_idx, 7, 0]] = chinitsu.to_f32();
+-            arr[[player_idx, 7, 1]] = chinitsu.to_f32();
+-
+-            // Yaku 8: Toitoi
+-            let toitoi = yaku_checker::check_toitoi(melds);
+-            arr[[player_idx, 8, 0]] = toitoi.to_f32();
+-            arr[[player_idx, 8, 1]] = toitoi.to_f32();
+-
+-            // Yaku 9: Chiitoitsu
+-            let chiitoitsu = yaku_checker::check_chiitoitsu(melds);
+-            arr[[player_idx, 9, 0]] = chiitoitsu.to_f32();
+-            arr[[player_idx, 9, 1]] = chiitoitsu.to_f32();
+-
+-            // Yaku 10: Shousangen
+-            let shousangen = yaku_checker::check_shousangen(melds, discards, &self.dora_indicators);
+-            arr[[player_idx, 10, 0]] = shousangen.to_f32();
+-            arr[[player_idx, 10, 1]] = shousangen.to_f32();
+-
+-            // Yaku 11: Daisangen
+-            let daisangen = yaku_checker::check_daisangen(melds, discards, &self.dora_indicators);
+-            arr[[player_idx, 11, 0]] = daisangen.to_f32();
+-            arr[[player_idx, 11, 1]] = daisangen.to_f32();
+-
+-            // Yaku 12: Tsuuiisou
+-            let tsuuiisou = yaku_checker::check_tsuuiisou(melds);
+-            arr[[player_idx, 12, 0]] = tsuuiisou.to_f32();
+-            arr[[player_idx, 12, 1]] = tsuuiisou.to_f32();
+-
+-            // Yaku 13: Chinroutou
+-            let chinroutou = yaku_checker::check_chinroutou(melds);
+-            arr[[player_idx, 13, 0]] = chinroutou.to_f32();
+-            arr[[player_idx, 13, 1]] = chinroutou.to_f32();
+-
+-            // Yaku 14: Honroutou
+-            let honroutou = yaku_checker::check_honroutou(melds);
+-            arr[[player_idx, 14, 0]] = honroutou.to_f32();
+-            arr[[player_idx, 14, 1]] = honroutou.to_f32();
+-
+-            // Yaku 15: Kokushi (thirteen orphans)
+-            let kokushi = yaku_checker::check_kokushi(melds, discards, &self.dora_indicators);
+-            arr[[player_idx, 15, 0]] = kokushi.to_f32();
+-            arr[[player_idx, 15, 1]] = kokushi.to_f32();
+-
+-            // Yaku 16: Chanta (outside hand)
+-            let chanta = yaku_checker::check_chanta(melds);
+-            arr[[player_idx, 16, 0]] = chanta.to_f32();
+-            arr[[player_idx, 16, 1]] = chanta.to_f32();
+-
+-            // Yaku 17: Junchan (pure outside hand)
+-            let junchan = yaku_checker::check_junchan(melds);
+-            arr[[player_idx, 17, 0]] = junchan.to_f32();
+-            arr[[player_idx, 17, 1]] = junchan.to_f32();
+-
+-            // Yaku 18: Sanshoku doujun (three colored straight)
+-            let sanshoku = yaku_checker::check_sanshoku_doujun(melds);
+-            arr[[player_idx, 18, 0]] = sanshoku.to_f32();
+-            arr[[player_idx, 18, 1]] = sanshoku.to_f32();
+-
+-            // Yaku 19: Iipeikou (pure double sequence)
+-            let iipeikou = yaku_checker::check_iipeikou(melds);
+-            arr[[player_idx, 19, 0]] = iipeikou.to_f32();
+-            arr[[player_idx, 19, 1]] = iipeikou.to_f32();
+-
+-            // Yaku 20: Ittsu (straight)
+-            let ittsu = yaku_checker::check_ittsu(melds);
+-            arr[[player_idx, 20, 0]] = ittsu.to_f32();
+-            arr[[player_idx, 20, 1]] = ittsu.to_f32();
+-        }
+-
+-        // Convert to bytes
+-        let slice = arr.as_slice().ok_or_else(|| {
+-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Array not contiguous")
+-        })?;
+-        let byte_len = std::mem::size_of_val(slice);
+-        let byte_slice =
+-            unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, byte_len) };
+-        Ok(pyo3::types::PyBytes::new(py, byte_slice))
++        let values = self.yaku_possibility();
++        let bytes: Vec<u8> = values
++            .iter()
++            .flatten()
++            .flatten()
++            .flat_map(|value| value.to_ne_bytes())
++            .collect();
++        Ok(pyo3::types::PyBytes::new(py, &bytes))
+     }
+ 
+     pub fn encode<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+@@ -584,7 +467,9 @@ impl Observation {
+         // Visible hands (just self)
+         tiles_used += self.hands[self.player_id as usize].len();
+         tiles_used += self.dora_indicators.len();
+-        let tiles_left = (136_i32 - tiles_used as i32).max(0) as f32;
++        let tiles_left = self
++            .tiles_left
++            .map_or_else(|| (136_i32 - tiles_used as i32).max(0) as f32, f32::from);
+         let tiles_left_norm = tiles_left / 70.0; // Max ~70 tiles left in wall
+         for k in 0..34 {
+             arr[[30, k]] = tiles_left_norm;
+diff --git a/riichienv-core/src/observation/sequence_features.rs b/riichienv-core/src/observation/sequence_features.rs
+index e00ce31..5d7f2e5 100644
+--- a/riichienv-core/src/observation/sequence_features.rs
++++ b/riichienv-core/src/observation/sequence_features.rs
+@@ -379,6 +379,9 @@ impl Observation {
+ 
+     /// Count approximate tiles remaining in the wall.
+     fn count_tiles_remaining(&self) -> u16 {
++        if let Some(count) = self.tiles_left {
++            return u16::from(count);
++        }
+         let n = 4; // 4 players
+         let total_tiles: u32 = 136; // 4P
+ 
+diff --git a/riichienv-core/src/rule.rs b/riichienv-core/src/rule.rs
+index 50925f3..179573c 100644
+--- a/riichienv-core/src/rule.rs
++++ b/riichienv-core/src/rule.rs
+@@ -22,6 +22,8 @@ pub struct GameRule {
+     /// recording a discard. This does not change the first-draw win context.
+     #[serde(default)]
+     pub dealer_first_discard_is_tedashi: bool,
++    /// Fixed per-seat draws and scheduled rounds for duplicate evaluation.
++    pub duplicate: bool,
+ }
+ 
+ impl Default for GameRule {
+@@ -44,6 +46,7 @@ impl GameRule {
+ 
+             kuikae_forbidden: true,
+             dealer_first_discard_is_tedashi: false,
++            duplicate: false,
+         }
+     }
+ 
+@@ -60,6 +63,7 @@ impl GameRule {
+ 
+             kuikae_forbidden: true,
+             dealer_first_discard_is_tedashi: true,
++            duplicate: false,
+         }
+     }
+ }
+@@ -68,7 +72,7 @@ impl GameRule {
+ #[pymethods]
+ impl GameRule {
+     #[new]
+-    #[pyo3(signature = (allows_ron_on_ankan_for_kokushi_musou=false, is_kokushi_musou_13machi_double=false, is_suuankou_tanki_double=false, is_junsei_chuurenpoutou_double=false, is_daisuushii_double=false, yakuman_pao_is_liability_only=false, sanchaho_is_draw=false, kuikae_forbidden=true, dealer_first_discard_is_tedashi=false))]
++    #[pyo3(signature = (allows_ron_on_ankan_for_kokushi_musou=false, is_kokushi_musou_13machi_double=false, is_suuankou_tanki_double=false, is_junsei_chuurenpoutou_double=false, is_daisuushii_double=false, yakuman_pao_is_liability_only=false, sanchaho_is_draw=false, kuikae_forbidden=true, dealer_first_discard_is_tedashi=false, duplicate=false))]
+     #[allow(clippy::too_many_arguments)]
+     pub fn py_new(
+         allows_ron_on_ankan_for_kokushi_musou: bool,
+@@ -80,6 +84,7 @@ impl GameRule {
+         sanchaho_is_draw: bool,
+         kuikae_forbidden: bool,
+         dealer_first_discard_is_tedashi: bool,
++        duplicate: bool,
+     ) -> Self {
+         Self {
+             allows_ron_on_ankan_for_kokushi_musou,
+@@ -91,6 +96,7 @@ impl GameRule {
+             sanchaho_is_draw,
+             kuikae_forbidden,
+             dealer_first_discard_is_tedashi,
++            duplicate,
+         }
+     }
+ 
+@@ -108,7 +114,7 @@ impl GameRule {
+ 
+     fn __repr__(&self) -> String {
+         format!(
+-            "GameRule(allows_ron_on_ankan_for_kokushi_musou={}, is_kokushi_musou_13machi_double={}, is_suuankou_tanki_double={}, is_junsei_chuurenpoutou_double={}, is_daisuushii_double={}, yakuman_pao_is_liability_only={}, sanchaho_is_draw={}, kuikae_forbidden={}, dealer_first_discard_is_tedashi={})",
++            "GameRule(allows_ron_on_ankan_for_kokushi_musou={}, is_kokushi_musou_13machi_double={}, is_suuankou_tanki_double={}, is_junsei_chuurenpoutou_double={}, is_daisuushii_double={}, yakuman_pao_is_liability_only={}, sanchaho_is_draw={}, kuikae_forbidden={}, dealer_first_discard_is_tedashi={}, duplicate={})",
+             self.allows_ron_on_ankan_for_kokushi_musou,
+             self.is_kokushi_musou_13machi_double,
+             self.is_suuankou_tanki_double,
+@@ -117,7 +123,8 @@ impl GameRule {
+             self.yakuman_pao_is_liability_only,
+             self.sanchaho_is_draw,
+             self.kuikae_forbidden,
+-            self.dealer_first_discard_is_tedashi
++            self.dealer_first_discard_is_tedashi,
++            self.duplicate
+         )
+     }
+ }
+diff --git a/riichienv-core/src/state/mod.rs b/riichienv-core/src/state/mod.rs
+index 97db83b..3ca709e 100644
+--- a/riichienv-core/src/state/mod.rs
++++ b/riichienv-core/src/state/mod.rs
+@@ -62,6 +62,8 @@ pub struct GameState {
+     pub round_end_scores: Option<Vec<i32>>,
+ 
+     pub mjai_log: Vec<String>,
++    /// Opt-in original events for native consumers, independent of string logs.
++    pub event_buffer: Option<Vec<Value>>,
+     pub player_event_counts: [usize; NP],
+     pub kyoku_start_event_counts: [usize; NP],
+     pub mjai_log_per_player: [Vec<String>; NP],
+@@ -135,6 +137,7 @@ impl GameState {
+             last_win_results: HashMap::new(),
+             round_end_scores: None,
+             mjai_log: Vec::new(),
++            event_buffer: None,
+             player_event_counts: [0; NP],
+             kyoku_start_event_counts: [0; NP],
+             mjai_log_per_player: Default::default(),
+@@ -155,9 +158,12 @@ impl GameState {
+             last_tedashis: [None; NP],
+         };
+ 
+-        if !state.skip_mjai_logging {
++        if !state.skip_mjai_logging || state.event_buffer.is_some() {
+             let mut ev = serde_json::Map::new();
+             ev.insert("type".to_string(), Value::String("start_game".to_string()));
++            if state.rule.duplicate {
++                ev.insert("duplicate".to_string(), Value::Bool(true));
++            }
+             state._push_mjai_event(Value::Object(ev));
+         }
+ 
+@@ -169,6 +175,9 @@ impl GameState {
+     /// Clear logs and event counters in preparation for a new game.
+     /// Call `_initialize_round()` afterwards to set up the first round.
+     pub fn reset(&mut self) {
++        if let Some(events) = &mut self.event_buffer {
++            events.clear();
++        }
+         self.mjai_log = Vec::new();
+         self.mjai_log_per_player = Default::default();
+         self.player_event_counts = [0; NP];
+@@ -179,9 +188,12 @@ impl GameState {
+             self.round_seq_prog_pending_reach = None;
+         }
+ 
+-        if !self.skip_mjai_logging {
++        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+             let mut ev = serde_json::Map::new();
+             ev.insert("type".to_string(), Value::String("start_game".to_string()));
++            if self.rule.duplicate {
++                ev.insert("duplicate".to_string(), Value::Bool(true));
++            }
+             self._push_mjai_event(Value::Object(ev));
+         }
+     }
+@@ -253,6 +265,9 @@ impl GameState {
+         );
+ 
+         obs.forced_tedashi = self.is_forced_tedashi(player_id);
++        if self.rule.duplicate {
++            obs.tiles_left = Some(self.wall.drawable_count);
++        }
+ 
+         // Attach pre-computed progression snapshot.
+         #[cfg(feature = "python")]
+@@ -451,7 +466,7 @@ impl GameState {
+                             && !self.players[pid as usize].riichi_stage
+                         {
+                             self.players[pid as usize].riichi_stage = true;
+-                            if !self.skip_mjai_logging {
++                            if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                                 let mut ev = serde_json::Map::new();
+                                 ev.insert("type".to_string(), Value::String("reach".to_string()));
+                                 ev.insert("actor".to_string(), Value::Number(pid.into()));
+@@ -562,7 +577,7 @@ impl GameState {
+                         }
+ 
+                         // Log Kakan immediately (before Chankan check)
+-                        if !self.skip_mjai_logging {
++                        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                             let mut ev = serde_json::Map::new();
+                             ev.insert("type".to_string(), Value::String("kakan".to_string()));
+                             ev.insert("actor".to_string(), Value::Number(pid.into()));
+@@ -858,7 +873,7 @@ impl GameState {
+                             }
+                             self.win_results.insert(pid, val);
+ 
+-                            if !self.skip_mjai_logging {
++                            if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                                 let mut ev = serde_json::Map::new();
+                                 ev.insert("type".to_string(), Value::String("hora".to_string()));
+                                 ev.insert("actor".to_string(), Value::Number(pid.into()));
+@@ -1110,7 +1125,7 @@ impl GameState {
+                             oya_won = true;
+                         }
+ 
+-                        if !self.skip_mjai_logging {
++                        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                             let mut ev = serde_json::Map::new();
+                             ev.insert("type".to_string(), Value::String("hora".to_string()));
+                             ev.insert("actor".to_string(), Value::Number(w_pid.into()));
+@@ -1189,7 +1204,7 @@ impl GameState {
+                     called_tile: Some(tile),
+                 });
+ 
+-                if !self.skip_mjai_logging {
++                if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                     let type_str = match action.action_type {
+                         ActionType::Pon => Some("pon"),
+                         ActionType::Chi => Some("chi"),
+@@ -1370,7 +1385,7 @@ impl GameState {
+             self._reveal_kan_dora();
+         }
+ 
+-        if !self.skip_mjai_logging {
++        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+             let mut ev = serde_json::Map::new();
+             ev.insert("type".to_string(), Value::String("dahai".to_string()));
+             ev.insert("actor".to_string(), Value::Number(pid.into()));
+@@ -1490,15 +1505,14 @@ impl GameState {
+         }
+ 
+         if self.wall.drawable_count > 0 {
+-            // Rinshan tiles are at the beginning of the wall vector (0-3)
+-            let t = self.wall.tiles.remove(0);
+-            self.wall.drawable_count -= 1;
++            // Duplicate kan draws use the caller's queue; normal kan uses the dead wall.
++            let t = self.wall.draw(pid, true).unwrap();
+             self.players[p_idx].hand.push(t);
+             self.drawn_tile = Some(t);
+             self.wall.rinshan_draw_count += 1;
+             self.is_rinshan_flag = true;
+ 
+-            if !self.skip_mjai_logging {
++            if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                 let m_type = match action.action_type {
+                     ActionType::Ankan => Some("ankan"),
+                     ActionType::Daiminkan => Some("daiminkan"),
+@@ -1545,12 +1559,15 @@ impl GameState {
+                 self.wall.pending_kan_dora_count += 1;
+             }
+ 
+-            if !self.skip_mjai_logging {
++            if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                 // Rinshan tsumo logging should apply to Kakan as well
+                 let mut t_ev = serde_json::Map::new();
+                 t_ev.insert("type".to_string(), Value::String("tsumo".to_string()));
+                 t_ev.insert("actor".to_string(), Value::Number(pid.into()));
+                 t_ev.insert("pai".to_string(), Value::String(tid_to_mjai(t)));
++                if self.rule.duplicate {
++                    t_ev.insert("tiles_left".to_string(), self.wall.drawable_count.into());
++                }
+                 self._push_mjai_event(Value::Object(t_ev));
+             }
+             self.phase = Phase::WaitAct;
+@@ -1565,7 +1582,7 @@ impl GameState {
+             self.riichi_sticks += 1;
+             self.players[p as usize].riichi_declared = true;
+             self.players[p as usize].ippatsu_cycle = true;
+-            if !self.skip_mjai_logging {
++            if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                 let mut ev = serde_json::Map::new();
+                 ev.insert(
+                     "type".to_string(),
+@@ -1584,8 +1601,7 @@ impl GameState {
+             self._trigger_ryukyoku("exhaustive_draw");
+             return;
+         }
+-        if let Some(t) = self.wall.tiles.pop() {
+-            self.wall.drawable_count -= 1;
++        if let Some(t) = self.wall.draw(self.current_player, false) {
+             let pid = self.current_player;
+             self.players[pid as usize].hand.push(t);
+             self.drawn_tile = Some(t);
+@@ -1593,11 +1609,14 @@ impl GameState {
+             self.phase = Phase::WaitAct;
+             self.active_players = vec![pid];
+ 
+-            if !self.skip_mjai_logging {
++            if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                 let mut ev = serde_json::Map::new();
+                 ev.insert("type".to_string(), Value::String("tsumo".to_string()));
+                 ev.insert("actor".to_string(), Value::Number(pid.into()));
+                 ev.insert("pai".to_string(), Value::String(tid_to_mjai(t)));
++                if self.rule.duplicate {
++                    ev.insert("tiles_left".to_string(), self.wall.drawable_count.into());
++                }
+                 self._push_mjai_event(Value::Object(ev));
+             }
+             self.players[pid as usize].forbidden_discards.clear();
+@@ -1616,7 +1635,7 @@ impl GameState {
+         let np: u8 = NP as u8;
+ 
+         // Tobi (bankruptcy) check: game ends if any player has negative score
+-        if self.players.iter().any(|p| p.score < 0) {
++        if !self.rule.duplicate && self.players.iter().any(|p| p.score < 0) {
+             self._process_end_game();
+             return;
+         }
+@@ -1633,7 +1652,8 @@ impl GameState {
+             _ => false,
+         };
+         // Abortive draws repeat without applying agari-yame or tenpai-yame.
+-        if !is_abortive_draw
++        if !self.rule.duplicate
++            && !is_abortive_draw
+             && is_renchan
+             && is_all_last_or_later
+             && dealer_is_top
+@@ -1647,7 +1667,28 @@ impl GameState {
+         let mut next_oya = self.oya;
+         let mut next_round_wind = self.round_wind;
+ 
+-        if is_renchan {
++        if self.rule.duplicate {
++            if is_renchan && !is_abortive_draw {
++                for (seat, player) in self.players.iter_mut().enumerate() {
++                    let payment = if seat == self.oya as usize {
++                        400 * (NP as i32 - 1)
++                    } else {
++                        -400
++                    };
++                    player.score += payment;
++                    player.score_delta += payment;
++                }
++            }
++            if is_renchan || is_draw {
++                next_honba = next_honba.saturating_add(1);
++            } else {
++                next_honba = 0;
++            }
++            next_oya = (next_oya + 1) % np;
++            if next_oya == 0 {
++                next_round_wind += 1;
++            }
++        } else if is_renchan {
+             next_honba = next_honba.saturating_add(1);
+         } else if is_draw {
+             next_honba = next_honba.saturating_add(1);
+@@ -1667,10 +1708,11 @@ impl GameState {
+             1 | 4 => {
+                 // TODO: Delete 4, 5, 3
+                 let max_score = self.players.iter().map(|p| p.score).max().unwrap_or(0);
+-                if !is_abortive_draw
+-                    && !is_renchan
+-                    && next_round_wind >= 1
+-                    && (max_score >= 30000 || next_round_wind > 1)
++                if next_round_wind >= 1
++                    && (self.rule.duplicate
++                        || (!is_abortive_draw
++                            && !is_renchan
++                            && (max_score >= 30000 || next_round_wind > 1)))
+                 {
+                     self._process_end_game();
+                     return;
+@@ -1678,10 +1720,11 @@ impl GameState {
+             }
+             2 | 5 => {
+                 let max_score = self.players.iter().map(|p| p.score).max().unwrap_or(0);
+-                if !is_abortive_draw
+-                    && !is_renchan
+-                    && next_round_wind >= 2
+-                    && (max_score >= 30000 || next_round_wind > 2)
++                if next_round_wind >= 2
++                    && (self.rule.duplicate
++                        || (!is_abortive_draw
++                            && !is_renchan
++                            && (max_score >= 30000 || next_round_wind > 2)))
+                 {
+                     self._process_end_game();
+                     return;
+@@ -1699,7 +1742,7 @@ impl GameState {
+             }
+         }
+ 
+-        if !self.skip_mjai_logging {
++        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+             let mut ev = serde_json::Map::new();
+             ev.insert("type".to_string(), Value::String("end_kyoku".to_string()));
+             self._push_mjai_event(Value::Object(ev));
+@@ -1773,6 +1816,10 @@ impl GameState {
+         if let Some(w) = wall {
+             self.wall.load_wall(w);
+         } else {
++            if self.rule.duplicate {
++                self.wall.seed = self.seed.map(wall::splitmix64);
++                self.wall.hand_index = u64::from(round_wind) * 4 + u64::from(oya);
++            }
+             self.wall.shuffle();
+         }
+ 
+@@ -1799,6 +1846,16 @@ impl GameState {
+ 
+         // 14 = dead wall tiles (2 rinshan stacks + 5 dora stacks)
+         self.wall.drawable_count = (self.wall.tiles.len() as u8) - 14;
++        if self.rule.duplicate {
++            let mut queues: [Vec<u8>; NP] = Default::default();
++            for (position, &tile) in self.wall.tiles[14..].iter().rev().enumerate() {
++                queues[(oya as usize + position) % NP].push(tile);
++            }
++            for queue in &mut queues {
++                queue.reverse();
++            }
++            self.wall.duplicate_draws = Some(queues);
++        }
+ 
+         // Record kyoku start offsets so get_observation() can return
+         // the full round history (not just incremental deltas).
+@@ -1812,7 +1869,7 @@ impl GameState {
+             self.round_seq_prog_pending_reach = None;
+         }
+ 
+-        if !self.skip_mjai_logging {
++        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+             let wind_str = match round_wind % 4 {
+                 0 => "E",
+                 1 => "S",
+@@ -1854,17 +1911,19 @@ impl GameState {
+         self.active_players = vec![self.oya];
+ 
+         // Draw 14th tile for Oya
+-        if let Some(t) = self.wall.tiles.pop() {
+-            self.wall.drawable_count -= 1;
++        if let Some(t) = self.wall.draw(self.oya, false) {
+             self.players[self.oya as usize].hand.push(t);
+             self.drawn_tile = Some(t);
+             self.needs_tsumo = false;
+ 
+-            if !self.skip_mjai_logging {
++            if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                 let mut ev = serde_json::Map::new();
+                 ev.insert("type".to_string(), Value::String("tsumo".to_string()));
+                 ev.insert("actor".to_string(), Value::Number(self.oya.into()));
+                 ev.insert("pai".to_string(), Value::String(tid_to_mjai(t)));
++                if self.rule.duplicate {
++                    ev.insert("tiles_left".to_string(), self.wall.drawable_count.into());
++                }
+                 self._push_mjai_event(Value::Object(ev));
+             }
+         } else {
+@@ -1988,7 +2047,7 @@ impl GameState {
+             true
+         };
+ 
+-        if !self.skip_mjai_logging {
++        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+             let mut ev = serde_json::Map::new();
+             ev.insert("type".to_string(), Value::String("ryukyoku".to_string()));
+             ev.insert("reason".to_string(), Value::String(final_reason.clone()));
+@@ -2076,10 +2135,10 @@ impl GameState {
+         if count < 5 {
+             // Base indices for Omote Dora are 4, 6, 8, 10, 12 in the wall
+             // Since we use remove(0) for Rinshan draws, the indices shift down.
+-            let base_idx = (4 + 2 * count).saturating_sub(self.wall.rinshan_draw_count as usize);
++            let base_idx = (4 + 2 * count).saturating_sub(self.wall.dead_wall_shift());
+             if base_idx < self.wall.tiles.len() {
+                 self.wall.dora_indicators.push(self.wall.tiles[base_idx]);
+-                if !self.skip_mjai_logging {
++                if !self.skip_mjai_logging || self.event_buffer.is_some() {
+                     let mut ev = serde_json::Map::new();
+                     ev.insert("type".to_string(), Value::String("dora".to_string()));
+                     ev.insert(
+@@ -2101,7 +2160,7 @@ impl GameState {
+     fn _get_ura_indicators(&self) -> Vec<u8> {
+         let mut indicators = Vec::new();
+         for i in 0..self.wall.dora_indicators.len() {
+-            let idx = (5 + 2 * i).saturating_sub(self.wall.rinshan_draw_count as usize);
++            let idx = (5 + 2 * i).saturating_sub(self.wall.dead_wall_shift());
+             if idx < self.wall.tiles.len() {
+                 indicators.push(self.wall.tiles[idx]);
+             }
+@@ -2112,7 +2171,7 @@ impl GameState {
+     pub fn _get_ura_markers(&self) -> Vec<String> {
+         let mut markers = Vec::new();
+         for i in 0..self.wall.dora_indicators.len() {
+-            let idx = (5 + 2 * i).saturating_sub(self.wall.rinshan_draw_count as usize); // Ura is next to front.
++            let idx = (5 + 2 * i).saturating_sub(self.wall.dead_wall_shift()); // Ura is next to front.
+             // Original: `self.wall[5 + 2*i]`
+             if idx < self.wall.tiles.len() {
+                 markers.push(tid_to_mjai(self.wall.tiles[idx]));
+@@ -2138,7 +2197,7 @@ impl GameState {
+             self.riichi_sticks = 0;
+         }
+         self.is_done = true;
+-        if !self.skip_mjai_logging {
++        if !self.skip_mjai_logging || self.event_buffer.is_some() {
+             let mut ek = serde_json::Map::new();
+             ek.insert("type".to_string(), Value::String("end_kyoku".to_string()));
+             self._push_mjai_event(Value::Object(ek));
+@@ -2159,7 +2218,20 @@ impl GameState {
+ }
+ 
+ impl GameState {
++    /// Drain captured original events. Enable capture before reset by assigning
++    /// `event_buffer = Some(Vec::new())`.
++    pub fn drain_events(&mut self) -> Vec<Value> {
++        std::mem::take(self.event_buffer.as_mut().expect("event capture enabled"))
++    }
++
+     pub fn _push_mjai_event(&mut self, event: Value) {
++        if let Some(events) = &mut self.event_buffer {
++            if self.skip_mjai_logging {
++                events.push(event);
++                return;
++            }
++            events.push(event.clone());
++        }
+         if self.skip_mjai_logging {
+             return;
+         }
+diff --git a/riichienv-core/src/state/wall.rs b/riichienv-core/src/state/wall.rs
+index 973e013..9683cf8 100644
+--- a/riichienv-core/src/state/wall.rs
++++ b/riichienv-core/src/state/wall.rs
+@@ -16,6 +16,7 @@ pub struct WallState {
+     pub salt: String,
+     pub seed: Option<u64>,
+     pub hand_index: u64,
++    pub duplicate_draws: Option<[Vec<u8>; 4]>,
+ }
+ 
+ impl WallState {
+@@ -30,6 +31,7 @@ impl WallState {
+             salt: String::new(),
+             seed,
+             hand_index: 0,
++            duplicate_draws: None,
+         }
+     }
+ 
+@@ -64,6 +66,41 @@ impl WallState {
+         self.rinshan_draw_count = 0;
+         self.pending_kan_dora_count = 0;
+         self.drawable_count = 0;
++        self.duplicate_draws = None;
++    }
++
++    /// Consume a physical tile once, preserving the dead wall in duplicate mode.
++    pub fn draw(&mut self, player: u8, rinshan: bool) -> Option<u8> {
++        if let Some(queues) = &mut self.duplicate_draws {
++            let tile = queues[player as usize].pop()?;
++            let position = self.tiles.iter().position(|&t| t == tile).unwrap();
++            self.tiles.remove(position);
++            self.drawable_count = if queues[player as usize].is_empty() {
++                // This is the last draw: allow tsumo/ron, then settle normally.
++                0
++            } else {
++                self.drawable_count - 1
++            };
++            Some(tile)
++        } else {
++            let tile = if rinshan {
++                Some(self.tiles.remove(0))
++            } else {
++                self.tiles.pop()
++            };
++            if tile.is_some() {
++                self.drawable_count -= 1;
++            }
++            tile
++        }
++    }
++
++    pub fn dead_wall_shift(&self) -> usize {
++        if self.duplicate_draws.is_some() {
++            0
++        } else {
++            self.rinshan_draw_count as usize
++        }
+     }
+ 
+     pub fn load_wall(&mut self, tiles: Vec<u8>) {
+@@ -77,10 +114,11 @@ impl WallState {
+         self.rinshan_draw_count = 0;
+         self.pending_kan_dora_count = 0;
+         self.drawable_count = 0;
++        self.duplicate_draws = None;
+     }
+ }
+ 
+-fn splitmix64(x: u64) -> u64 {
++pub(super) fn splitmix64(x: u64) -> u64 {
+     let mut z = x.wrapping_add(0x9E3779B97F4A7C15);
+     z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+diff --git a/riichienv-core/src/state_3p/mod.rs b/riichienv-core/src/state_3p/mod.rs
+index db6d11e..3f09841 100644
+--- a/riichienv-core/src/state_3p/mod.rs
++++ b/riichienv-core/src/state_3p/mod.rs
+@@ -86,6 +86,10 @@ impl GameState3P {
+         round_wind: u8,
+         rule: GameRule,
+     ) -> Self {
++        assert!(
++            !rule.duplicate,
++            "Duplicate rules support four-player games only"
++        );
+         let sub_mode = GameSubMode3P::from_game_mode(game_mode);
+         let players = [(); NP].map(|_| PlayerState3P::new(game_mode::starting_score()));
+ 
+diff --git a/riichienv-python/src/env.rs b/riichienv-python/src/env.rs
+index c18a678..a9ddf94 100644
+--- a/riichienv-python/src/env.rs
++++ b/riichienv-python/src/env.rs
+@@ -106,6 +106,11 @@ impl RiichiEnv {
+             0
+         };
+ 
++        if rule.unwrap_or_default().duplicate && (3..=5).contains(&gt) {
++            return Err(pyo3::exceptions::PyValueError::new_err(
++                "Duplicate rules support four-player games only",
++            ));
++        }
+         Ok(RiichiEnv {
+             variant: GameStateVariant::new(
+                 gt,
+@@ -728,11 +733,19 @@ impl RiichiEnv {
+ 
+     #[getter]
+     pub fn mjai_log(&self, py: Python) -> PyResult<Py<PyAny>> {
++        self.mjai_log_since(py, 0)
++    }
++
++    /// Decode full-information MJAI events starting at a zero-based log offset.
++    pub fn mjai_log_since(&self, py: Python, start: usize) -> PyResult<Py<PyAny>> {
++        let log: &Vec<String> = with_variant!(self, |s| &s.mjai_log);
++        let events = log.get(start..).ok_or_else(|| {
++            pyo3::exceptions::PyIndexError::new_err("MJAI log offset exceeds log length")
++        })?;
+         let json = py.import("json")?;
+         let loads = json.getattr("loads")?;
+         let list = pyo3::types::PyList::empty(py);
+-        let log: &Vec<String> = with_variant!(self, |s| &s.mjai_log);
+-        for s in log {
++        for s in events {
+             list.append(loads.call1((s,))?)?;
+         }
+         Ok(list.unbind().into())
+diff --git a/src/riichienv/_riichienv.pyi b/src/riichienv/_riichienv.pyi
+index 0b39a7c..0161e89 100644
+--- a/src/riichienv/_riichienv.pyi
++++ b/src/riichienv/_riichienv.pyi
+@@ -16,6 +16,7 @@ class GameRule:
+     sanchaho_is_draw: bool
+     kuikae_forbidden: bool
+     dealer_first_discard_is_tedashi: bool
++    duplicate: bool
+     def __init__(
+         self,
+         allows_ron_on_ankan_for_kokushi_musou: bool = False,
+@@ -27,6 +28,7 @@ class GameRule:
+         sanchaho_is_draw: bool = False,
+         kuikae_forbidden: bool = True,
+         dealer_first_discard_is_tedashi: bool = False,
++        duplicate: bool = False,
+     ) -> None: ...
+     @staticmethod
+     def default_tenhou() -> GameRule: ...
+@@ -216,6 +218,7 @@ class HandEvaluator3P:
+     def hand_from_text(text: str) -> HandEvaluator3P: ...
+ 
+ class Observation:
++    tiles_left: int | None
+     """A 4-player (yonma) game observation for a single player.
+ 
+     Contains the player's hand, visible game events, and the set of
+@@ -835,6 +838,14 @@ class RiichiEnv:
+     ) -> dict[int, Observation]: ...
+     def step(self, actions: dict[int, Action | Action3P]) -> dict[int, Observation]: ...
+     def done(self) -> bool: ...
++    def mjai_log_since(self, start: int) -> list[dict[str, Any]]:
++        """Return full-information events from zero-based ``start``.
++
++        ``start == len(mjai_log)`` returns an empty list; larger offsets
++        raise IndexError and negative offsets raise OverflowError.
++        Advance the cursor by the returned event count.
++        """
++        ...
+     def get_observations(self, players: list[int] | None = None) -> dict[int, Observation]: ...
+     def get_obs_py(self, player_id: int) -> Observation: ...
+     def _check_midway_draws(self) -> Any: ...
+diff --git a/uv.lock b/uv.lock
+index f2da659..bbf7ef1 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -2636,7 +2636,7 @@ wheels = [
+ 
+ [[package]]
+ name = "riichienv"
+-version = "0.4.10"
++version = "0.4.10+duplicate"
+ source = { editable = "." }
+ dependencies = [
+     { name = "ipython" },
+diff --git a/docs/DUPLICATE.md b/docs/DUPLICATE.md
+new file mode 100644
+index 0000000..a8b826c
+--- /dev/null
++++ b/docs/DUPLICATE.md
+@@ -0,0 +1,99 @@
++# Duplicate evaluation
++
++`GameRule.duplicate` enables an experimental four-player riichi evaluation
++format. It defaults to `False` in both platform presets. Ordinary games
++retain their existing wall and match rules. Three-player duplicate games
++are rejected.
++
++```python
++import riichienv
++
++rule = riichienv.GameRule.default_tenhou()
++rule.duplicate = True
++for candidate_seat in range(4):
++    env = riichienv.RiichiEnv(game_mode=2, seed=417, rule=rule)
++    observations = env.reset(oya=0)
++    # Run the candidate at candidate_seat, references at the other seats.
++    # Reset each policy's memory between matches.
++```
++
++The engine fixes the board for each seat; the evaluator rotates policies,
++not the wall or physical seat identities. Compare complete groups of four
++matches and treat each seed group as a single statistical cluster.
++
++## Draw contract
++
++After the ordinary deal of 13 tiles to each seat, the 70 live-wall tiles
++are assigned in ordinary draw order, round-robin from the dealer. This gives
++18 tiles each to the dealer and the next seat, and 17 to each remaining seat.
++The dealer's opening draw is the first tile in its queue. Across all four
++dealer positions each physical seat receives the same total allocation.
++
++Every subsequent draw consumes the next physical tile of the drawing seat's
++queue. Chi and pon may skip turns but cannot reassign tiles to another seat.
++Ankan, daiminkan, and kakan also draw from the caller's own queue. Kan can
++therefore advance that player's sequence, but cannot change anyone else's
++sequence. This fixes draw prefixes by seat, not the number of draws before
++a win, the timing of those draws, or the results of calls.
++
++Kan replacements retain rinshan scoring, chankan, kan limits, and the usual
++kan-dora reveal timing. The original 14 dead-wall tiles stay reserved;
++initial/kan dora and ura indicators use their original positions. Replacement
++tiles do not come from the ordinary four rinshan slots. All physical tiles
++remain unique; no stream is replenished by sampling with replacement.
++
++The first player to consume its final queued tile makes the last draw of
++the hand. A normal final draw permits haitei; a kan replacement remains
++rinshan. After its discard, ron remains possible but chi/pon/kan do not.
++If nobody wins, the engine applies normal exhaustive-draw settlement.
++Some other seats' queued tiles consequently remain unused.
++
++## Match and seed contract
++
++Single-hand games finish after one hand. East games advance through East 4;
++South games advance through South 4. Every completed or aborted hand advances
++the dealer. A dealer win or dealer-tenpai exhaustive draw pays 400 from every
++other player to the dealer, in place of a dealer repeat. There are no dealer
++repeats, early bankruptcy endings, agari-yame, or extra West/South rounds.
++Honba follows the ordinary win/draw progression even as the dealer advances;
++scores and unclaimed riichi deposits carry forward, with normal final scoring.
++A game reset at a later round/dealer plays the remaining scheduled hands.
++
++For generated walls, the episode seed is first mixed with SplitMix64. The
++scheduled hand position (`4 * round_wind + dealer`) is then added and mixed
++again with the existing shuffle seed mixer. Adjacent episode seeds therefore
++do not systematically reuse one another's hands. Wins, calls, draws, aborts, and earlier hand lengths cannot perturb a
++later board. Resetting with the same seed, round, and dealer reproduces it;
++cloning also preserves partially consumed queues. `reset(wall=...)` accepts
++a complete custom physical wall using the same dealing/draw convention.
++
++The `start_game` replay event marks duplicate games with `duplicate: true`.
++Duplicate `tsumo` events also carry the public `tiles_left` count, including
++zero on the final personal draw. Duplicate observations expose this count
++as `tiles_left`, and their native feature encoders use it. Ordinary observations
++leave this optional override unset and retain their existing encoding.
++Replay-based feature producers must honor the public count instead of always
++subtracting draws from 70. Other MJAI hand/action/result events are preserved.
++Observation legal actions come from the duplicate engine; policy inputs do
++not receive future queues. Keep these results separate from standard-riichi match results:
++the altered wall and match rules can change which policies perform best.
++
++This is a riichi-specific experimental variant inspired by
++[Mahjong International League duplicate rules](https://mahjong-mil.org/rules_dup/),
++not an implementation of its MCR scoring or IMP system.
++
++## Local build
++
++This checkout is based on upstream `v0.4.10`; its Python wheel identifies itself
++as `0.4.10+duplicate`. Build and install from the source checkout:
++
++```bash
++maturin build --release --interpreter /path/to/python
++/path/to/python -m pip install --no-deps --force-reinstall target/wheels/*.whl
++```
++
++All hand-solving and scoring code matches upstream; the local changes are
++limited to the duplicate draw queues, scheduled rounds and their metadata.
++
++The duplicate integration scenarios live in `tests/env/test_duplicate.py`.
++The ordinary test suite verifies that the default rules still behave as before.
+diff --git a/riichienv-core/src/observation/yaku.rs b/riichienv-core/src/observation/yaku.rs
+new file mode 100644
+index 0000000..99a8567
+--- /dev/null
++++ b/riichienv-core/src/observation/yaku.rs
+@@ -0,0 +1,124 @@
++use crate::yaku_checker;
++
++use super::Observation;
++
++impl Observation {
++    /// Public-information yaku flags, ordered as the Python encoder.
++    pub fn yaku_possibility(&self) -> [[[f32; 2]; 21]; 4] {
++        let mut arr = [[[1.0; 2]; 21]; 4];
++
++        // Combine all visible tiles for each player
++
++        // Encode for each player
++        for player_idx in 0..4 {
++            let melds = &self.melds[player_idx];
++            let discards = &self.discards[player_idx];
++
++            // Yaku 0: Tanyao
++            let tanyao = yaku_checker::check_tanyao(melds);
++            arr[player_idx][0][0] = tanyao.to_f32();
++            arr[player_idx][0][1] = tanyao.to_f32();
++
++            // Yaku 1-3: Yakuhai (dragons: White=31, Green=32, Red=33)
++            for (yaku_idx, &tile_type) in [31, 32, 33].iter().enumerate() {
++                let yakuhai =
++                    yaku_checker::check_yakuhai(tile_type, melds, discards, &self.dora_indicators);
++                arr[player_idx][1 + yaku_idx][0] = yakuhai.to_f32();
++                arr[player_idx][1 + yaku_idx][1] = yakuhai.to_f32();
++            }
++
++            // Yaku 4: Yakuhai (round wind)
++            let round_wind_type = 27 + self.round_wind as usize;
++            let yakuhai_round = yaku_checker::check_yakuhai(
++                round_wind_type,
++                melds,
++                discards,
++                &self.dora_indicators,
++            );
++            arr[player_idx][4][0] = yakuhai_round.to_f32();
++            arr[player_idx][4][1] = yakuhai_round.to_f32();
++
++            // Yaku 5: Yakuhai (seat wind)
++            let seat = (player_idx as u8 + 4 - self.oya) % 4;
++            let seat_wind_type = 27 + seat as usize;
++            let yakuhai_seat =
++                yaku_checker::check_yakuhai(seat_wind_type, melds, discards, &self.dora_indicators);
++            arr[player_idx][5][0] = yakuhai_seat.to_f32();
++            arr[player_idx][5][1] = yakuhai_seat.to_f32();
++
++            // Yaku 6-7: Honitsu, Chinitsu
++            let (honitsu, chinitsu) = yaku_checker::check_flush(melds);
++            arr[player_idx][6][0] = honitsu.to_f32();
++            arr[player_idx][6][1] = honitsu.to_f32();
++            arr[player_idx][7][0] = chinitsu.to_f32();
++            arr[player_idx][7][1] = chinitsu.to_f32();
++
++            // Yaku 8: Toitoi
++            let toitoi = yaku_checker::check_toitoi(melds);
++            arr[player_idx][8][0] = toitoi.to_f32();
++            arr[player_idx][8][1] = toitoi.to_f32();
++
++            // Yaku 9: Chiitoitsu
++            let chiitoitsu = yaku_checker::check_chiitoitsu(melds);
++            arr[player_idx][9][0] = chiitoitsu.to_f32();
++            arr[player_idx][9][1] = chiitoitsu.to_f32();
++
++            // Yaku 10: Shousangen
++            let shousangen = yaku_checker::check_shousangen(melds, discards, &self.dora_indicators);
++            arr[player_idx][10][0] = shousangen.to_f32();
++            arr[player_idx][10][1] = shousangen.to_f32();
++
++            // Yaku 11: Daisangen
++            let daisangen = yaku_checker::check_daisangen(melds, discards, &self.dora_indicators);
++            arr[player_idx][11][0] = daisangen.to_f32();
++            arr[player_idx][11][1] = daisangen.to_f32();
++
++            // Yaku 12: Tsuuiisou
++            let tsuuiisou = yaku_checker::check_tsuuiisou(melds);
++            arr[player_idx][12][0] = tsuuiisou.to_f32();
++            arr[player_idx][12][1] = tsuuiisou.to_f32();
++
++            // Yaku 13: Chinroutou
++            let chinroutou = yaku_checker::check_chinroutou(melds);
++            arr[player_idx][13][0] = chinroutou.to_f32();
++            arr[player_idx][13][1] = chinroutou.to_f32();
++
++            // Yaku 14: Honroutou
++            let honroutou = yaku_checker::check_honroutou(melds);
++            arr[player_idx][14][0] = honroutou.to_f32();
++            arr[player_idx][14][1] = honroutou.to_f32();
++
++            // Yaku 15: Kokushi (thirteen orphans)
++            let kokushi = yaku_checker::check_kokushi(melds, discards, &self.dora_indicators);
++            arr[player_idx][15][0] = kokushi.to_f32();
++            arr[player_idx][15][1] = kokushi.to_f32();
++
++            // Yaku 16: Chanta (outside hand)
++            let chanta = yaku_checker::check_chanta(melds);
++            arr[player_idx][16][0] = chanta.to_f32();
++            arr[player_idx][16][1] = chanta.to_f32();
++
++            // Yaku 17: Junchan (pure outside hand)
++            let junchan = yaku_checker::check_junchan(melds);
++            arr[player_idx][17][0] = junchan.to_f32();
++            arr[player_idx][17][1] = junchan.to_f32();
++
++            // Yaku 18: Sanshoku doujun (three colored straight)
++            let sanshoku = yaku_checker::check_sanshoku_doujun(melds);
++            arr[player_idx][18][0] = sanshoku.to_f32();
++            arr[player_idx][18][1] = sanshoku.to_f32();
++
++            // Yaku 19: Iipeikou (pure double sequence)
++            let iipeikou = yaku_checker::check_iipeikou(melds);
++            arr[player_idx][19][0] = iipeikou.to_f32();
++            arr[player_idx][19][1] = iipeikou.to_f32();
++
++            // Yaku 20: Ittsu (straight)
++            let ittsu = yaku_checker::check_ittsu(melds);
++            arr[player_idx][20][0] = ittsu.to_f32();
++            arr[player_idx][20][1] = ittsu.to_f32();
++        }
++
++        arr
++    }
++}
+diff --git a/riichienv-core/tests/native_collection.rs b/riichienv-core/tests/native_collection.rs
+new file mode 100644
+index 0000000..24b7cb5
+--- /dev/null
++++ b/riichienv-core/tests/native_collection.rs
+@@ -0,0 +1,83 @@
++use std::collections::HashMap;
++
++use riichienv_core::action::ActionType;
++use riichienv_core::rule::GameRule;
++use riichienv_core::state::GameState;
++use riichienv_core::state::legal_actions::GameStateLegalActions;
++use serde_json::Value;
++
++#[test]
++fn captured_events_match_logged_games_without_string_logging() {
++    for duplicate in [false, true] {
++        let mut rule = GameRule::default_tenhou();
++        rule.duplicate = duplicate;
++        let mut logged = GameState::new(2, false, Some(1944), 0, rule);
++        let mut captured = logged.clone();
++        captured.skip_mjai_logging = true;
++        captured.event_buffer = Some(Vec::new());
++        for state in [&mut logged, &mut captured] {
++            state.reset();
++            state._initialize_round(0, 0, 0, 0, None, None);
++        }
++        let mut cursor = 0;
++        let mut steps = 0;
++        loop {
++            let expected: Vec<Value> = logged.mjai_log[cursor..]
++                .iter()
++                .map(|event| serde_json::from_str(event).unwrap())
++                .collect();
++            assert_eq!(captured.drain_events(), expected);
++            assert!(captured.drain_events().is_empty());
++            assert!(captured.mjai_log.is_empty());
++            assert!(captured.mjai_log_per_player.iter().all(Vec::is_empty));
++            cursor = logged.mjai_log.len();
++            assert_eq!(captured.is_done, logged.is_done);
++            assert_eq!(
++                captured.players.each_ref().map(|player| player.score),
++                logged.players.each_ref().map(|player| player.score)
++            );
++            if logged.is_done {
++                break;
++            }
++            let mut actions = HashMap::new();
++            for player in logged.active_players.clone() {
++                let legal = logged._get_legal_actions_internal(player);
++                assert_eq!(legal, captured._get_legal_actions_internal(player));
++                let action = legal
++                    .iter()
++                    .min_by_key(|action| match action.action_type {
++                        ActionType::Ron | ActionType::Tsumo => 0,
++                        ActionType::Discard => 1,
++                        ActionType::Pass => 2,
++                        _ => 3,
++                    })
++                    .unwrap()
++                    .clone();
++                actions.insert(player, action);
++            }
++            logged.step(&actions);
++            captured.step(&actions);
++            assert!(logged.last_error.is_none());
++            assert!(captured.last_error.is_none());
++            steps += 1;
++            assert!(steps < 10000);
++        }
++        assert!(steps > 100);
++    }
++}
++
++#[test]
++fn native_yaku_flags_use_visible_tiles_and_replace_legal_actions() {
++    let mut state = GameState::new(2, false, Some(1944), 0, GameRule::default_tenhou());
++    let mut observation = state.get_observation(0);
++    observation.melds.iter_mut().for_each(Vec::clear);
++    observation.discards.iter_mut().for_each(Vec::clear);
++    observation.dora_indicators.clear();
++    assert_eq!(observation.yaku_possibility(), [[[1.0; 2]; 21]; 4]);
++    observation.discards[0] = vec![124, 125, 126, 127];
++    let flags = observation.yaku_possibility();
++    assert_eq!(flags[0][1], [0.0; 2]);
++    assert_eq!(flags[1][1], [1.0; 2]);
++    observation.replace_legal_actions(Vec::new());
++    assert!(observation.legal_actions_method().is_empty());
++}
+diff --git a/tests/env/test_duplicate.py b/tests/env/test_duplicate.py
+new file mode 100644
+index 0000000..1dea2e5
+--- /dev/null
++++ b/tests/env/test_duplicate.py
+@@ -0,0 +1,434 @@
++"""Duplicate boards preserve each seat's tiles across different calls."""
++
++import random
++
++import pytest
++
++import riichienv
++import riichienv.convert
++
++
++def make_wall(hands, first_draw=None, last_draw=None):
++    """Complete a physical wall around specified initial hand prefixes."""
++    deal_order = [seat for _ in range(3) for seat in range(4) for _ in range(4)]
++    deal_order += list(range(4))
++    wall = [None] * 136
++    for seat, hand in enumerate(hands):
++        positions = [i for i, player in enumerate(deal_order) if player == seat]
++        for position, tile in zip(positions, hand):
++            wall[position] = tile
++    if first_draw is not None:
++        wall[52] = first_draw
++    if last_draw is not None:
++        wall[118] = last_draw
++    remaining = [tile for tile in range(136) if tile not in wall]
++    random.Random(41).shuffle(remaining)
++    for position, tile in enumerate(wall):
++        if tile is None:
++            wall[position] = remaining.pop()
++    assert sorted(wall) == list(range(136))
++    return wall
++
++
++def discard_or_pass(env):
++    """Take one passive decision through the normal action interface."""
++    actions = {}
++    for seat, obs in env.get_observations(env.active_players).items():
++        legal = obs.legal_actions()
++        if env.phase == riichienv.Phase.WaitResponse:
++            actions[seat] = next(
++                action
++                for action in legal
++                if action.action_type == riichienv.ActionType.PASS
++            )
++        else:
++            discards = [
++                action
++                for action in legal
++                if action.action_type == riichienv.ActionType.DISCARD
++            ]
++            actions[seat] = next(
++                (
++                    action
++                    for action in discards
++                    if action.tile == env.drawn_tile
++                ),
++                discards[0],
++            )
++    env.step(actions)
++
++
++def finish_hand(env):
++    """Decline calls and wins, discarding drawn tiles whenever possible."""
++    draws = [[] for _ in range(4)]
++    for _ in range(400):
++        if env.done():
++            return draws
++        event_count = len(env.mjai_log)
++        discard_or_pass(env)
++        for event in env.mjai_log[event_count:]:
++            if event["type"] in ("ryukyoku", "end_kyoku"):
++                return draws
++            if event["type"] == "tsumo":
++                draws[event["actor"]].append(env.drawn_tile)
++    pytest.fail("One hand did not finish within 400 decisions")
++
++
++@pytest.mark.parametrize(
++    "call_type,caller,hands",
++    [
++        (riichienv.ActionType.CHI, 1, [[0], [4, 8], [], []]),
++        (riichienv.ActionType.PON, 2, [[0], [], [1, 2], []]),
++        (riichienv.ActionType.DAIMINKAN, 2, [[0], [], [1, 2, 3], []]),
++        (riichienv.ActionType.ANKAN, 0, [[0, 1, 2, 3], [], [], []]),
++    ],
++)
++def test_calls_preserve_physical_draw_queues(call_type, caller, hands):
++    rule = riichienv.GameRule.default_tenhou()
++    assert not rule.duplicate
++    rule.duplicate = True
++    wall = make_wall(hands)
++    env = riichienv.RiichiEnv(seed=7, game_mode=0, rule=rule)
++    env.reset(wall=wall)
++    initial_tiles = [tile for hand in env.hands for tile in hand]
++    baseline = env.clone()
++    baseline_draws = finish_hand(baseline)
++    baseline_draws[0].insert(0, wall[52])
++
++    if call_type != riichienv.ActionType.ANKAN:
++        env.step({0: riichienv.Action(riichienv.ActionType.DISCARD, tile=0)})
++    actions = {
++        seat: next(
++            action
++            for action in obs.legal_actions()
++            if action.action_type
++            == (call_type if seat == caller else riichienv.ActionType.PASS)
++        )
++        for seat, obs in env.get_observations(env.active_players).items()
++    }
++    env.step(actions)
++    is_kan = call_type in (
++        riichienv.ActionType.ANKAN,
++        riichienv.ActionType.DAIMINKAN,
++    )
++    if is_kan:
++        assert env.is_rinshan_flag
++        replacement = env.drawn_tile
++        assert replacement == wall[56 if caller == 0 else 52 + caller]
++    cloned = env.clone()
++    draws = finish_hand(env)
++    assert finish_hand(cloned) == draws
++    assert cloned.mjai_log == env.mjai_log
++    draws[0].insert(0, wall[52])
++    if is_kan:
++        draws[caller].insert(1 if caller == 0 else 0, replacement)
++        assert env.dora_indicators == [wall[131], wall[129]]
++        assert env._get_ura_markers() == [
++            riichienv.convert.tid_to_mjai(wall[130]),
++            riichienv.convert.tid_to_mjai(wall[128]),
++        ]
++        event_types = [event["type"] for event in env.mjai_log]
++        kan = event_types.index("ankan" if caller == 0 else "daiminkan")
++        draw = event_types.index("tsumo", kan)
++        dora = event_types.index("dora", kan)
++        discard = event_types.index("dahai", draw)
++        assert (dora < draw) if caller == 0 else (draw < dora < discard)
++
++    for seat in range(4):
++        expected = wall[52 + seat : 122 : 4]
++        assert draws[seat] == expected[: len(draws[seat])]
++        assert baseline_draws[seat] == expected[: len(baseline_draws[seat])]
++    physical_tiles = initial_tiles + [
++        tile
++        for seat, tiles in enumerate(draws)
++        for tile in tiles[(1 if seat == 0 else 0) :]
++    ]
++    assert len(set(physical_tiles)) == len(physical_tiles)
++    assert env.done()
++    assert any(event["type"] == "ryukyoku" for event in env.mjai_log)
++    assert any(
++        len(draws[seat]) == len(wall[52 + seat : 122 : 4]) for seat in range(4)
++    )
++
++    env.reset(wall=wall, seed=7)
++    assert [tile for hand in env.hands for tile in hand] == initial_tiles
++    reset_draws = finish_hand(env)
++    reset_draws[0].insert(0, wall[52])
++    assert reset_draws == baseline_draws
++
++
++def test_duplicate_rounds_advance_after_dealer_win_and_exhaustion():
++    rule = riichienv.GameRule.default_tenhou()
++    rule.duplicate = True
++    # The dealer wins immediately with seven pairs; the other table declines.
++    wall = make_wall(
++        [[0, 1, 8, 9, 16, 17, 36, 37, 44, 45, 72, 73, 108], [], [], []],
++        first_draw=109,
++    )
++    winning = riichienv.RiichiEnv(
++        seed=73, game_mode=riichienv.GameType.YON_TONPUSEN, rule=rule
++    )
++    winning.reset(wall=wall, scores=[1000, 33000, 33000, 33000])
++    drawing = winning.clone()
++    before = winning.scores()
++    winning.step(
++        {
++            0: next(
++                action
++                for action in winning.get_observations()[0].legal_actions()
++                if action.action_type == riichienv.ActionType.TSUMO
++            )
++        }
++    )
++    hora = next(event for event in winning.mjai_log if event["type"] == "hora")
++    assert winning.scores() == [
++        score + delta + (1200 if seat == 0 else -400)
++        for seat, (score, delta) in enumerate(zip(before, hora["deltas"]))
++    ]
++    assert winning.honba == 1
++    finish_hand(drawing)
++    assert winning.oya == drawing.oya == 1
++    assert winning.hands == drawing.hands
++    assert winning.wall == drawing.wall
++    assert winning.dora_indicators == drawing.dora_indicators
++    assert winning.scores() != drawing.scores()
++
++    # Even bankruptcy cannot truncate the remaining scheduled boards.
++    winning.set_scores([-1000, 33000, 33000, 35000])
++    for expected_dealer in (1, 2, 3):
++        assert winning.oya == expected_dealer
++        finish_hand(winning)
++    assert winning.done()
++    starts = [
++        event for event in winning.mjai_log if event["type"] == "start_kyoku"
++    ]
++    assert [event["oya"] for event in starts] == [0, 1, 2, 3]
++    assert all(event["bakaze"] == "E" for event in starts)
++
++
++def test_duplicate_rejects_three_player_games():
++    rule = riichienv.GameRule.default_tenhou()
++    rule.duplicate = True
++    with pytest.raises(ValueError, match="[Dd]uplicate|four|4.player"):
++        riichienv.RiichiEnv(game_mode=riichienv.GameType.SAN_IKKYOKU, rule=rule)
++
++
++def test_added_kan_uses_the_next_personal_draw_after_a_real_pon():
++    rule = riichienv.GameRule.default_tenhou()
++    rule.duplicate = True
++    wall = make_wall([[0], [], [1, 2, 3], []])
++    env = riichienv.RiichiEnv(seed=7, game_mode=0, rule=rule)
++    env.reset(wall=wall)
++    env.step({0: riichienv.Action(riichienv.ActionType.DISCARD, tile=0)})
++    env.step(
++        {
++            seat: next(
++                action
++                for action in obs.legal_actions()
++                if action.action_type
++                == (
++                    riichienv.ActionType.PON
++                    if seat == 2
++                    else riichienv.ActionType.PASS
++                )
++            )
++            for seat, obs in env.get_observations(env.active_players).items()
++        }
++    )
++    discard_or_pass(env)
++    for _ in range(20):
++        if env.current_player == 2 and env.phase == riichienv.Phase.WaitAct:
++            break
++        discard_or_pass(env)
++    assert env.current_player == 2
++    assert env.drawn_tile == wall[54]
++    env.step(
++        {
++            2: next(
++                action
++                for action in env.get_observations([2])[2].legal_actions()
++                if action.action_type == riichienv.ActionType.KAKAN
++            )
++        }
++    )
++    assert env.is_rinshan_flag
++    assert env.drawn_tile == wall[58]
++    finish_hand(env)
++    for seat in range(4):
++        draws = [
++            event["pai"]
++            for event in env.mjai_log
++            if event["type"] == "tsumo" and event["actor"] == seat
++        ]
++        assert (
++            draws
++            == [
++                riichienv.convert.tid_to_mjai(tile)
++                for tile in wall[52 + seat : 122 : 4]
++            ][: len(draws)]
++        )
++    assert env.dora_indicators == [wall[131], wall[129]]
++    events = [event["type"] for event in env.mjai_log]
++    kan = events.index("kakan")
++    draw = events.index("tsumo", kan)
++    assert draw < events.index("dora", kan) < events.index("dahai", draw)
++
++
++@pytest.mark.parametrize(
++    "win_type,winner",
++    [(riichienv.ActionType.TSUMO, 2), (riichienv.ActionType.RON, 3)],
++)
++def test_last_personal_draw_allows_scored_wins_but_no_calls(win_type, winner):
++    rule = riichienv.GameRule.default_tenhou()
++    rule.duplicate = True
++    # Seat 0 could pon the final East in a non-exhausted wall. Keeping
++    # these copies concealed also avoids an earlier East causing furiten.
++    hands = [[110, 111], [], [], []]
++    hands[winner] = [0, 1, 8, 9, 16, 17, 36, 37, 44, 45, 72, 73, 108]
++    wall = make_wall(hands, last_draw=109)
++    env = riichienv.RiichiEnv(seed=7, game_mode=0, rule=rule)
++    env.reset(wall=wall)
++    for _ in range(300):
++        if env.drawn_tile == 109:
++            break
++        discard_or_pass(env)
++    assert env.current_player == 2
++    assert env.drawn_tile == 109
++    assert not env.done()
++    obs = env.get_observations([2])[2]
++    assert obs.tiles_left == 0
++    assert env.mjai_log[-1]["type"] == "tsumo"
++    assert env.mjai_log[-1]["tiles_left"] == 0
++    restored = riichienv.Observation.deserialize_from_base64(
++        obs.serialize_to_base64()
++    )
++    assert restored.tiles_left == 0
++    for observation in (obs, restored):
++        assert all(
++            value == 0
++            for value in memoryview(observation.encode()).cast("f")[
++                30 * 34 : 31 * 34
++            ]
++        )
++        assert all(
++            value == 0
++            for value in memoryview(observation.encode_extended()).cast("f")[
++                30 * 34 : 31 * 34
++            ]
++        )
++        assert memoryview(observation.encode_seq_sparse()).cast("H")[4] == 13
++    forbidden = {
++        riichienv.ActionType.CHI,
++        riichienv.ActionType.PON,
++        riichienv.ActionType.ANKAN,
++        riichienv.ActionType.KAKAN,
++        riichienv.ActionType.DAIMINKAN,
++        riichienv.ActionType.RIICHI,
++    }
++    assert all(
++        action.action_type not in forbidden
++        for action in env.get_observations([2])[2].legal_actions()
++    )
++    if win_type == riichienv.ActionType.RON:
++        env.step({2: riichienv.Action(riichienv.ActionType.DISCARD, tile=109)})
++        assert all(
++            action.action_type not in forbidden
++            for obs in env.get_observations().values()
++            for action in obs.legal_actions()
++        )
++    env.step(
++        {
++            seat: next(
++                action
++                for action in obs.legal_actions()
++                if action.action_type
++                == (win_type if seat == winner else riichienv.ActionType.PASS)
++            )
++            for seat, obs in env.get_observations(env.active_players).items()
++        }
++    )
++    assert env.done()
++    assert env.scores()[winner] > 25000
++    assert sum(env.scores()) == 100000
++    # Standard yaku IDs 5/6 are haitei/houtei, respectively.
++    assert (5 if win_type == riichienv.ActionType.TSUMO else 6) in (
++        env.win_results[winner].yaku
++    )
++
++
++def test_four_closed_kans_keep_dora_and_rinshan_scoring():
++    rule = riichienv.GameRule.default_tenhou()
++    rule.duplicate = True
++    wall = make_wall(
++        [[0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16], [], [], []],
++        first_draw=3,
++    )
++    for position, tile in zip((56, 60, 64, 68), (7, 11, 15, 17)):
++        source = wall.index(tile)
++        wall[position], wall[source] = wall[source], wall[position]
++    env = riichienv.RiichiEnv(seed=7, game_mode=0, rule=rule)
++    env.reset(wall=wall)
++    for replacement in (7, 11, 15, 17):
++        env.step(
++            {
++                0: next(
++                    action
++                    for action in env.get_observations([0])[0].legal_actions()
++                    if action.action_type == riichienv.ActionType.ANKAN
++                )
++            }
++        )
++        assert env.drawn_tile == replacement
++        assert env.is_rinshan_flag
++    assert env.rinshan_draw_count == 4
++    assert len(env.melds[0]) == 4
++    assert env.dora_indicators == [
++        wall[position] for position in (131, 129, 127, 125, 123)
++    ]
++    assert env._get_ura_markers() == [
++        riichienv.convert.tid_to_mjai(wall[position])
++        for position in (130, 128, 126, 124, 122)
++    ]
++    assert not any(
++        action.action_type == riichienv.ActionType.ANKAN
++        for action in env.get_observations([0])[0].legal_actions()
++    )
++    env.step(
++        {
++            0: next(
++                action
++                for action in env.get_observations([0])[0].legal_actions()
++                if action.action_type == riichienv.ActionType.TSUMO
++            )
++        }
++    )
++    assert env.done()
++    assert env.win_results[0].yakuman
++    assert env.scores()[0] > 25000
++
++
++def test_seed_groups_are_disjoint_and_each_scheduled_board_is_reproducible():
++    rule = riichienv.GameRule.default_tenhou()
++    ordinary = riichienv.RiichiEnv(seed=73, rule=rule)
++    assert ordinary.get_observations([0])[0].tiles_left is None
++    rule.duplicate = True
++    board_groups = []
++    for seed in (73, 74):
++        env = riichienv.RiichiEnv(
++            seed=seed, game_mode=riichienv.GameType.YON_HANCHAN, rule=rule
++        )
++        boards = set()
++        for hand in range(8):
++            env.reset(oya=hand % 4, round_wind=hand // 4)
++            boards.add(tuple(env.wall))
++            snapshot = (env.hands, env.wall, env.dora_indicators)
++            obs = env.get_observations([env.oya])[env.oya]
++            assert obs.tiles_left == 69
++            assert env.mjai_log[-1]["tiles_left"] == 69
++            discard_or_pass(env)
++            env.reset(oya=hand % 4, round_wind=hand // 4)
++            assert (env.hands, env.wall, env.dora_indicators) == snapshot
++            assert tuple(env.wall) in boards
++        assert len(boards) == 8
++        board_groups.append(boards)
++    assert board_groups[0].isdisjoint(board_groups[1])
+diff --git a/tests/env/test_mjai_log_since.py b/tests/env/test_mjai_log_since.py
+new file mode 100644
+index 0000000..aa8a85f
+--- /dev/null
++++ b/tests/env/test_mjai_log_since.py
+@@ -0,0 +1,43 @@
++"""Incremental replay retains the complete match's full-information events."""
++
++import pytest
++
++import riichienv
++
++
++@pytest.mark.parametrize("duplicate", [False, True])
++def test_incremental_log_matches_full_log_across_hands(duplicate):
++    rule = riichienv.GameRule.default_tenhou()
++    rule.duplicate = duplicate
++    env = riichienv.RiichiEnv(
++        seed=41, game_mode=riichienv.GameType.YON_TONPUSEN, rule=rule
++    )
++    events = env.mjai_log_since(0)
++    assert events == env.mjai_log
++    while not env.done():
++        actions = {}
++        for seat, obs in env.get_observations(env.active_players).items():
++            actions[seat] = next(
++                action
++                for action in obs.legal_actions()
++                if action.action_type
++                == (
++                    riichienv.ActionType.PASS
++                    if env.phase == riichienv.Phase.WaitResponse
++                    else riichienv.ActionType.DISCARD
++                )
++            )
++        env.step(actions)
++        events.extend(env.mjai_log_since(len(events)))
++        assert events == env.mjai_log
++        assert env.mjai_log_since(len(events)) == []
++    starts = [event for event in events if event["type"] == "start_kyoku"]
++    assert len(starts) >= 4
++    assert all("?" not in hand for event in starts for hand in event["tehais"])
++    assert all(
++        event["pai"] != "?" for event in events if event["type"] == "tsumo"
++    )
++    with pytest.raises(IndexError, match="offset exceeds"):
++        env.mjai_log_since(len(events) + 1)
++    with pytest.raises(OverflowError):
++        env.mjai_log_since(-1)

@@ -1,0 +1,14 @@
+{
+  "name": "nejimakidori-controller",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "control": "node --env-file-if-exists=.env.local live_client.mjs",
+    "test:controller": "node --test *.test.mjs",
+    "start": "node --env-file-if-exists=.env.local mahjongsoul_live.mjs"
+  },
+  "dependencies": {
+    "protobufjs": "8.8.0"
+  }
+}

@@ -1,0 +1,1166 @@
+{
+  "image": "static/test_template.jpg",
+  "shapeType": "quad",
+  "shapes": [
+    {
+      "id": "river_bottom_top_1",
+      "label": "river_bottom_a1_green",
+      "points": [
+        {
+          "x": 387,
+          "y": 271
+        },
+        {
+          "x": 415,
+          "y": 271
+        },
+        {
+          "x": 415,
+          "y": 301
+        },
+        {
+          "x": 385,
+          "y": 301
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_top_2",
+      "label": "river_bottom_a2_1p",
+      "points": [
+        {
+          "x": 416,
+          "y": 271
+        },
+        {
+          "x": 446,
+          "y": 271
+        },
+        {
+          "x": 446,
+          "y": 300
+        },
+        {
+          "x": 414,
+          "y": 300
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_top_3",
+      "label": "river_bottom_a3_north",
+      "points": [
+        {
+          "x": 449,
+          "y": 272
+        },
+        {
+          "x": 476,
+          "y": 273
+        },
+        {
+          "x": 477,
+          "y": 300
+        },
+        {
+          "x": 447,
+          "y": 300
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_top_4",
+      "label": "river_bottom_a4_north",
+      "points": [
+        {
+          "x": 479,
+          "y": 272
+        },
+        {
+          "x": 508,
+          "y": 272
+        },
+        {
+          "x": 509,
+          "y": 301
+        },
+        {
+          "x": 478,
+          "y": 301
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_top_5",
+      "label": "river_bottom_a5_east",
+      "points": [
+        {
+          "x": 510,
+          "y": 273
+        },
+        {
+          "x": 539,
+          "y": 273
+        },
+        {
+          "x": 540,
+          "y": 301
+        },
+        {
+          "x": 511,
+          "y": 298
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_top_6",
+      "label": "river_bottom_a6_9p",
+      "points": [
+        {
+          "x": 541,
+          "y": 272
+        },
+        {
+          "x": 569,
+          "y": 272
+        },
+        {
+          "x": 570,
+          "y": 301
+        },
+        {
+          "x": 541,
+          "y": 301
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_mid_1",
+      "label": "river_bottom_b1_south",
+      "points": [
+        {
+          "x": 384,
+          "y": 303
+        },
+        {
+          "x": 412,
+          "y": 303
+        },
+        {
+          "x": 411,
+          "y": 333
+        },
+        {
+          "x": 381,
+          "y": 333
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_mid_2",
+      "label": "river_bottom_b2_8m",
+      "points": [
+        {
+          "x": 415,
+          "y": 303
+        },
+        {
+          "x": 443,
+          "y": 303
+        },
+        {
+          "x": 443,
+          "y": 334
+        },
+        {
+          "x": 412,
+          "y": 335
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_mid_3",
+      "label": "river_bottom_b3_1m",
+      "points": [
+        {
+          "x": 446,
+          "y": 303
+        },
+        {
+          "x": 475,
+          "y": 303
+        },
+        {
+          "x": 474,
+          "y": 334
+        },
+        {
+          "x": 444,
+          "y": 334
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_mid_4",
+      "label": "river_bottom_b4_2m",
+      "points": [
+        {
+          "x": 478,
+          "y": 303
+        },
+        {
+          "x": 507,
+          "y": 303
+        },
+        {
+          "x": 507,
+          "y": 334
+        },
+        {
+          "x": 477,
+          "y": 334
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_mid_5",
+      "label": "river_bottom_b5_green",
+      "points": [
+        {
+          "x": 509,
+          "y": 302
+        },
+        {
+          "x": 537,
+          "y": 301
+        },
+        {
+          "x": 538,
+          "y": 333
+        },
+        {
+          "x": 508,
+          "y": 334
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_mid_6",
+      "label": "river_bottom_b6_1s",
+      "points": [
+        {
+          "x": 540,
+          "y": 303
+        },
+        {
+          "x": 568,
+          "y": 303
+        },
+        {
+          "x": 571,
+          "y": 333
+        },
+        {
+          "x": 540,
+          "y": 333
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_bottom_riichi",
+      "label": "river_bottom_c1_8s",
+      "points": [
+        {
+          "x": 380,
+          "y": 335
+        },
+        {
+          "x": 411,
+          "y": 335
+        },
+        {
+          "x": 411,
+          "y": 369
+        },
+        {
+          "x": 379,
+          "y": 370
+        }
+      ],
+      "zone": "river_bottom"
+    },
+    {
+      "id": "river_top_1",
+      "label": "river_top_a6_8s",
+      "points": [
+        {
+          "x": 401,
+          "y": 121
+        },
+        {
+          "x": 425,
+          "y": 121
+        },
+        {
+          "x": 423,
+          "y": 144
+        },
+        {
+          "x": 398,
+          "y": 144
+        }
+      ],
+      "zone": "river_top"
+    },
+    {
+      "id": "river_top_2",
+      "label": "river_top_a5_7p",
+      "points": [
+        {
+          "x": 428,
+          "y": 121
+        },
+        {
+          "x": 452,
+          "y": 121
+        },
+        {
+          "x": 451,
+          "y": 143
+        },
+        {
+          "x": 426,
+          "y": 143
+        }
+      ],
+      "zone": "river_top"
+    },
+    {
+      "id": "river_top_3",
+      "label": "river_top_a3_3s",
+      "points": [
+        {
+          "x": 481,
+          "y": 121
+        },
+        {
+          "x": 505,
+          "y": 121
+        },
+        {
+          "x": 505,
+          "y": 144
+        },
+        {
+          "x": 481,
+          "y": 144
+        }
+      ],
+      "zone": "river_top"
+    },
+    {
+      "id": "river_top_4",
+      "label": "river_top_a4_green",
+      "points": [
+        {
+          "x": 454,
+          "y": 121
+        },
+        {
+          "x": 479,
+          "y": 121
+        },
+        {
+          "x": 479,
+          "y": 144
+        },
+        {
+          "x": 454,
+          "y": 144
+        }
+      ],
+      "zone": "river_top"
+    },
+    {
+      "id": "river_top_5",
+      "label": "river_top_a2_green",
+      "points": [
+        {
+          "x": 508,
+          "y": 122
+        },
+        {
+          "x": 532,
+          "y": 122
+        },
+        {
+          "x": 533,
+          "y": 144
+        },
+        {
+          "x": 508,
+          "y": 144
+        }
+      ],
+      "zone": "river_top"
+    },
+    {
+      "id": "river_top_riichi",
+      "label": "river_top_a1_south",
+      "points": [
+        {
+          "x": 534,
+          "y": 122
+        },
+        {
+          "x": 559,
+          "y": 121
+        },
+        {
+          "x": 561,
+          "y": 144
+        },
+        {
+          "x": 535,
+          "y": 144
+        }
+      ],
+      "zone": "river_top"
+    },
+    {
+      "id": "river_left_a1",
+      "label": "river_left_b1_2p",
+      "points": [
+        {
+          "x": 318,
+          "y": 145
+        },
+        {
+          "x": 351,
+          "y": 145
+        },
+        {
+          "x": 350,
+          "y": 163
+        },
+        {
+          "x": 315,
+          "y": 163
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_a2",
+      "label": "river_left_b2_8p",
+      "points": [
+        {
+          "x": 314,
+          "y": 164
+        },
+        {
+          "x": 347,
+          "y": 164
+        },
+        {
+          "x": 345,
+          "y": 181
+        },
+        {
+          "x": 312,
+          "y": 182
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_a3",
+      "label": "river_left_b3_red_riichi",
+      "points": [
+        {
+          "x": 317,
+          "y": 183
+        },
+        {
+          "x": 342,
+          "y": 183
+        },
+        {
+          "x": 340,
+          "y": 207
+        },
+        {
+          "x": 313,
+          "y": 207
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_a4",
+      "label": "river_left_b4_9m",
+      "points": [
+        {
+          "x": 310,
+          "y": 208
+        },
+        {
+          "x": 344,
+          "y": 209
+        },
+        {
+          "x": 342,
+          "y": 228
+        },
+        {
+          "x": 306,
+          "y": 228
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_a5",
+      "label": "river_left_a6_8p",
+      "points": [
+        {
+          "x": 343,
+          "y": 243
+        },
+        {
+          "x": 378,
+          "y": 244
+        },
+        {
+          "x": 376,
+          "y": 263
+        },
+        {
+          "x": 340,
+          "y": 262
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_b1",
+      "label": "river_left_a1_9s",
+      "points": [
+        {
+          "x": 354,
+          "y": 146
+        },
+        {
+          "x": 387,
+          "y": 146
+        },
+        {
+          "x": 387,
+          "y": 163
+        },
+        {
+          "x": 353,
+          "y": 162
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_b2",
+      "label": "river_left_a2_east",
+      "points": [
+        {
+          "x": 352,
+          "y": 164
+        },
+        {
+          "x": 386,
+          "y": 164
+        },
+        {
+          "x": 385,
+          "y": 181
+        },
+        {
+          "x": 351,
+          "y": 181
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_b3",
+      "label": "river_left_a3_1m",
+      "points": [
+        {
+          "x": 350,
+          "y": 183
+        },
+        {
+          "x": 384,
+          "y": 183
+        },
+        {
+          "x": 383,
+          "y": 201
+        },
+        {
+          "x": 348,
+          "y": 201
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_b4",
+      "label": "river_left_a4_6p",
+      "points": [
+        {
+          "x": 347,
+          "y": 202
+        },
+        {
+          "x": 383,
+          "y": 202
+        },
+        {
+          "x": 382,
+          "y": 221
+        },
+        {
+          "x": 345,
+          "y": 221
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_left_riichi",
+      "label": "river_left_a5_north",
+      "points": [
+        {
+          "x": 346,
+          "y": 222
+        },
+        {
+          "x": 381,
+          "y": 223
+        },
+        {
+          "x": 380,
+          "y": 242
+        },
+        {
+          "x": 343,
+          "y": 242
+        }
+      ],
+      "zone": "river_left"
+    },
+    {
+      "id": "river_right_a1",
+      "label": "river_right_a4_red",
+      "points": [
+        {
+          "x": 573,
+          "y": 184
+        },
+        {
+          "x": 607,
+          "y": 184
+        },
+        {
+          "x": 608,
+          "y": 200
+        },
+        {
+          "x": 573,
+          "y": 201
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_a2",
+      "label": "river_right_a3_east",
+      "points": [
+        {
+          "x": 573,
+          "y": 203
+        },
+        {
+          "x": 609,
+          "y": 202
+        },
+        {
+          "x": 612,
+          "y": 221
+        },
+        {
+          "x": 574,
+          "y": 219
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_a3",
+      "label": "river_right_a2_6s",
+      "points": [
+        {
+          "x": 576,
+          "y": 222
+        },
+        {
+          "x": 613,
+          "y": 223
+        },
+        {
+          "x": 615,
+          "y": 243
+        },
+        {
+          "x": 577,
+          "y": 243
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_a4",
+      "label": "river_right_a1_9s",
+      "points": [
+        {
+          "x": 578,
+          "y": 244
+        },
+        {
+          "x": 615,
+          "y": 244
+        },
+        {
+          "x": 616,
+          "y": 264
+        },
+        {
+          "x": 578,
+          "y": 264
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_b1",
+      "label": "river_right_b4_1p",
+      "points": [
+        {
+          "x": 610,
+          "y": 180
+        },
+        {
+          "x": 645,
+          "y": 180
+        },
+        {
+          "x": 647,
+          "y": 196
+        },
+        {
+          "x": 611,
+          "y": 196
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_b2",
+      "label": "river_right_b3_3m",
+      "points": [
+        {
+          "x": 613,
+          "y": 197
+        },
+        {
+          "x": 647,
+          "y": 197
+        },
+        {
+          "x": 650,
+          "y": 215
+        },
+        {
+          "x": 614,
+          "y": 216
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_b3",
+      "label": "river_right_b2_7s_riichi",
+      "points": [
+        {
+          "x": 618,
+          "y": 217
+        },
+        {
+          "x": 645,
+          "y": 217
+        },
+        {
+          "x": 648,
+          "y": 242
+        },
+        {
+          "x": 619,
+          "y": 240
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_b4",
+      "label": "river_right_b1_3m",
+      "points": [
+        {
+          "x": 618,
+          "y": 245
+        },
+        {
+          "x": 654,
+          "y": 244
+        },
+        {
+          "x": 657,
+          "y": 265
+        },
+        {
+          "x": 619,
+          "y": 265
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_right_riichi",
+      "label": "river_right_c1_4p",
+      "points": [
+        {
+          "x": 658,
+          "y": 244
+        },
+        {
+          "x": 694,
+          "y": 244
+        },
+        {
+          "x": 696,
+          "y": 264
+        },
+        {
+          "x": 659,
+          "y": 264
+        }
+      ],
+      "zone": "river_right"
+    },
+    {
+      "id": "river_tile_39",
+      "label": "river_tile_a5_7p",
+      "points": [
+        {
+          "x": 572,
+          "y": 165
+        },
+        {
+          "x": 605,
+          "y": 165
+        },
+        {
+          "x": 607,
+          "y": 181
+        },
+        {
+          "x": 573,
+          "y": 180
+        }
+      ]
+    },
+    {
+      "id": "river_tile_40",
+      "label": "river_tile_a6_west",
+      "points": [
+        {
+          "x": 569,
+          "y": 147
+        },
+        {
+          "x": 602,
+          "y": 147
+        },
+        {
+          "x": 604,
+          "y": 164
+        },
+        {
+          "x": 570,
+          "y": 164
+        }
+      ]
+    },
+    {
+      "id": "river_tile_41",
+      "label": "river_tile_b5_8p",
+      "points": [
+        {
+          "x": 608,
+          "y": 161
+        },
+        {
+          "x": 642,
+          "y": 161
+        },
+        {
+          "x": 644,
+          "y": 178
+        },
+        {
+          "x": 609,
+          "y": 178
+        }
+      ]
+    },
+    {
+      "id": "river_tile_42",
+      "label": "river_tile_b6_2s",
+      "points": [
+        {
+          "x": 606,
+          "y": 142
+        },
+        {
+          "x": 638,
+          "y": 142
+        },
+        {
+          "x": 640,
+          "y": 158
+        },
+        {
+          "x": 607,
+          "y": 158
+        }
+      ]
+    },
+    {
+      "id": "river_tile_43",
+      "label": "river_tile_b1_1m",
+      "points": [
+        {
+          "x": 533,
+          "y": 98
+        },
+        {
+          "x": 557,
+          "y": 98
+        },
+        {
+          "x": 559,
+          "y": 120
+        },
+        {
+          "x": 534,
+          "y": 120
+        }
+      ]
+    },
+    {
+      "id": "river_tile_44",
+      "label": "river_tile_b2_9p",
+      "points": [
+        {
+          "x": 508,
+          "y": 99
+        },
+        {
+          "x": 531,
+          "y": 99
+        },
+        {
+          "x": 531,
+          "y": 121
+        },
+        {
+          "x": 508,
+          "y": 121
+        }
+      ]
+    },
+    {
+      "id": "river_tile_45",
+      "label": "river_tile_b3_6s",
+      "points": [
+        {
+          "x": 481,
+          "y": 98
+        },
+        {
+          "x": 505,
+          "y": 98
+        },
+        {
+          "x": 505,
+          "y": 120
+        },
+        {
+          "x": 481,
+          "y": 120
+        }
+      ]
+    },
+    {
+      "id": "river_tile_46",
+      "label": "river_tile_b4_3p",
+      "points": [
+        {
+          "x": 456,
+          "y": 99
+        },
+        {
+          "x": 479,
+          "y": 99
+        },
+        {
+          "x": 479,
+          "y": 120
+        },
+        {
+          "x": 455,
+          "y": 120
+        }
+      ]
+    },
+    {
+      "id": "river_tile_47",
+      "label": "river_tile_b5_red",
+      "points": [
+        {
+          "x": 429,
+          "y": 99
+        },
+        {
+          "x": 453,
+          "y": 99
+        },
+        {
+          "x": 453,
+          "y": 120
+        },
+        {
+          "x": 428,
+          "y": 120
+        }
+      ]
+    },
+    {
+      "id": "river_tile_48",
+      "label": "river_tile_b6_1s",
+      "points": [
+        {
+          "x": 403,
+          "y": 98
+        },
+        {
+          "x": 427,
+          "y": 98
+        },
+        {
+          "x": 427,
+          "y": 120
+        },
+        {
+          "x": 401,
+          "y": 120
+        }
+      ]
+    },
+    {
+      "id": "river_tile_49",
+      "label": "river_tile_c1_south",
+      "points": [
+        {
+          "x": 533,
+          "y": 78
+        },
+        {
+          "x": 556,
+          "y": 78
+        },
+        {
+          "x": 557,
+          "y": 98
+        },
+        {
+          "x": 533,
+          "y": 98
+        }
+      ]
+    },
+    {
+      "id": "river_tile_50",
+      "label": "river_tile_b5_4s",
+      "points": [
+        {
+          "x": 305,
+          "y": 229
+        },
+        {
+          "x": 340,
+          "y": 230
+        },
+        {
+          "x": 338,
+          "y": 249
+        },
+        {
+          "x": 302,
+          "y": 249
+        }
+      ]
+    },
+    {
+      "id": "river_tile_51",
+      "label": "river_tile_b6_2m",
+      "points": [
+        {
+          "x": 301,
+          "y": 251
+        },
+        {
+          "x": 337,
+          "y": 251
+        },
+        {
+          "x": 336,
+          "y": 271
+        },
+        {
+          "x": 298,
+          "y": 271
+        }
+      ]
+    }
+  ]
+}

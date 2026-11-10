@@ -55,8 +55,6 @@ is contingent, so its outcomes belong to the joint hand forecast rather than
 a guaranteed immediate transition. Training retains preempted attempts.
 Response passes also await priority resolution: neither last-wall exhaustion
 nor acceptance of a pending riichi declaration is assumed at that boundary.
-For recorded response decisions, see
-[the service guide](../service/README.md#decision-semantics).
 
 ## Scoring and match value
 

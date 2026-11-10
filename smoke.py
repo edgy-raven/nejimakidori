@@ -56,24 +56,6 @@ def run():
                 env=environment,
                 check=True,
             )
-    for directory in ("controller",):
-        paths = sorted((root / directory).glob("*.test.mjs"))
-        if args.size == "small":
-            paths = [
-                path
-                for path in paths
-                if path.name
-                not in (
-                    "browser_transport.test.mjs",
-                    "live_prediction.test.mjs",
-                )
-            ]
-        subprocess.run(
-            args=["node", "--test", *map(str, paths)],
-            cwd=root / directory,
-            env=environment,
-            check=True,
-        )
 
 
 if __name__ == "__main__":

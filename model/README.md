@@ -7,5 +7,6 @@ Training runners, optimizers, collection, evaluation and experiment tools live
 in [training/](../training/README.md). Model imports do not load those workflows;
 the export CLI imports snapshot and collection helpers only when invoked.
 
-Export a checkpoint with `python -m model.export --help`. Run the HTTP API
-using the [service guide](../service/README.md).
+Export a checkpoint with `python -m model.export --help`.
+[Inference](inference.py) loads and validates SavedModel signatures for local
+prediction and evaluation.

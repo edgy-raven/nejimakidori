@@ -1,4 +1,4 @@
-"""Expose wheel-provided CUDA libraries before starting the model service."""
+"""Expose wheel-provided CUDA libraries before starting the training command."""
 
 import os
 import pathlib

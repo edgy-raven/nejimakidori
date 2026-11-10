@@ -41,15 +41,3 @@ COPY dataset.py /workspace/
 COPY docker /workspace/docker
 RUN python -c "from log_dataset import shanten; shanten.native()"
 CMD ["python", "-m", "training.trainer", "--help"]
-
-FROM dependencies AS runtime
-RUN pip install --no-cache-dir mahjong==2.0.0
-WORKDIR /app
-COPY model /app/model
-COPY log_dataset /app/log_dataset
-COPY service /app/service
-COPY --from=native /tmp/nejimakidori/log_dataset/_native_collection.so /app/log_dataset/
-RUN python -c "from log_dataset import shanten; shanten.native()"
-ENV MODEL_PATH=/model HOST=0.0.0.0 PORT=8792
-EXPOSE 8792
-CMD ["python", "-B", "-u", "-m", "service.serve"]

@@ -137,7 +137,7 @@ command resumes completed games. `summary.json` reports placements, scores,
 ST3 points and paired uncertainty bounds.
 
 To export without a recorded dataset, replace `--data` with
-`--self-play-seed 941`. See [serving](../service/README.md) to run the export.
+`--self-play-seed 941`. The export can be loaded with `model.inference.Predictor`.
 
 ## Phasic training
 

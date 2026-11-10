@@ -77,8 +77,8 @@ matching the retained riichi flags and completed-hand denominators. Fork
 statistics describe root-conditioned continuations, not ordinary match rates.
 
 Action heads and dimensions are defined in
-[model/actions.py](../../model/actions.py). A running [API](../../service/README.md)
-reports its loaded export's input and output schemas at `GET /`.
+[model/actions.py](../../model/actions.py). SavedModel exports expose their
+input and output schemas through the `serving_default` signature.
 
 ## Checks
 

@@ -1,7 +1,7 @@
 # Model files
 
 Download [Nejimakidori 2026-11-10](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-20261110)
-and follow the [installation guide](../README.md#run-the-model).
+and follow the [installation guide](../README.md#download-weights).
 
 The release contains two downloads:
 
@@ -21,7 +21,7 @@ The extracted directory contains:
 
 | Path | Purpose |
 | --- | --- |
-| `saved_model/` | TensorFlow model used by the inference service. |
+| `saved_model/` | TensorFlow SavedModel for prediction and evaluation. |
 | `final.weights.h5` | Weights for initializing a new training run with `--initial`. |
 | `source/` | Source snapshot matching the release. |
 | `manifest.json` | Model identity and SHA-256 hashes for the included files. |

@@ -2,7 +2,7 @@
 
 The dataset builder converts ranked game archives into compressed TFRecords
 for policy, belief and settlement training. Run commands from the repository
-root after completing [setup](../README.md#setup).
+root after completing [setup](../README.md#build-without-docker).
 
 Records include optional ron/tsumo decisions: `win_action` is `0` for pass,
 `1` for win, and `-1` outside a win decision. Corpora produced while wins were

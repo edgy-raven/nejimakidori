@@ -1,38 +1,32 @@
-# Released model
+# Model files
 
-The current model is
-[Nejimakidori distill](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-distill-20261110).
-It is the checkpoint used by the production API and RiichiLab atk.
+Download [Nejimakidori 2026-11-10](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-20261110)
+and follow the [installation guide](../README.md#run-the-model).
 
-After completing [setup](../README.md#setup), download and verify the bundle:
+The release contains two downloads:
+
+| Download | Contents |
+| --- | --- |
+| `nejimakidori-20261110.tar.gz` | Model, training weights, source and evaluation results. |
+| `SHA256SUMS` | SHA-256 checksum for the archive. |
+
+Verify the archive before extracting it:
 
 ```sh
-mkdir -p artifacts
-cd artifacts
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-distill-20261110/nejimakidori-distill-20261110.tar.gz
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-distill-20261110/SHA256SUMS
 sha256sum -c SHA256SUMS
-tar -xzf nejimakidori-distill-20261110.tar.gz
-cd ..
-MODEL_PATH="$PWD/artifacts/nejimakidori-distill-20261110/saved_model" \
-  python -m service.serve
+tar -xzf nejimakidori-20261110.tar.gz
 ```
 
-Use the source at the release tag with these weights. The bundle also retains
-its matching source snapshot. It contains:
+The extracted directory contains:
 
-| Artifact | Use |
+| Path | Purpose |
 | --- | --- |
-| `saved_model/` | Serve predictions or evaluate the released policy. |
-| `final.weights.h5` | Initialize AWR with `--initial`; no optimizer state. |
-| `source/` | Matching model, feature, serving and training source. |
-| `manifest.json` | File hashes and checkpoint provenance. |
-| `evaluation.json` | The 10,000-game comparison with the previous model. |
+| `saved_model/` | TensorFlow model used by the inference service. |
+| `final.weights.h5` | Weights for initializing a new training run with `--initial`. |
+| `source/` | Source snapshot matching the release. |
+| `manifest.json` | Model identity and SHA-256 hashes for the included files. |
+| `export-verification.json` | Export validation results. |
+| `evaluation.json` | Results and paired uncertainty bounds from a 10,000-game comparison. |
 
-The comparison measured +0.785 ST3 points/game, with paired bounds of
-−2.33 to +3.83. This does not establish a strength improvement.
-
-See [serving](../service/README.md) for requests and configuration, or
-[training](../training/README.md) to continue from `final.weights.h5`.
-The Docker runtime builds source from its build context; a SavedModel mount
-does not replace that source.
+Use the source and weights from the same release. Training weights contain no
+optimizer state. To continue training, see the [training guide](../training/README.md).

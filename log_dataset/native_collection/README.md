@@ -6,7 +6,7 @@ positions and self-play use this engine.
 
 ## Build
 
-Complete the [repository setup](../../README.md#setup), including the patched
+Complete the [repository setup](../../README.md#build-without-docker), including the patched
 RiichiEnv checkout, then run from the repository root:
 
 ```sh

@@ -1,11 +1,14 @@
-# Serve the model
+# HTTP API
 
-The HTTP service loads one SavedModel and handles stateless prediction requests.
-Download the [released distillation model](../weights/README.md), then run
-from the matching source checkout:
+The API accepts game positions and returns move recommendations and model
+predictions. Each request includes the game state; the server does not keep
+a game session.
+
+Follow [installation](../README.md#run-the-model) to run the Docker service.
+For a source installation, start it from the repository root:
 
 ```sh
-MODEL_PATH=/path/to/nejimakidori-distill-20261110/saved_model python -m service.serve
+MODEL_PATH=/path/to/nejimakidori-20261110/saved_model python -m service.serve
 curl --fail http://127.0.0.1:8792/health
 ```
 
@@ -13,7 +16,21 @@ curl --fail http://127.0.0.1:8792/health
 batch limit and request fields. Use the loaded model's schema when sending
 feature tensors.
 
-## Send a request
+## Request a move
+
+With the service running, send a sample position:
+
+```sh
+curl --fail-with-body http://127.0.0.1:8792/predict-live \
+  -H 'Content-Type: application/json' \
+  --data-binary @integration/fixtures/live_pon_response.json
+```
+
+The response includes a `decision` and an `inference` object. Use the same JSON
+shape for your own game positions. The response's model revision identifies
+which weights produced the prediction.
+
+## Review a replay
 
 This example sends the bundled replay fixture to find decision positions for
 seat 1. The service must already be running:
@@ -45,8 +62,8 @@ and `seat` to `/predict-replay` to obtain annotations.
 
 Requests must contain exactly the listed fields. Round objects use the browser
 replay format shown in the fixture, rather than raw MJAI event lists.
-[log_dataset/review.py](../log_dataset/review.py) reconstructs them;
-[web_adapter.py](web_adapter.py) builds decision responses.
+See the [sample round](../integration/fixtures/review_reach_round.json) for
+field names and event structure.
 
 Errors have the form `{"error": {"code": "...", "message": "..."}}`, sometimes
 with additional `context`. Invalid requests or positions return 400, positions

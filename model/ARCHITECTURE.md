@@ -25,10 +25,6 @@ are learned choices; nine-terminals aborts remain automatic. Win/pass learns
 from recorded choices and observed hand returns, using the fitted state-value
 baseline rather than an action-conditioned win forecast.
 
-The win head adds trainable weights. Earlier checkpoints lack those weights,
-and corpora built with automatic wins omit these decisions. Regenerate training
-records to include win/pass examples; record field shapes are unchanged.
-
 [actor.py](actor.py) applies opening symmetry and final-wall
 safety rules. During training, a detached policy target also guides early-hand
 efficiency and late-hand safe discards. The `--prior-weight` option controls
@@ -92,10 +88,11 @@ when those returns exceed the fitted state value. The exponential weights are
 detached, capped and batch-normalized. Responses and win/pass use the same
 return-based weighting; conditional settlement forecasts do not supply weights.
 
-Self-play uses proximal policy optimization (PPO) on sampled actions and their
-observed returns. Its baseline comes from the same state-value head, fitted to
-fresh returns during PPO. Cohort advantages stay fixed during update epochs.
-It also trains beliefs and the settlement critic on eligible fresh positions.
+The candidate runner uses AWR for self-play. The phasic runner also supports
+proximal policy optimization (PPO), using sampled actions and observed returns.
+PPO fits the same state-value head to fresh returns and holds cohort advantages
+fixed during update epochs. It also trains beliefs and the settlement critic
+on eligible fresh positions.
 PPO has separate optimizer state; both AWR replay sources share optimizer state. Value MSE and signed
 bias track calibration; settlement-derived action utilities are not constrained
 to equal V. Both predictors can change through their shared encoder.
@@ -149,9 +146,8 @@ Padded training rows do not contribute. Heuristic policy priors remain separate.
 
 Shared-head constraint loss has weight 0.01. Critic constraint loss joins the
 critic objective at its existing weight 0.1. Offline and AWR training both
-include these terms; the retained PPO path is consistent with them. Candidate
-training starts from the released weights. Existing weights remain loadable;
-learning these corrections requires subsequent updates.
+include these terms; PPO is consistent with them. Candidate
+training starts from the released weights.
 
 Validation and phase scheduling use the same training coordinator.
 

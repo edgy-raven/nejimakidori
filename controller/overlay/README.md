@@ -15,13 +15,14 @@ npm ci
 npm start
 ```
 
-Enter the model API base URL and its dedicated bearer token, select **Connect**,
-then **Open Mahjong Soul**. The default URL is
-`https://ogame.squareqrow.com/nejimakidori/api/live/model`; this requires the
-hosted model proxy to be deployed and configured. Connect verifies the authenticated `<base>/health` endpoint. The app posts to
-`<base>/predict-live`. HTTPS is required except for localhost development.
-The API token and URL remain in memory for this app session. Game login cookies
-persist in Electron's local application profile.
+Enter the API URL and access token supplied by your server operator, select
+**Connect**, then **Open Mahjong Soul**. Hosted API access is separate from the
+model download. The default address is
+`https://ogame.squareqrow.com/nejimakidori/api/live/model`.
+
+The app uses `<base>/health` and `<base>/predict-live`. Remote servers require
+HTTPS; localhost can use HTTP. The URL and token are kept for the app session.
+Your Mahjong Soul login persists in Electron's local profile.
 
 Log in and start a game in the app's game window. Tracking starts before the
 game loads; reconnect traffic rebuilds the current game when supported by the
@@ -41,9 +42,6 @@ Run on Windows after installing dependencies above:
 npm run build:windows
 ```
 
-The portable executable is written to `overlay/dist/`. The builder packages
-only the overlay, the controller's protocol/state/domain modules and schema,
-and the controller's production dependencies. It does not bundle game login
-cookies, API tokens, training artifacts, or hosted configuration. The executable
-is unsigned. A Windows interactive smoke test is required to verify game login,
-a complete game, reconnects, hotkeys, and display scaling before distribution.
+The portable executable is written to `overlay/dist/`. It includes the client
+and its dependencies; users supply their own API access and game login.
+The executable is unsigned.

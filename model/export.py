@@ -26,7 +26,6 @@ class ServingModel(tf.Module):
         # Track weights without exporting Keras' training-only call signatures.
         self.network = self._no_dependency(network)
         self.parameters = [variable.value for variable in network.variables]
-        self.actor = self._no_dependency(network.actor)
 
     @tf.function
     def policy(self, **features):
@@ -54,12 +53,13 @@ class ServingModel(tf.Module):
         }
 
     def _serve(self, features, chunk_size=4, root_only=False):
-        outputs = self.actor(features, training=False)
+        outputs = self.network.actor(features, training=False)
         encoded, state = self.network.candidate_context(features, outputs)
         active = critic.active_candidates(features, encoded["selected"])
         selected = tf.boolean_mask(encoded["selected"], active)
         state = tf.boolean_mask(state, active)
         safe = tf.boolean_mask(encoded["immediate_safe"], active)
+        wait = tf.boolean_mask(encoded["immediate_wait"], active)
         allowed = actions.immediate_decisions(features, selected)
         public = joint_settlement.public_inputs(features)
         candidate_public = critic.public_inputs(features, selected)
@@ -105,9 +105,7 @@ class ServingModel(tf.Module):
             inputs = {
                 "state": state[begin : begin + chunk_size],
                 "immediate_safe": safe[begin : begin + chunk_size],
-                "immediate_wait": tf.boolean_mask(
-                    encoded["immediate_wait"], active
-                )[begin : begin + chunk_size],
+                "immediate_wait": wait[begin : begin + chunk_size],
                 "immediate_allowed": allowed[begin : begin + chunk_size],
                 **{
                     name: tf.gather(value, rows)
@@ -296,9 +294,7 @@ class ServingModel(tf.Module):
             "critic_payment_probabilities": probability,
             "critic_immediate_probabilities": immediate.concat(),
             "critic_legal_ron_probabilities": legal_ron.concat(),
-            "critic_structural_wait_probabilities": tf.boolean_mask(
-                encoded["immediate_wait"], active
-            ),
+            "critic_structural_wait_probabilities": wait,
             "critic_conditional_ron_eligibility": eligibility.concat(),
         }
 
@@ -428,6 +424,10 @@ def run(args):
             pending / "source" / name,
             include_native=True,
         )
+    shutil.copy2(
+        pathlib.Path(__file__).parents[1] / "requirements.txt",
+        pending / "source/requirements.txt",
+    )
     pending.rename(root)
 
 

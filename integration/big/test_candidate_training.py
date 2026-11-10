@@ -9,15 +9,14 @@ import pytest
 import tensorflow as tf
 
 from log_dataset import afk, replay, training_data
-from training import candidate_training, self_play
+from training import self_play
+from training.candidate import run
 
 
 def test_exact_source_quotas_and_disk_replay(tmp_path):
     generator = numpy.random.default_rng(941)
     pools = [
-        candidate_training.Replay(
-            tmp_path / str(index), 13, generator, reservoir=index < 2
-        )
+        run.Replay(tmp_path / str(index), 13, generator, reservoir=index < 2)
         for index in range(4)
     ]
     for index, pool in enumerate(pools):
@@ -37,30 +36,28 @@ def test_exact_source_quotas_and_disk_replay(tmp_path):
         seen = numpy.zeros(4, numpy.int64)
         for start in range(0, 103, 11):
             end = min(start + 11, 103)
-            quotas = candidate_training.allocation(
-                end, fraction, 0.4, start=start
-            )
+            quotas = run.allocation(end, fraction, 0.4, start=start)
             numpy.testing.assert_array_equal(
                 quotas,
-                candidate_training.allocation(end, fraction, 0.4)
-                - candidate_training.allocation(start, fraction, 0.4),
+                run.allocation(end, fraction, 0.4)
+                - run.allocation(start, fraction, 0.4),
             )
-            batch = candidate_training.mixed_batch(pools, quotas, generator)
+            batch = run.mixed_batch(pools, quotas, generator)
             seen += numpy.bincount(batch["source"], minlength=4)
         numpy.testing.assert_array_equal(
-            seen, candidate_training.allocation(103, fraction, 0.4)
+            seen, run.allocation(103, fraction, 0.4)
         )
         if fraction == 0:
             assert seen[:2].sum() == 0
         numpy.testing.assert_array_equal(
-            candidate_training.allocation(103, fraction, 0.4, start=103),
+            run.allocation(103, fraction, 0.4, start=103),
             numpy.zeros(4, numpy.int64),
         )
 
 
 @pytest.mark.parametrize("reservoir", (False, True))
 def test_replay_selected_rows_match_stream_replacement(tmp_path, reservoir):
-    pool = candidate_training.Replay(
+    pool = run.Replay(
         tmp_path / "replay",
         1031,
         numpy.random.default_rng(941),
@@ -156,7 +153,7 @@ def test_mixed_replay_preserves_shuffle_alignment_and_rng():
         expected = tf.nest.map_structure(
             lambda *values: numpy.concatenate(values)[selected], *parts
         )
-        actual = candidate_training.mixed_batch(pools, counts, generator)
+        actual = run.mixed_batch(pools, counts, generator)
         numpy.testing.assert_equal(actual, expected)
         assert generator.bit_generator.state == reference.bit_generator.state
         actual["features"]["pair"][:] = 0
@@ -185,7 +182,7 @@ def test_record_adapter_keeps_legality_return_and_target_categories(
             for row in observations
         ]
     )
-    batch = candidate_training.record_batch(raw)
+    batch = run.record_batch(raw)
     expected = training_data.parse_batch(raw)
     numpy.testing.assert_allclose(batch["returns"], expected[2]["returns"])
     assert tf.reduce_all(
@@ -213,7 +210,7 @@ def test_record_adapter_keeps_legality_return_and_target_categories(
         lambda **kwargs: tf.data.Dataset.from_tensor_slices(raw).batch(2),
     )
     args = types.SimpleNamespace(data="fixture", batch_size=2, seed=941)
-    batches = list(candidate_training.record_stream(args).as_numpy_iterator())
+    batches = list(run.record_stream(args).as_numpy_iterator())
     assert [len(batch["chosen"]) for batch in batches] == [2, 1]
     numpy.testing.assert_array_equal(
         numpy.concatenate([batch["returns"] for batch in batches]),
@@ -226,22 +223,20 @@ def test_record_stream_consumes_rows_without_a_small_fixed_cache(monkeypatch):
         {"chosen": numpy.arange(start, start + 4)} for start in (0, 4, 8)
     ]
     monkeypatch.setattr(
-        candidate_training,
+        run,
         "record_stream",
         lambda *a, **kw: types.SimpleNamespace(
             as_numpy_iterator=lambda: iter(batches)
         ),
     )
     monkeypatch.setattr(
-        candidate_training,
+        run,
         "classify_records",
         lambda batch, *a: (batch["chosen"] % 2).astype(numpy.uint8),
     )
-    monkeypatch.setattr(
-        candidate_training, "prepare", lambda batch, trainer: batch
-    )
+    monkeypatch.setattr(run, "prepare", lambda batch, trainer: batch)
     targeted = []
-    stream = candidate_training.RecordStream(
+    stream = run.RecordStream(
         None,
         types.SimpleNamespace(feature_packing=None),
         types.SimpleNamespace(
@@ -260,7 +255,7 @@ def test_record_stream_consumes_rows_without_a_small_fixed_cache(monkeypatch):
 def test_recorded_and_mixed_restarts_accept_capped_ramp(tmp_path):
     command = tmp_path / "evaluation.json"
     command.write_text(json.dumps(["evaluate", "{weights}", "{output}"]))
-    args = candidate_training.argument_parser().parse_args(
+    args = run.argument_parser().parse_args(
         [
             "--initial",
             "awr4.weights.h5",
@@ -277,31 +272,40 @@ def test_recorded_and_mixed_restarts_accept_capped_ramp(tmp_path):
             "0.8,0.6,0.4,0.2,0.2",
         ]
     )
-    fractions, _ = candidate_training.settings(args)
+    fractions, _ = run.settings(args)
     assert fractions == [0.8, 0.6, 0.4, 0.2, 0.2]
     args.awr_pull = 0.3
-    candidate_training.settings(args)
+    with pytest.raises(ValueError, match="fixed --awr-reference"):
+        run.settings(args)
+    args.awr_reference = "reference.weights.h5"
+    args.awr_q_std = 1.0
+    run.settings(args)
+    for penalty in (-1.0, float("nan"), float("inf")):
+        args.awr_q_std = penalty
+        with pytest.raises(ValueError, match="standard-deviation"):
+            run.settings(args)
+    args.awr_q_std = 1.0
     for coefficient in (-0.1, float("nan"), float("inf")):
         args.awr_pull = coefficient
         with pytest.raises(ValueError, match="pull"):
-            candidate_training.settings(args)
+            run.settings(args)
     args.awr_pull = 0.3
     args.mixed_only = False
-    candidate_training.settings(args)
+    run.settings(args)
 
 
 def test_cohort_checkpoints_are_immutable_and_latest_tracks_progress(tmp_path):
     network = types.SimpleNamespace(weights=b"first cohort")
     network.save_weights = lambda path: path.write_bytes(network.weights)
-    candidate_training.save_cohort(network, tmp_path, 100)
+    run.save_cohort(network, tmp_path, 100)
     first = tmp_path / "checkpoints/000000000100.weights.h5"
     assert (tmp_path / "latest.weights.h5").resolve() == first
     network.weights = b"second cohort"
-    candidate_training.save_cohort(network, tmp_path, 200)
+    run.save_cohort(network, tmp_path, 200)
     assert first.read_bytes() == b"first cohort"
     assert (tmp_path / "latest.weights.h5").read_bytes() == b"second cohort"
     with pytest.raises(FileExistsError):
-        candidate_training.save_cohort(network, tmp_path, 100)
+        run.save_cohort(network, tmp_path, 100)
     assert first.read_bytes() == b"first cohort"
     assert (tmp_path / "latest.weights.h5").read_bytes() == b"second cohort"
 
@@ -324,7 +328,7 @@ def test_awr_rate_is_constant_within_each_pass(mixed_only):
     )
     for phase, expected in enumerate(rates):
         for position in (0, 50, 99):
-            candidate_training.set_awr_learning_rate(
+            run.set_awr_learning_rate(
                 trainer, args, phase * 100 + position, 100
             )
             assert float(trainer.awr_optimizer.learning_rate) == pytest.approx(

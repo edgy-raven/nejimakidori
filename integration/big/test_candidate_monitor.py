@@ -8,44 +8,42 @@ import pytest
 import tensorboard.backend.event_processing.event_accumulator as accumulator
 import tensorboard.util.tensor_util
 
-from training import candidate_monitor
+from training.candidate import monitor
 
 
 def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
     clock = iter([1.0, 2.0, 4.0, 10.0, 12.0, 14.0])
-    monkeypatch.setattr(
-        candidate_monitor.time, "monotonic", lambda: next(clock)
-    )
-    monitor = candidate_monitor.Monitor(
+    monkeypatch.setattr(monitor.time, "monotonic", lambda: next(clock))
+    progress = monitor.Monitor(
         tmp_path,
         100,
         {"awr_temperature": 3, "mixed_only": False},
     )
-    monitor.report(
+    progress.report(
         stage="record-awr", metrics={}, exposures=0, cohort=0, games=0
     )
-    monitor.report(
+    progress.report(
         stage="record-awr",
         metrics={"policy": 0.2},
         exposures=100,
         cohort=0,
         games=0,
     )
-    monitor.report(
+    progress.report(
         stage="mixed-awr-1_collecting",
         metrics={},
         exposures=100,
         cohort=0,
         games=0,
     )
-    monitor.report(
+    progress.report(
         stage="mixed-awr-1_updating",
         metrics={},
         exposures=100,
         cohort=0,
         games=2,
     )
-    monitor.report(
+    progress.report(
         stage="mixed-awr-1",
         metrics={
             "value_loss": 0.25,
@@ -59,7 +57,7 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
         cohort=1,
         games=2,
     )
-    monitor.close()
+    progress.close()
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["phase_index"] == 2
     assert status["phase_fraction"] == 0.5
@@ -90,7 +88,7 @@ def test_phase_evaluation_passes_loadable_export_to_matches(
     import pathlib
     import types
 
-    from training import candidate_evaluation
+    from training.candidate import evaluation
 
     calls = []
     weights = tmp_path / "weights.h5"
@@ -121,7 +119,7 @@ def test_phase_evaluation_passes_loadable_export_to_matches(
             assert argv[argv.index("--batch-games") + 1] == "32"
             assert argv[argv.index("--devices") + 1] == "GPU-a,GPU-b"
 
-    monkeypatch.setattr(candidate_evaluation.subprocess, "run", run)
+    monkeypatch.setattr(evaluation.subprocess, "run", run)
     args = types.SimpleNamespace(
         output=str(tmp_path),
         weights=str(weights),
@@ -132,14 +130,14 @@ def test_phase_evaluation_passes_loadable_export_to_matches(
         devices="GPU-a,GPU-b",
         batch_games=32,
     )
-    candidate_evaluation.run(args)
+    evaluation.run(args)
     assert len(calls) == 2
-    candidate_evaluation.run(args)
+    evaluation.run(args)
     assert len(calls) == 3
     assert calls[-1][2] == "training.evaluate"
     weights.write_bytes(b"different checkpoint")
     with pytest.raises(ValueError, match="different weights"):
-        candidate_evaluation.run(args)
+        evaluation.run(args)
     assert len(calls) == 3
 
 
@@ -148,19 +146,19 @@ def test_phase_evaluation_passes_loadable_export_to_matches(
     [(True, "mixed-awr-1", 500), (False, "record-awr", 600)],
 )
 def test_restart_monitor_starts_at_zero(tmp_path, mixed_only, phase, budget):
-    monitor = candidate_monitor.Monitor(
+    progress = monitor.Monitor(
         tmp_path,
         100,
         {"mixed_only": mixed_only},
     )
-    monitor.report(stage=phase, metrics={}, exposures=0, cohort=0, games=0)
+    progress.report(stage=phase, metrics={}, exposures=0, cohort=0, games=0)
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["phase_index"] == 1
     assert status["phase_exposures"] == status["total_exposures"] == 0
     assert status["budget_exposures"] == budget
-    monitor.report(
+    progress.report(
         stage="complete", metrics={}, exposures=budget, cohort=5, games=10
     )
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["total_fraction"] == status["phase_fraction"] == 1
-    monitor.close()
+    progress.close()

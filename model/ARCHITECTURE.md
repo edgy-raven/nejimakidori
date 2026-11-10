@@ -74,30 +74,11 @@ matches use exact final scores and ranks. Earlier hands use a fixed continuation
 model based on scores, remaining hands and scheduled dealerships. Its parameters
 are separate from the learned current-hand critic.
 
-## What training optimizes
+## Training
 
-Supervised foundation training combines action imitation with settlement,
-belief and auxiliary supervision. A state-only head learns observed hand returns
-by squared error. Recorded and generated replay share one AWR update and
-optimizer, training the actor, state value and chosen-action settlement critic.
-AWR excludes hindsight belief/completion losses and separate auxiliary replay.
-Advantage-weighted regression (AWR) gives sampled actions more weight
-when those returns exceed the fitted state value. The exponential weights are
-detached, capped and batch-normalized. Responses and win/pass use the same
-return-based weighting; conditional settlement forecasts do not supply weights.
-
-The candidate runner uses AWR for self-play. The phasic runner also supports
-proximal policy optimization (PPO), using sampled actions and observed returns.
-PPO fits the same state-value head to fresh returns and holds cohort advantages
-fixed during update epochs. It also trains beliefs and the settlement critic
-on eligible fresh positions.
-PPO has separate optimizer state; both AWR replay sources share optimizer state. Value MSE and signed
-bias track calibration; settlement-derived action utilities are not constrained
-to equal V. Both predictors can change through their shared encoder.
-
-The final optional AWR pass penalizes divergence from the actor saved at the end
-of PPO. [The training guide](../training/README.md#phasic-training) explains phase budgets,
-optimizers and checkpoint recovery.
+The [candidate objective](../training/OBJECTIVE.md) defines actor weighting,
+V targets, fixed-policy KL and gradient boundaries. The critic and V predict
+current-hand outcomes projected through the same fixed continuation model.
 
 ## Where to change things
 
@@ -109,49 +90,16 @@ optimizers and checkpoint recovery.
 | Opponent beliefs, count constraints and supervision | [beliefs.py](beliefs.py) |
 | Policy and candidate auxiliary heads, priors and losses | [actor.py](actor.py) |
 | Legal actions, model indexing and native selection | [actions.py](actions.py) |
-| Payment critic, immediate outcomes and detached AWR advantages | [critic.py](critic.py) |
+| Payment critic, immediate outcomes and action forecasts | [critic.py](critic.py) |
 | State-value head and regression | [network.py](network.py), [trainer.py](../training/trainer.py) |
 | Score support and settlement | [payment_scoring.py](payment_scoring.py), [joint_settlement.py](joint_settlement.py) |
 | Component losses and gradient boundaries | [actor.py](actor.py), [beliefs.py](beliefs.py), [critic.py](critic.py) |
 | Shared loss reductions and optimizer updates | [losses.py](losses.py), [optimization.py](../training/optimization.py) |
-| Self-play and phase scheduling | [self_play.py](../training/self_play.py), [trainer.py](../training/trainer.py) |
+| Self-play and candidate updates | [self_play.py](../training/self_play.py), [trainer.py](../training/trainer.py) |
 | Frozen sources and isolated opponents | [frozen_policy.py](../training/frozen_policy.py) |
 | Recorded labels and sampling | [dataset guide](../log_dataset/README.md) |
 
-Feature layouts, label IDs and score vocabularies must agree across datasets,
-weights and exports. Dataset summaries are checked against the current source.
-When these definitions change, regenerate records and supply compatible weights.
-Retained exports include their matching source for evaluation.
+## Constraints and compatibility
 
-Each component defines its differentiable objectives alongside its forward
-model. `training/trainer.py` combines them under one gradient tape per update, so the
-shared encoder receives their combined gradient. Actor AWR weights and anchor
-targets remain detached; the critic owns its chunked custom backward pass.
-Exact masks and projections also supply detached targets for explicit
-constraint losses on the raw predictions. Categorical heads use forward KL;
-yaku/route marginals use Bernoulli KL. This trains the head and shared encoder
-to satisfy yaku exclusions, score bounds, tile-count conservation, and
-settlement/deposit constraints rather than hiding errors behind masks.
-Unknown feasible yaku are not assigned positive labels. Sparse action heads
-only compute selected candidates; uncomputed slots are constant padding. They
-have hard legality masks but no raw-to-masked constraint loss: padding must
-not push the arbitrary common offset of learned action scores. The win head
-predicts accept versus decline conditional on a legal win opportunity. A
-non-winning position is not a decline label: win availability is hard-masked
-without a raw-to-masked policy penalty. Otherwise records without win decisions
-can train the model to refuse wins without any opposing policy supervision.
-Padded training rows do not contribute. Heuristic policy priors remain separate.
-
-Shared-head constraint loss has weight 0.01. Critic constraint loss joins the
-critic objective at its existing weight 0.1. Offline and AWR training both
-include these terms; PPO is consistent with them. Candidate
-training starts from the released weights.
-
-Validation and phase scheduling use the same training coordinator.
-
-The [candidate replay schedule](../training/README.md#candidate-replay-schedule)
-starts from the released weights and runs six shared AWR passes. Mixed recorded
-and generated strata enter the same minibatch, so advantage weights share one
-normalization and one optimizer. Target selection uses observed state only;
-shanten features store actual distance plus one. Recorded examples and generated
-rollouts use the same current feature schema.
+See [constraints](CONSTRAINTS.md) for masks, raw-head supervision, call priority
+and schema compatibility.

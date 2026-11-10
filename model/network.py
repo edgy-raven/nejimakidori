@@ -123,6 +123,9 @@ class JointPolicyPayment(tf.keras.Model):
         self.critic.joint_distributions = tf.function(
             self.critic.joint_distributions, jit_compile=True
         )
+        self.critic.projected_mean_std = tf.function(
+            self.critic.projected_mean_std, jit_compile=True
+        )
         self.critic.chunk_statistics = tf.function(
             self.critic.chunk_statistics, jit_compile=True
         )

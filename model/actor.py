@@ -626,54 +626,6 @@ def policy_kl(reference, current, mean=losses.mean_valid, *, reverse=False):
     )
 
 
-def decision_kl(reference, current, labels):
-    """Sum active heads per decision, then normalize globally across GPUs."""
-    masks = tf.stack(
-        [labels[name] >= 0 for name in actions.TRAIN_POLICY_HEADS],
-        axis=-1,
-    )
-    divergences = []
-    for name in actions.TRAIN_POLICY_HEADS:
-        target = tf.stop_gradient(tf.nn.log_softmax(reference[name]))
-        divergences.append(
-            tf.reduce_sum(
-                tf.exp(target) * (target - tf.nn.log_softmax(current[name])),
-                axis=-1,
-            )
-        )
-    return losses.mean_valid(
-        tf.reduce_sum(
-            tf.where(masks, tf.stack(divergences, axis=-1), 0.0), axis=-1
-        ),
-        tf.reduce_any(masks, axis=-1),
-    )
-
-
-def ppo_loss(
-    *,
-    current,
-    behavior,
-    chosen,
-    advantages,
-    clip,
-    dual_clip,
-    mean=losses.mean_valid,
-):
-    ratio = tf.exp(tf.gather(current - behavior, chosen, batch_dims=1))
-    surrogate = tf.minimum(
-        ratio * advantages,
-        tf.clip_by_value(ratio, 1 - clip, 1 + clip) * advantages,
-    )
-    return -mean(
-        tf.where(
-            advantages < 0,
-            tf.maximum(surrogate, dual_clip * advantages),
-            surrogate,
-        ),
-        tf.ones_like(advantages),
-    )
-
-
 def offline_loss_terms(inputs, outputs, mean=losses.mean_valid):
     metrics = {}
     metrics["policy_loss"] = policy_loss(inputs[1], outputs, mean=mean)
@@ -762,39 +714,6 @@ def offline_loss_terms(inputs, outputs, mean=losses.mean_valid):
                     tf.where(selected, nll, 0.0)
                 )
     return metrics
-
-
-def online_loss_terms(
-    *,
-    outputs,
-    batch,
-    current,
-    count,
-    clip,
-    dual_clip,
-    mean=losses.mean_valid,
-):
-    policy = {
-        "policy": ppo_loss(
-            current=current,
-            behavior=batch["behavior"][:count],
-            chosen=batch["chosen"][:count],
-            advantages=batch["advantages"][:count],
-            clip=clip,
-            dual_clip=dual_clip,
-            mean=mean,
-        )
-    }
-    return {
-        **policy,
-        **decision_regularizers(
-            outputs=outputs,
-            current=current,
-            heads=batch["head"],
-            count=count,
-            mean=mean,
-        ),
-    }
 
 
 def decision_regularizers(*, outputs, current, heads, count, mean):

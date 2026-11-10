@@ -6,8 +6,58 @@ import time
 import numpy
 import tensorflow as tf
 
+from log_dataset import _native_collection, training_data
 from model import export
-from training import online_training, self_play
+from training import self_play
+
+
+def disagreement_evaluator(network):
+    """Compare discard max-Q and closest-to-V in projected current-hand ST3."""
+    module = export.ServingModel(network)
+    specs = {
+        name: tf.TensorSpec([None, *spec["shape"]], spec["dtype"])
+        for name, spec in _native_collection.INPUTS.items()
+    }
+    signature = module.root_evaluation.get_concrete_function(**specs)
+    packing = training_data.PackedBatch(specs)
+
+    @tf.function(reduce_retracing=True)
+    def predict(inputs):
+        return signature(**packing.unpack(inputs))
+
+    def evaluate(features):
+        with tf.device("/CPU:0"):
+            inputs = {
+                name: tf.convert_to_tensor(value)
+                for name, value in packing.pack_numpy(features).items()
+            }
+        outputs = predict(inputs)
+        values = outputs["state_value"].numpy() * 100
+        indices = outputs["critic_action_indices"].numpy()
+        estimates = outputs["critic_projected_st3"].numpy()
+        priority = numpy.zeros(len(values), numpy.float32)
+        pairs = numpy.full((len(values), 2), -1, numpy.int32)
+        # Encoder tf.where order is preserved by the export's active mask.
+        boundaries = numpy.searchsorted(
+            indices[:, 0], numpy.arange(len(values) + 1)
+        )
+        for row, (begin, end) in enumerate(
+            zip(boundaries[:-1], boundaries[1:])
+        ):
+            codes = indices[begin:end, 1]
+            q = estimates[begin:end]
+            best = q.argmax()
+            closest = numpy.abs(q - values[row]).argmin()
+            if best == closest:
+                continue
+            pairs[row] = codes[[best, closest]]
+            priority[row] = (
+                q[best] - q[closest] >= 0.25
+                or abs(float(q[closest] - values[row])) >= 8
+            )
+        return {"priority": priority, "actions": pairs}
+
+    return evaluate
 
 
 class Prefetch:
@@ -25,9 +75,7 @@ class Prefetch:
                 workers,
                 focus="targeted",
                 root_copies=root_copies,
-                root_evaluate=online_training.disagreement_evaluator(
-                    self.network
-                ),
+                root_evaluate=disagreement_evaluator(self.network),
             )
 
     def __enter__(self):

@@ -228,7 +228,7 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
 
     import tensorflow as tf
 
-    from training import online_training
+    from training.candidate import collection
 
     outputs = {
         "state_value": tf.Variable([0.01, 0.15]),
@@ -261,7 +261,7 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
         }
 
     monkeypatch.setattr(
-        online_training.export,
+        collection.export,
         "ServingModel",
         lambda network: types.SimpleNamespace(
             root_evaluation=types.SimpleNamespace(
@@ -274,7 +274,7 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
         pytest.fail("Root scoring must reuse V from its actor forward pass")
 
     monkeypatch.setattr(
-        online_training._native_collection,
+        collection._native_collection,
         "INPUTS",
         {
             name: {"shape": [], "dtype": "int8"}
@@ -282,7 +282,7 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
         },
     )
     network = types.SimpleNamespace(actor=repeated_actor)
-    evaluate = online_training.disagreement_evaluator(network)
+    evaluate = collection.disagreement_evaluator(network)
     for count in (2, 9):
         priority = evaluate(
             {

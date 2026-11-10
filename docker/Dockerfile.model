@@ -25,7 +25,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=native /wheels /tmp/wheels
-COPY model/requirements.txt /tmp/requirements.txt
+COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --find-links=/tmp/wheels -r /tmp/requirements.txt \
     && rm -rf /tmp/wheels
 COPY docker/model_entrypoint.py /app/model_entrypoint.py
@@ -37,7 +37,6 @@ COPY model /workspace/model
 COPY training /workspace/training
 COPY log_dataset /workspace/log_dataset
 COPY --from=native /tmp/nejimakidori/log_dataset/_native_collection.so /workspace/log_dataset/
-COPY dataset.py /workspace/
 COPY docker /workspace/docker
 RUN python -c "from log_dataset import shanten; shanten.native()"
-CMD ["python", "-m", "training.trainer", "--help"]
+CMD ["python", "-m", "training.candidate", "--help"]

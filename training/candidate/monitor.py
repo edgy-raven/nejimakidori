@@ -8,7 +8,7 @@ import tensorboard.plugins.custom_scalar.layout_pb2 as scalar_layout
 import tensorboard.plugins.custom_scalar.summary as scalar_summary
 import tensorflow as tf
 
-from training import online_training
+from training.candidate import state
 
 
 class Monitor:
@@ -38,7 +38,8 @@ class Monitor:
                 "Entropy": r"awr/entropy$",
                 "Weight health": r"awr/(effective_sample_fraction|weight_clipped_fraction)$",
                 "Learning rate": r"awr/learning_rate$",
-                "Previous-policy pull": r"awr/(mirror_kl|weighted_mirror_loss)$",
+                "Fixed-reference magnet": r"awr/(mirror_kl|weighted_mirror_loss)$",
+                "Q-like risk score (ST3)": r"awr/q_(mean|std|risk)_st3$",
                 "Local gradient norm": r"gradient/local_norm$",
             },
             "Replay": {
@@ -107,7 +108,7 @@ class Monitor:
             "updated_at": time.time(),
             **{name: float(value) for name, value in metrics.items()},
         }
-        online_training.save(self.root / "status.json", status)
+        state.save(self.root / "status.json", status)
         with (self.root / "progress.jsonl").open("a") as stream:
             stream.write(json.dumps(status) + "\n")
         with self.writer.as_default(step=exposures):

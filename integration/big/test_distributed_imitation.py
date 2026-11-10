@@ -309,9 +309,6 @@ class Network(tf.keras.Model):
             },
         )
 
-    def compile_training(self):
-        pass
-
     def candidate_context(self, features, outputs):
         return outputs, outputs["board"]
 
@@ -324,31 +321,8 @@ class Network(tf.keras.Model):
         return outputs
 
 
-def belief_terms(features, labels, outputs, mean=losses.mean_valid):
-    return {
-        "belief": mean(
-            tf.square(outputs["board"][:, 0] - labels["y"]),
-            labels["y"] >= 0,
-        )
-    }, {}
-
-
 training.critic.chosen_actions = lambda features, labels: (
     labels["discard_policy_logits"])
-training.beliefs.belief_loss_terms = belief_terms
-training.objective_metrics = lambda inputs, outputs: (
-    belief_terms(inputs[0], inputs[1], outputs)[0]["belief"],
-    {
-        name.removesuffix("_logits") + "_" + suffix: tf.reduce_sum(
-            tf.cast(inputs[1]["y"] == 0.01 if suffix == "correct"
-                    else inputs[1]["y"] >= 0, tf.float32))
-        for name in actions.TRAIN_POLICY_HEADS
-        for suffix in ("count", "correct", "top3_correct")
-    } | {
-        "policy_entropy": tf.constant(0.0),
-        "policy_prior_loss": tf.constant(0.0),
-    },
-)
 first = (
     {"x": tf.constant([[0.01], [0.09], [0.03], [0.05]])},
     {"y": tf.constant([-1.0, 0.02, 0.01, -1.0])},
@@ -363,23 +337,11 @@ for replicas in (1, 2):
         trainer = training.Trainer(
             network=network,
             args=types.SimpleNamespace(
-                ppo_learning_rate=0.01,
-                supervised_learning_rate=2e-4,
-                awr_only_exposures=0,
-                final_awr_exposures=0,
-                final_awr_kl=0.1,
-                prior_weight=1.0,
-                foundation_exposures=400,
-                awr_exposures=600,
-                block_exposures=100,
-                batch_size=4,
-                clip=0.2,
-                dual_clip=3.0,
-                entropy=0.001,
+                awr_learning_rate=0.01,
                 awr_entropy=0.01,
                 awr_temperature=3.0,
             ),
-            first=first,
+            features=first[0],
         )
     trainer = training.DistributedTrainer(trainer, strategy)
     batch = dict(
@@ -387,30 +349,13 @@ for replicas in (1, 2):
         head=tf.zeros(4, tf.int32),
         legal=tf.ones((4, 150), tf.bool),
         chosen=tf.constant([0, 1, 2, 3]),
-        advantages=tf.constant([0.02, -0.01, 0.03, 0.04]),
         returns=tf.constant([0.1, -0.1, 0.2, -0.2]),
         payment_points=tf.zeros((4, 40), tf.int32),
     )
-    batch["behavior"] = trainer.predict(
-        {**batch, "unused_replay_metadata": object()})
-    inputs = trainer.packing.pack(first)
-    before = [v.numpy().copy() for v in network.weights]
-    baseline = trainer.auxiliary_update(inputs, False, train=False)
-    assert float(baseline["imitation_accuracy"]) == 0.5
-    assert int(trainer.auxiliary_optimizer.iterations.numpy()) == 0
-    assert int(trainer.policy_optimizer.iterations.numpy()) == 0
-    for left, right in zip(before, network.weights):
-        numpy.testing.assert_array_equal(left, right.numpy())
     metrics = []
     for count in (3, 1):
-        metrics.extend(
-            trainer.policy_update(
-                batch, inputs, tf.constant(count)
-            ).values()
-        )
-    for count in (3, 1):
         update = trainer.policy_update(
-            batch, None, tf.constant(count), awr=True)
+            batch, tf.constant(count))
         # Local gradient norms depend on replica partitioning; global
         # objectives and resulting weights must still match.
         assert numpy.isfinite(float(update["gradient/local_norm"]))
@@ -418,11 +363,6 @@ for replicas in (1, 2):
             value for name, value in update.items()
             if name != "gradient/local_norm"
         )
-    for awr in (False,):
-        auxiliary = trainer.auxiliary_update(inputs, awr)
-        assert float(auxiliary["imitation_accuracy"]) == 0.5
-        assert float(auxiliary["imitation_top3_accuracy"]) == 1.0
-        metrics.extend(auxiliary.values())
     result = [numpy.asarray(v) for v in [*network.weights, *metrics]]
     if replicas == 1:
         expected = result

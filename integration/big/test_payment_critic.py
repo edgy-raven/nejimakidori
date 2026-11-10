@@ -225,9 +225,9 @@ def test_joint_training_checkpoint_export_and_placement_inference(
     tmp_path,
     monkeypatch,
 ):
+    from integration import supervision_reference
     from log_dataset import afk, replay, training_data
     from model import critic
-    from training import trainer as training
 
     events = json.loads(
         pathlib.Path(__file__)
@@ -289,7 +289,7 @@ def test_joint_training_checkpoint_export_and_placement_inference(
     network.compile_training()
     with tf.GradientTape(persistent=True) as tape:
         outputs = network(inputs)
-        loss, metrics = training.objective_metrics(
+        loss, metrics = supervision_reference.objective_metrics(
             inputs,
             outputs,
         )
@@ -331,7 +331,9 @@ def test_joint_training_checkpoint_export_and_placement_inference(
             lambda value: value[part], validation_inputs
         )
         prediction = network(batch)
-        totals.append(training.validation_statistics(batch, prediction))
+        totals.append(
+            supervision_reference.validation_statistics(batch, prediction)
+        )
         predictions.append(
             {
                 **prediction,
@@ -352,12 +354,12 @@ def test_joint_training_checkpoint_export_and_placement_inference(
         )
         for name in outputs
     }
-    combined = training.objective_metrics(
+    combined = supervision_reference.objective_metrics(
         validation_inputs,
         validation_outputs,
         statistics=tf.add_n([row["statistics"] for row in totals]),
     )[1]
-    expected = training.objective_metrics(
+    expected = supervision_reference.objective_metrics(
         validation_inputs, validation_outputs
     )[1]
     for name in (
@@ -391,7 +393,7 @@ def test_joint_training_checkpoint_export_and_placement_inference(
         assert tf.linalg.global_norm([scoring_gradient]) > 0
     with tf.GradientTape() as unknown_tape:
         unknown_tape.watch(outputs["round_completion_score_logits"])
-        _, unknown_metrics = training.objective_terms(
+        _, unknown_metrics = supervision_reference.objective_terms(
             (
                 inputs[0],
                 {
@@ -501,6 +503,9 @@ def test_joint_training_checkpoint_export_and_placement_inference(
         )
     )
     assert (tmp_path / "release/source/log_dataset/features.py").is_file()
+    assert (tmp_path / "release/source/requirements.txt").read_bytes() == (
+        pathlib.Path("requirements.txt").read_bytes()
+    )
     assert json.loads(
         (tmp_path / "release/export-verification.json").read_text()
     )["passed"]

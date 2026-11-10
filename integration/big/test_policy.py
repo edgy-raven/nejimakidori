@@ -237,17 +237,12 @@ def test_recorded_win_head_learns_both_choices_and_uses_state_baseline():
             outputs = model.actor(inputs[0])
             imitation = actor_layers.policy_loss(labels, outputs)
             current = tf.nn.log_softmax(outputs["win_decision_logits"])
-            ppo = actor_layers.ppo_loss(
-                current=current,
-                behavior=tf.stop_gradient(current),
-                chosen=tf.constant([target]),
-                advantages=tf.ones(1),
-                clip=0.2,
-                dual_clip=3.0,
-            )
+            awr = actor_layers.awr_policy_terms(
+                -current[:, target], tf.ones(1), tf.ones(1, tf.bool)
+            )["loss"]
         numpy.testing.assert_allclose(
             tape.gradient(imitation, head.bias),
-            tape.gradient(ppo, head.bias),
+            tape.gradient(awr, head.bias),
         )
         assert (
             float(

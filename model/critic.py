@@ -733,6 +733,35 @@ class PaymentCritic(tf.keras.Model):
         result["payment_probability"] = joint_settlement.marginals(result)
         return result
 
+    def projected_mean_std(self, inputs):
+        """ST3 moments of the action's projected current-hand settlement."""
+        forecast = joint_settlement.decode(
+            {**inputs, **PaymentCritic.distributions(self, inputs)}
+        )
+        payoff = joint_settlement.continuation_payoffs(
+            scores=forecast["joint_scores"],
+            ranks=forecast["joint_ranks"],
+            support=forecast["joint_support"],
+            dealer=inputs["dealer"],
+            hand_number=inputs["hand_number"],
+            pot=inputs["pot"],
+        )
+        mean = joint_settlement.expectation(
+            forecast["joint_probability"], payoff
+        )
+        return tf.stack(
+            [
+                mean,
+                tf.sqrt(
+                    joint_settlement.expectation(
+                        forecast["joint_probability"],
+                        tf.square(payoff - mean[:, None, None]),
+                    )
+                ),
+            ],
+            axis=1,
+        )
+
     def chunk_statistics(self, inputs, labels, weights=None):
         # Inline the differentiable body into the chunk compilation. Nested
         # compiled gradients can specialize on forward tensor values.
@@ -1055,7 +1084,7 @@ def candidate_probabilities(features, outputs):
         probability["response_policy_logits"][:, 149],
     )
     # Win/pass exposes a current-hand forecast, not a fabricated
-    # action-conditioned forecast. PPO uses the fitted state-value head.
+    # action-conditioned forecast.
     return tf.where(
         (features["decision_phase"] == 4)[:, None],
         tf.one_hot(260, 295),

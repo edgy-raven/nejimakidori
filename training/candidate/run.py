@@ -14,13 +14,9 @@ import tensorflow as tf
 
 from log_dataset import focus_sampling, scoring, training_data
 from model import actions, export, joint_settlement
-from training import (
-    candidate_collection,
-    candidate_monitor,
-    online_training,
-    self_play,
-)
+from training import self_play
 from training import trainer as training
+from training.candidate import collection, monitor, state
 
 
 def allocation(total, record_fraction, target_fraction, *, start=0):
@@ -128,7 +124,7 @@ class Replay:
         if self.arrays is not None:
             for value in self.arrays:
                 value.flush()
-            online_training.save(
+            state.save(
                 self.path / "manifest.json",
                 {
                     "seen": self.seen,
@@ -347,6 +343,12 @@ def settings(args):
             raise ValueError(f"{name} must be finite and positive")
     if not numpy.isfinite(args.awr_pull) or args.awr_pull < 0:
         raise ValueError("AWR pull must be finite and nonnegative")
+    if args.awr_pull and not args.awr_reference:
+        raise ValueError("AWR pull requires fixed --awr-reference weights")
+    if args.awr_q_std is not None and (
+        not numpy.isfinite(args.awr_q_std) or args.awr_q_std < 0
+    ):
+        raise ValueError("AWR Q standard-deviation penalty must be nonnegative")
     if not numpy.isfinite(args.awr_entropy) or args.awr_entropy < 0:
         raise ValueError("AWR entropy must be finite and nonnegative")
     command = json.loads(pathlib.Path(args.evaluation_command).read_text())
@@ -441,12 +443,6 @@ def run(args):
     root = pathlib.Path(args.output)
     root.mkdir(parents=True, exist_ok=False)
     generator = numpy.random.default_rng(args.seed)
-    args.ppo_learning_rate = args.awr_learning_rate
-    args.supervised_learning_rate = args.awr_learning_rate
-    args.foundation_exposures = args.awr_exposures = 0
-    args.awr_only_exposures = args.final_awr_exposures = 0
-    args.block_exposures = 1
-    args.prior_weight = 0.0
     features = self_play.initial_features(args.seed)
     with strategy.scope():
         network = export.load_network(args.initial, features)
@@ -454,17 +450,18 @@ def run(args):
             training.Trainer(
                 network=network,
                 args=args,
-                first=(features, {}, {}),
+                features=features,
                 mirror=(
-                    export.load_network(args.initial, features).actor
+                    export.load_network(args.awr_reference, features).actor
                     if args.awr_pull
                     else None
                 ),
                 mirror_coefficient=args.awr_pull,
+                awr_q_std=args.awr_q_std,
             ),
             strategy,
         )
-    online_training.save(
+    state.save(
         root / "plan.json",
         {
             **vars(args),
@@ -474,6 +471,13 @@ def run(args):
             "initial_sha256": hashlib.sha256(
                 pathlib.Path(args.initial).read_bytes()
             ).hexdigest(),
+            "awr_reference_sha256": (
+                hashlib.sha256(
+                    pathlib.Path(args.awr_reference).read_bytes()
+                ).hexdigest()
+                if args.awr_pull
+                else None
+            ),
             "root_source": "generated_games",
             "optimizer_restart": True,
             "collection_policy_lag_cohorts": 1,
@@ -492,12 +496,12 @@ def run(args):
         )
     ]
     with tf.device(strategy.extended.worker_devices[0]):
-        evaluate_roots = online_training.disagreement_evaluator(network)
-    monitor = candidate_monitor.Monitor(root, positions, vars(args))
+        evaluate_roots = collection.disagreement_evaluator(network)
+    progress = monitor.Monitor(root, positions, vars(args))
     exposures = cohort = games = 0
 
     def report(stage, metrics):
-        monitor.report(
+        progress.report(
             stage=stage,
             metrics=metrics,
             exposures=exposures,
@@ -518,7 +522,6 @@ def run(args):
         stage = "record-awr"
         report(stage, {})
         seen = 0
-        trainer.trainer.refresh_mirror()
         for tensors in record_stream(args):
             batch = tf.nest.map_structure(lambda value: value.numpy(), tensors)
             count = len(batch["chosen"])
@@ -528,7 +531,7 @@ def run(args):
             padded = full_batch(packed, args.batch_size)
             set_awr_learning_rate(trainer, args, exposures, positions)
             metrics = trainer.policy_update(
-                padded, None, tf.constant(count, tf.int32), awr=True
+                padded, tf.constant(count, tf.int32)
             )
             exposures += count
             seen += count
@@ -537,13 +540,12 @@ def run(args):
                 != (seen - count) // args.cohort_exposures
             ):
                 save_cohort(network, root, exposures)
-                trainer.trainer.refresh_mirror()
             report(stage, metrics)
         if seen != positions:
             raise ValueError(f"Dataset count mismatch: {seen} != {positions}")
         finish(stage)
     pools[1].reservoir = False
-    with candidate_collection.Prefetch(
+    with collection.Prefetch(
         weights=args.initial,
         device=f"/GPU:{collection_device_ix}",
         games=args.games,
@@ -624,7 +626,6 @@ def run(args):
                         )
                 collection_seconds = time.monotonic() - collection_started
                 report(stage + "_updating", {})
-                trainer.trainer.refresh_mirror()
                 for begin in range(0, count, args.batch_size):
                     size = min(args.batch_size, count - begin)
                     counts = allocation(
@@ -637,9 +638,7 @@ def run(args):
                     set_awr_learning_rate(trainer, args, exposures, positions)
                     metrics = trainer.policy_update(
                         full_batch(batch, args.batch_size),
-                        None,
                         tf.constant(size, tf.int32),
-                        awr=True,
                     )
                     exposures += size
                     report(stage, metrics)
@@ -697,7 +696,7 @@ def run(args):
             finish(stage)
     network.save_weights(root / "final.weights.h5")
     report("complete", {})
-    monitor.close()
+    progress.close()
 
 
 def argument_parser():
@@ -725,9 +724,14 @@ def argument_parser():
     parser.add_argument("--awr-temperature", type=float, default=3)
     parser.add_argument("--awr-entropy", type=float, default=0.01)
     parser.add_argument("--awr-pull", type=float, default=0.0)
+    parser.add_argument(
+        "--awr-q-std",
+        type=float,
+        help="Weight actions by predicted Q mean minus this many ST3 stds",
+    )
+    parser.add_argument(
+        "--awr-reference",
+        help="Fixed reference-policy weights for the AWR KL magnet",
+    )
     parser.add_argument("--seed", type=int, default=2042)
     return parser
-
-
-if __name__ == "__main__":
-    run(argument_parser().parse_args())

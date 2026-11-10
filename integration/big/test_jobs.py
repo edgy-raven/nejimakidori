@@ -24,7 +24,8 @@ def test_dataset_job_builds_joint_records_and_resumes(tmp_path):
     reserve.write_text(json.dumps({"games": []}))
     command = [
         sys.executable,
-        "dataset.py",
+        "-m",
+        "log_dataset",
         "--archives",
         str(archives),
         "--reserve",

@@ -1,12 +1,25 @@
-# Model and inference
+# Model
 
-Network components, feature representations, scoring and inference live here.
-See [architecture](ARCHITECTURE.md) for model behavior and tensor ownership.
+## Guides
 
-Training runners, optimizers, collection, evaluation and experiment tools live
-in [training/](../training/README.md). Model imports do not load those workflows;
-the export CLI imports snapshot and collection helpers only when invoked.
+| Topic | Read |
+| --- | --- |
+| Inputs, predictions and settlement | [Architecture](ARCHITECTURE.md) |
+| Legality, gradient constraints and compatibility | [Constraints](CONSTRAINTS.md) |
+| Current training objective | [Objective](../training/OBJECTIVE.md) |
+| Export and match evaluation | [Evaluation](../training/EVALUATION.md) |
 
-Export a checkpoint with `python -m model.export --help`.
-[Inference](inference.py) loads and validates SavedModel signatures for local
-prediction and evaluation.
+## Source map
+
+| Area | Modules |
+| --- | --- |
+| Network and shared representations | [network.py](network.py), [encoder.py](encoder.py) |
+| Policy and legal choices | [actor.py](actor.py), [actions.py](actions.py) |
+| Opponent beliefs | [beliefs.py](beliefs.py) |
+| Action outcomes and settlement | [critic.py](critic.py), [joint_settlement.py](joint_settlement.py) |
+| Score vocabulary and legality | [outcomes.py](outcomes.py), [payment_scoring.py](payment_scoring.py) |
+| Shared loss reductions | [losses.py](losses.py) |
+| SavedModel creation and loading | [export.py](export.py), [inference.py](inference.py) |
+
+Training orchestration lives in [training/](../training/README.md). Model imports
+do not load runners; export loads snapshot and collection helpers when invoked.

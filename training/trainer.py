@@ -1,6 +1,5 @@
 """AWR updates for mixed recorded and generated replay."""
 
-import numpy
 import tensorflow as tf
 
 from log_dataset import training_data
@@ -8,9 +7,6 @@ from model import actions
 from model import actor as actor_layers
 from model import critic, joint_settlement, losses
 from training import optimization
-
-PAYMENT_LOSS_WEIGHT = 0.1
-AUXILIARY_LOSS_WEIGHT = 0.01
 
 
 class Trainer:
@@ -39,33 +35,11 @@ class Trainer:
         )
         self.awr_optimizer.build(network.trainable_variables)
 
-    def awr_update(
-        self,
-        *,
-        features,
-        labels,
-        returns,
-        payment_points,
-        count,
-        legal,
-        head,
-        train=True,
-    ):
-        """One actor/value/settlement update for every replay source.
-
-        Features are compact packed buffers. Returns and V use ST3 / 100;
-        the single AWR temperature uses ST3. No behavior-policy probabilities
-        or PPO advantages are consumed here.
-        """
-        features = self.feature_packing.unpack(features)
-        selected_labels = tf.stack(
-            [
-                tf.cast(labels[name], tf.int32)
-                for name in actions.TRAIN_POLICY_HEADS
-            ],
-            axis=1,
-        )
-        chosen = tf.gather(selected_labels, head, batch_dims=1)[:count]
+    @tf.function(reduce_retracing=True)
+    def policy_update(self, batch, count, train=True):
+        """One actor/value/settlement update for compact packed replay."""
+        features = self.feature_packing.unpack(batch["features"])
+        chosen = batch["chosen"][:count]
         if self.mirror is not None:
             reference = self.mirror(features, training=False)
         with tf.GradientTape() as tape:
@@ -76,18 +50,30 @@ class Trainer:
                 features,
                 outputs,
                 state,
-                critic.chosen_actions(features, labels),
+                critic.chosen_actions(
+                    features,
+                    {
+                        name: tf.where(
+                            batch["head"] == index, batch["chosen"], -1
+                        )
+                        for index, name in enumerate(actions.TRAIN_POLICY_HEADS)
+                    },
+                ),
             )
             statistics = self.network.critic.supervised_statistics(
                 recorded,
-                joint_settlement.payment_labels(payment_points, recorded),
-                valid=tf.range(tf.shape(returns)[0]) < count,
+                joint_settlement.payment_labels(
+                    batch["payment_points"], recorded
+                ),
+                valid=tf.range(tf.shape(batch["returns"])[0]) < count,
             )
-            current = actor_layers.distribution(outputs, head, legal)[:count]
+            current = actor_layers.distribution(
+                outputs, batch["head"], batch["legal"]
+            )[:count]
             if self.mirror is not None:
-                reference = actor_layers.distribution(reference, head, legal)[
-                    :count
-                ]
+                reference = actor_layers.distribution(
+                    reference, batch["head"], batch["legal"]
+                )[:count]
             valid = tf.ones(count, tf.bool)
             if self.awr_q_std is not None:
                 # Score only the observed action, without recording gradients
@@ -99,7 +85,7 @@ class Trainer:
                         dynamic_size=True,
                         element_shape=[32, 2],
                     )
-                    for begin in tf.range(0, tf.shape(returns)[0], 32):
+                    for begin in tf.range(0, tf.shape(batch["returns"])[0], 32):
                         moments = moments.write(
                             begin // 32,
                             self.network.critic.projected_mean_std(
@@ -108,7 +94,7 @@ class Trainer:
                                         value,
                                         tf.minimum(
                                             tf.range(begin, begin + 32),
-                                            tf.shape(returns)[0] - 1,
+                                            tf.shape(batch["returns"])[0] - 1,
                                         ),
                                     )
                                     for name, value in recorded.items()
@@ -120,7 +106,7 @@ class Trainer:
                         moments[:, 0] - self.awr_q_std * moments[:, 1]
                     )
             else:
-                policy_target = returns[:count] * 100.0
+                policy_target = batch["returns"][:count] * 100.0
             advantages = tf.stop_gradient(
                 (policy_target - outputs["state_value"][:count] * 100.0)
                 / self.args.awr_temperature
@@ -154,17 +140,20 @@ class Trainer:
                     ),
                     "value_loss": mean(
                         tf.square(
-                            outputs["state_value"][:count] - returns[:count]
+                            outputs["state_value"][:count]
+                            - batch["returns"][:count]
                         ),
                         valid,
                     ),
                     "value_bias": mean(
-                        outputs["state_value"][:count] - returns[:count], valid
+                        outputs["state_value"][:count]
+                        - batch["returns"][:count],
+                        valid,
                     ),
                     **actor_layers.decision_regularizers(
                         outputs=outputs,
                         current=current,
-                        heads=head,
+                        heads=batch["head"],
                         count=count,
                         mean=mean,
                     ),
@@ -184,9 +173,9 @@ class Trainer:
             loss = (
                 metrics["loss"]
                 + metrics["value_loss"]
-                + PAYMENT_LOSS_WEIGHT
+                + 0.1
                 * (metrics["payment_nll"] + metrics["critic_constraint_loss"])
-                + AUXILIARY_LOSS_WEIGHT * metrics["constraint_loss"]
+                + 0.01 * metrics["constraint_loss"]
                 - self.args.awr_entropy * metrics["entropy"]
             )
             if self.mirror is not None:
@@ -209,9 +198,7 @@ class Trainer:
         return {
             **metrics,
             "policy": metrics["loss"],
-            "auxiliary": loss,
             "joint_loss": loss,
-            "belief_loss": tf.constant(0.0),
             "learning_rate": tf.identity(self.awr_optimizer.learning_rate),
             "imitation_count": tf.reduce_sum(tf.cast(valid, tf.float32)),
             "imitation_correct": tf.reduce_sum(
@@ -221,22 +208,6 @@ class Trainer:
                 tf.cast(tf.reduce_any(matches, axis=1), tf.float32)
             ),
         }
-
-    @tf.function(reduce_retracing=True)
-    def policy_update(self, batch, count, train=True):
-        return self.awr_update(
-            features=batch["features"],
-            labels={
-                name: tf.where(batch["head"] == index, batch["chosen"], -1)
-                for index, name in enumerate(actions.TRAIN_POLICY_HEADS)
-            },
-            returns=batch["returns"],
-            payment_points=batch["payment_points"],
-            count=count,
-            legal=batch["legal"],
-            head=batch["head"],
-            train=train,
-        )
 
 
 class DistributedTrainer:
@@ -304,9 +275,3 @@ class DistributedTrainer:
             )
         )
         return self.update(self.distribute(batch), valid)
-
-
-def padded_batch(batch, indices, size):
-    """Repeat a valid row for shape stability; callers exclude padded rows."""
-    indices = numpy.pad(indices, (0, size - len(indices)), mode="edge")
-    return tf.nest.map_structure(lambda value: value[indices], batch)

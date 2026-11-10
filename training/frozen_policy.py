@@ -1,6 +1,5 @@
 """Frozen source snapshots and isolated policy execution."""
 
-import hashlib
 import json
 import os
 import pathlib
@@ -144,17 +143,6 @@ for line in sys.stdin:
 """
 
 
-def source_hashes(root):
-    root = pathlib.Path(root)
-    return {
-        str(path.relative_to(root)): hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
-
-
 def freeze_source(source, target, include_native=False):
     source, target = pathlib.Path(source), pathlib.Path(target)
     shutil.copytree(
@@ -168,7 +156,6 @@ def freeze_source(source, target, include_native=False):
             *(() if include_native else (".native", "*.so")),
         ),
     )
-    return source_hashes(target)
 
 
 def source_directory(model_path):

@@ -228,7 +228,10 @@ def full_batch(batch, batch_size):
     count = len(batch["chosen"])
     if count == batch_size:
         return batch
-    return training.padded_batch(batch, numpy.arange(count), batch_size)
+    indices = numpy.pad(
+        numpy.arange(count), (0, batch_size - count), mode="edge"
+    )
+    return tf.nest.map_structure(lambda value: value[indices], batch)
 
 
 def add_replay(pools, batch, targets):

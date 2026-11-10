@@ -1,11 +1,11 @@
 # Serve the model
 
 The HTTP service loads one SavedModel and handles stateless prediction requests.
-Create a matching export with the [training guide](../training/README.md#export-and-evaluate),
-then run from the repository root:
+Download the [released distillation model](../weights/README.md), then run
+from the matching source checkout:
 
 ```sh
-MODEL_PATH=/path/to/run/policy/saved_model python -m service.serve
+MODEL_PATH=/path/to/nejimakidori-distill-20261110/saved_model python -m service.serve
 curl --fail http://127.0.0.1:8792/health
 ```
 

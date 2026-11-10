@@ -344,11 +344,8 @@ def dataset(
     seed=941,
     *,
     drop_remainder=None,
-    companion=None,
 ):
     sampling = focus_sampling.Sampling(sampling)
-    if companion is not None and sampling != focus_sampling.Sampling.NATURAL:
-        raise ValueError("Companion records require natural sampling")
     if drop_remainder is None:
         drop_remainder = partition != "validation"
     if sampling == focus_sampling.Sampling.MIXED:
@@ -404,23 +401,8 @@ def dataset(
     if repeat:
         stream = stream.shuffle(len(paths), seed=seed).repeat()
 
-    def read(path):
-        records = tf.data.TFRecordDataset(path, compression_type="GZIP")
-        if companion is not None:
-            filename = tf.strings.split(path, "/")[-1]
-            records = tf.data.Dataset.zip(
-                {
-                    "record": records,
-                    "teacher": tf.data.TFRecordDataset(
-                        tf.strings.join([str(companion), "/", filename]),
-                        compression_type="GZIP",
-                    ),
-                }
-            )
-        return records
-
     stream = stream.interleave(
-        read,
+        lambda path: tf.data.TFRecordDataset(path, compression_type="GZIP"),
         cycle_length=min(8, len(paths)),
         block_length=64 if repeat else 1,
         num_parallel_calls=min(8, len(paths)),
@@ -429,7 +411,7 @@ def dataset(
 
     def select(raw):
         metadata = tf.io.parse_example(
-            raw["record"] if companion is not None else raw,
+            raw,
             {
                 "critic/partition": tf.io.FixedLenFeature([], tf.int64),
                 "meta/focus_categories": tf.io.FixedLenFeature([], tf.int64),

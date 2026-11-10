@@ -5,7 +5,7 @@ separate always-on-top window. Tracking reads the game window's WebSocket
 traffic through Electron's debugger. It does not capture another browser,
 read screen pixels, or play moves automatically.
 
-From PowerShell, with Node.js and npm cied:
+From PowerShell, with Node.js and npm installed:
 
 ```powershell
 cd controller

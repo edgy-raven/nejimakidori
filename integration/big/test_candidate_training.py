@@ -1,4 +1,4 @@
-"""Candidate passes preserve teacher, source budgets and observed targets."""
+"""Candidate AWR passes preserve source budgets and observed targets."""
 
 import json
 import pathlib
@@ -9,9 +9,7 @@ import pytest
 import tensorflow as tf
 
 from log_dataset import afk, replay, training_data
-from model import actions
 from training import candidate_training, self_play
-from training import trainer as training
 
 
 def test_exact_source_quotas_and_disk_replay(tmp_path):
@@ -209,112 +207,18 @@ def test_record_adapter_keeps_legality_return_and_target_categories(
         [1, 2, 4, 12],
     )
 
-    fingerprints = tf.raw_ops.Fingerprint(data=raw, method="farmhash64").numpy()
-    companion = []
-    for index, fingerprint in enumerate(fingerprints):
-        example = tf.train.Example()
-        example.features.feature["fingerprint"].bytes_list.value.append(
-            fingerprint.tobytes()
-        )
-        example.features.feature["legacy"].bytes_list.value.append(
-            numpy.array([index], numpy.float32).tobytes()
-        )
-        companion.append(example.SerializeToString())
     monkeypatch.setattr(
         training_data,
         "dataset",
-        lambda **kwargs: tf.data.Dataset.from_tensor_slices(
-            {"record": raw, "teacher": companion}
-        ).batch(2),
+        lambda **kwargs: tf.data.Dataset.from_tensor_slices(raw).batch(2),
     )
-    args = types.SimpleNamespace(
-        data="fixture", batch_size=2, seed=941, teacher_features="companion"
-    )
-    fields = {"legacy": {"shape": [1], "dtype": "float32"}}
-    batches = list(
-        candidate_training.record_stream(
-            args, teacher_fields=fields
-        ).as_numpy_iterator()
-    )
+    args = types.SimpleNamespace(data="fixture", batch_size=2, seed=941)
+    batches = list(candidate_training.record_stream(args).as_numpy_iterator())
     assert [len(batch["chosen"]) for batch in batches] == [2, 1]
     numpy.testing.assert_array_equal(
-        numpy.concatenate([batch["features"]["legacy"] for batch in batches]),
-        [[0], [1], [2]],
+        numpy.concatenate([batch["returns"] for batch in batches]),
+        expected[2]["returns"],
     )
-    companion.reverse()
-    with pytest.raises(tf.errors.InvalidArgumentError, match="alignment"):
-        list(
-            candidate_training.record_stream(
-                args, teacher_fields=fields
-            ).as_numpy_iterator()
-        )
-
-
-def test_distillation_changes_only_student_and_ignores_padding():
-    class Actor(tf.keras.Model):
-        def __init__(self):
-            super().__init__()
-            self.logits = self.add_weight(shape=(2,), initializer="zeros")
-
-        def call(self, features, training=False):
-            assert set(features) == {"x"}
-            return {
-                name: tf.broadcast_to(
-                    self.logits, [tf.shape(features["x"])[0], 2]
-                )
-                for name in actions.TRAIN_POLICY_HEADS
-            }
-
-    strategy = tf.distribute.MirroredStrategy(devices=["/CPU:0"])
-    with strategy.scope():
-        student = Actor()
-        student({"x": tf.zeros((1, 1))})
-        teacher_logits = tf.Variable([2.0, -2.0])
-
-        @tf.function
-        def teacher(**features):
-            return {
-                name: tf.broadcast_to(
-                    teacher_logits, [tf.shape(features["x"])[0], 2]
-                )
-                + features["legacy"] * tf.constant([[1.0, -1.0]])
-                for name in actions.TRAIN_POLICY_HEADS
-            }
-
-        trainer = types.SimpleNamespace(
-            trainer=types.SimpleNamespace(
-                network=types.SimpleNamespace(actor=student)
-            ),
-            strategy=strategy,
-            feature_packing=training_data.PackedBatch({"x": tf.zeros((1, 1))}),
-        )
-        trainer.distribute = (
-            lambda batch: training.DistributedTrainer.distribute(trainer, batch)
-        )
-        distiller = candidate_training.Distiller(
-            trainer,
-            teacher.get_concrete_function(
-                x=tf.TensorSpec([None, 1], tf.float32),
-                legacy=tf.TensorSpec([None, 1], tf.float32),
-            ),
-            0.01,
-        )
-    batch = {
-        "features": distiller.packing.pack_numpy(
-            {
-                "x": numpy.zeros((4, 1), numpy.float32),
-                "legacy": numpy.ones((4, 1), numpy.float32),
-            }
-        ),
-        "head": numpy.zeros(4, numpy.int32),
-        "legal": numpy.tile(numpy.arange(150) < 2, (4, 1)),
-        "chosen": numpy.zeros(4, numpy.int32),
-    }
-    first = float(distiller.train(batch, 1))
-    assert float(student.logits[0]) > 0
-    assert float(distiller.train(batch, 1)) < first
-    numpy.testing.assert_array_equal(teacher_logits, [2, -2])
-    assert int(distiller.optimizer.iterations.numpy()) == 2
 
 
 def test_record_stream_consumes_rows_without_a_small_fixed_cache(monkeypatch):
@@ -353,7 +257,7 @@ def test_record_stream_consumes_rows_without_a_small_fixed_cache(monkeypatch):
     assert targeted == list(range(1, 12, 2))
 
 
-def test_mixed_only_restart_accepts_capped_ramp_without_teacher(tmp_path):
+def test_recorded_and_mixed_restarts_accept_capped_ramp(tmp_path):
     command = tmp_path / "evaluation.json"
     command.write_text(json.dumps(["evaluate", "{weights}", "{output}"]))
     args = candidate_training.argument_parser().parse_args(
@@ -375,7 +279,6 @@ def test_mixed_only_restart_accepts_capped_ramp_without_teacher(tmp_path):
     )
     fractions, _ = candidate_training.settings(args)
     assert fractions == [0.8, 0.6, 0.4, 0.2, 0.2]
-    assert args.teacher is None
     args.awr_pull = 0.3
     candidate_training.settings(args)
     for coefficient in (-0.1, float("nan"), float("inf")):
@@ -384,76 +287,7 @@ def test_mixed_only_restart_accepts_capped_ramp_without_teacher(tmp_path):
             candidate_training.settings(args)
     args.awr_pull = 0.3
     args.mixed_only = False
-    with pytest.raises(ValueError, match="Distillation requires"):
-        candidate_training.settings(args)
-    args.skip_distill = True
     candidate_training.settings(args)
-    assert candidate_training.restore_distillation(args, 100) == {
-        "exposures": 0,
-        "cohort": 0,
-        "games": 0,
-        "elapsed_seconds": 0,
-    }
-    args.skip_distill = False
-    args.resume_after_distill = True
-    candidate_training.settings(args)
-
-
-def test_distillation_boundary_resume_preserves_progress(tmp_path, monkeypatch):
-    args = types.SimpleNamespace(
-        output=str(tmp_path),
-        initial=str(tmp_path / "saved.weights.h5"),
-        resume_after_distill=True,
-    )
-    pathlib.Path(args.initial).write_bytes(b"saved checkpoint")
-    (tmp_path / "distill.weights.h5").write_bytes(b"saved checkpoint")
-    for name in ("record-targeted", "generated-natural", "generated-targeted"):
-        (tmp_path / "replay" / name).mkdir(parents=True)
-    progress = dict(
-        stage="record-awr",
-        exposures=100,
-        cohort=0,
-        games=0,
-        elapsed_seconds=300,
-        updated_at=1100,
-    )
-    (tmp_path / "status.json").write_text(json.dumps(progress))
-    with pytest.raises(ValueError, match="distillation boundary"):
-        candidate_training.restore_distillation(args, 100)
-    progress["stage"] = "distill_evaluation"
-    (tmp_path / "status.json").write_text(json.dumps(progress))
-    monkeypatch.setattr(candidate_training.time, "time", lambda: 1200)
-    restored = candidate_training.restore_distillation(args, 100)
-    assert restored["exposures"] == 100
-    assert restored["elapsed_seconds"] == 400
-    assert not list((tmp_path / "replay").iterdir())
-    calls, reports = [], []
-    monkeypatch.setattr(
-        candidate_training.subprocess,
-        "run",
-        lambda argv, check: calls.append(argv),
-    )
-    candidate_training.finish_checkpoint(
-        stage="distill",
-        root=tmp_path,
-        network=object(),
-        pools=(),
-        report=lambda stage, metrics: reports.append(stage),
-        evaluation_command=["evaluate", "{weights}", "{output}"],
-        save=False,
-    )
-    assert calls == [
-        [
-            "evaluate",
-            str(tmp_path / "distill.weights.h5"),
-            str(tmp_path / "distill-evaluation"),
-        ]
-    ]
-    assert reports == ["distill_evaluation", "distill_complete"]
-    args.resume_after_distill = False
-    assert candidate_training.restore_distillation(args, 100) == dict(
-        exposures=0, cohort=0, games=0, elapsed_seconds=0
-    )
 
 
 def test_cohort_checkpoints_are_immutable_and_latest_tracks_progress(tmp_path):
@@ -472,27 +306,27 @@ def test_cohort_checkpoints_are_immutable_and_latest_tracks_progress(tmp_path):
     assert (tmp_path / "latest.weights.h5").read_bytes() == b"second cohort"
 
 
-@pytest.mark.parametrize(
-    "mixed_only,skip_distill", [(False, False), (True, False), (False, True)]
-)
-def test_awr_rate_ramps_across_passes_without_counting_distillation(
-    mixed_only, skip_distill
-):
+@pytest.mark.parametrize("mixed_only", [False, True])
+def test_awr_rate_is_constant_within_each_pass(mixed_only):
     args = types.SimpleNamespace(
         mixed_only=mixed_only,
-        skip_distill=skip_distill,
-        awr_learning_rate=1e-5,
+        awr_learning_rate=5e-6,
         awr_final_learning_rate=3e-6,
+        record_fractions="0.8,0.6,0.4,0.2,0.2",
     )
     trainer = types.SimpleNamespace(
         awr_optimizer=types.SimpleNamespace(learning_rate=tf.Variable(0.0))
     )
-    start = 0 if mixed_only or skip_distill else 100
-    budget = 500 if mixed_only else 600
-    for fraction, expected in ((0, 1e-5), (0.5, 6.5e-6), (1, 3e-6)):
-        candidate_training.set_awr_learning_rate(
-            trainer, args, start + fraction * budget, 100
-        )
-        assert float(trainer.awr_optimizer.learning_rate) == pytest.approx(
-            expected
-        )
+    rates = (
+        [5e-6, 13e-6 / 3, 11e-6 / 3, 3e-6, 3e-6]
+        if mixed_only
+        else [5e-6, 4.5e-6, 4e-6, 3.5e-6, 3e-6, 3e-6]
+    )
+    for phase, expected in enumerate(rates):
+        for position in (0, 50, 99):
+            candidate_training.set_awr_learning_rate(
+                trainer, args, phase * 100 + position, 100
+            )
+            assert float(trainer.awr_optimizer.learning_rate) == pytest.approx(
+                expected
+            )

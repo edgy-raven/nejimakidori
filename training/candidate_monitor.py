@@ -12,19 +12,14 @@ from training import online_training
 
 
 class Monitor:
-    def __init__(self, root, positions, plan, resume=None):
+    def __init__(self, root, positions, plan):
         self.root = pathlib.Path(root)
         self.positions = positions
-        self.phases = (
-            []
-            if plan["mixed_only"]
-            else ["distill", "record-awr"][int(plan["skip_distill"]) :]
-        ) + [f"mixed-awr-{index}" for index in range(1, 6)]
+        self.phases = ([] if plan["mixed_only"] else ["record-awr"]) + [
+            f"mixed-awr-{index}" for index in range(1, 6)
+        ]
         self.started = self.previous = time.monotonic()
         self.previous_exposures = 0
-        if resume is not None:
-            self.started -= resume["elapsed_seconds"]
-            self.previous_exposures = resume["exposures"]
         self.rate = 0.0
         self.writer = tf.summary.create_file_writer(
             str(self.root / "tensorboard")
@@ -35,7 +30,6 @@ class Monitor:
                 "Pass and total fractions": r"progress/(phase|total)_fraction$",
                 "Training positions": r"progress/total_exposures$",
             },
-            "Distillation": {"Production KL": r"distill/teacher_kl$"},
             "AWR health": {
                 "Policy loss": r"awr/policy$",
                 "Value RMSE (ST3)": r"awr/value_rmse_st3$",
@@ -43,7 +37,7 @@ class Monitor:
                 "Settlement NLL": r"awr/payment_nll$",
                 "Entropy": r"awr/entropy$",
                 "Weight health": r"awr/(effective_sample_fraction|weight_clipped_fraction)$",
-                "Learning rate": r"(awr|distill)/learning_rate$",
+                "Learning rate": r"awr/learning_rate$",
                 "Previous-policy pull": r"awr/(mirror_kl|weighted_mirror_loss)$",
                 "Local gradient norm": r"gradient/local_norm$",
             },
@@ -136,13 +130,12 @@ class Monitor:
             if exposures > self.previous_exposures:
                 tf.summary.scalar("runtime/positions_per_second", self.rate)
             for name, value in metrics.items():
-                group = "distill" if phase == "distill" else "awr"
                 if "/" in name:
                     tag = name
                 elif stage.endswith("_cohort") or stage.endswith("_collecting"):
                     tag = "collection/" + name
                 else:
-                    tag = group + "/" + name
+                    tag = "awr/" + name
                 tf.summary.scalar(tag, value)
             if "value_loss" in metrics:
                 tf.summary.scalar(

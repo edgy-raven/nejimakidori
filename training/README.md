@@ -7,7 +7,8 @@ explains the policy, beliefs and settlement model.
 Training requires CUDA GPUs visible to TensorFlow. Select devices by UUID with
 `CUDA_VISIBLE_DEVICES`; batch and phase allocations must divide evenly across
 the replicas. Initial weights must match the current architecture and feature
-schema.
+schema. Use the [released distillation weights](../weights/README.md) as the
+starting checkpoint for candidate AWR.
 
 ## Candidate replay schedule
 
@@ -23,16 +24,15 @@ before the optimizer update. Existing per-tensor clipping is unchanged; this
 metric is not the norm of the globally aggregated gradient.
 
 `training.candidate_training` warm-starts joint weights with fresh optimizer state
-and fresh counters. It runs seven passes; `N` is the exact number of positions
+and fresh counters. It runs six passes; `N` is the exact number of positions
 in training partitions 0–6, including the final partial batch:
 
 | Pass | Objective | Recorded / generated positions |
 | --- | --- | --- |
-| 1 | Forward-KL distillation from frozen production | 100% / 0% |
-| 2 | Shared AWR actor, V and settlement objective | 100% / 0% |
-| 3–7 | Shared AWR over mixed replay | 80/20, 60/40, 40/60, 20/80, 0/100 |
+| 1 | Shared AWR actor, V and settlement objective | 100% / 0% |
+| 2–6 | Shared AWR over mixed replay | 80/20, 60/40, 40/60, 20/80, 0/100 |
 
-The first two passes visit every training record once. Each later pass is an
+The first pass visits every training record once. Each later pass is an
 `N`-exposure budget, including sampled replay; it is not a promise to visit each
 generated position once. `--record-fractions` configures five nonincreasing
 record shares in [0, 1]; it may end above zero to cap self play below 100%.
@@ -111,44 +111,16 @@ alongside the forced root. Matching wall seeds therefore does not imply that
 training consumes a paired action comparison or eight-runout mean target.
 
 Ordinary recorded examples stream through the corpus rather than a fixed small
-cache. A bounded targeted-record reservoir is built during pass 2, then refreshed
+cache. A bounded targeted-record reservoir is built during pass 1, then refreshed
 from the ordinary record stream. Generated replay uses bounded recent pools,
 shuffled within collection chunks so a chunk's final fork cannot dominate simply
 because it was appended last. `--replay-positions` (default 524,288) is capacity
 **per pool**; three memory-mapped pools live under the run output. Use artifact
-storage for both the run and teacher companions. `--fresh-positions` controls
+storage for the run. `--fresh-positions` controls
 new collection before each cohort; `--cohort-exposures` controls replay updates.
 The final partial cohort scales its fresh-position requirement proportionally.
 Collection shrinks its last game batch using observed positions per game and
 continues until that requirement is met, avoiding an unnecessary full batch.
-
-Production has eight inputs that the current dataset no longer stores. Reuse
-retained production records when available, joining by game, hand, decision and
-actor. Prepare aligned companions without regenerating existing inputs:
-
-```sh
-python -m training.teacher_features \
-  --data /path/to/dataset/data \
-  --source /path/to/production/source \
-  --teacher /path/to/production/saved_model \
-  --records /path/to/retained/production/data \
-  --output /path/to/artifacts/teacher-features --workers 8
-```
-
-This copies retained inputs and reconstructs only missing decisions from original
-game archives using the frozen production producer. Copied and reconstructed
-counts are recorded separately. Omit `--records` only when no retained corpus is
-available. Empty historical shards do not imply that their inputs exist. It does not
-regenerate student records, scoring labels or settlement targets. The frozen
-source remains unchanged; compiled helper caches live with the companions.
-`--reconstructed /path/to/previous/companions` hard-links completed shards from
-an interrupted archive reconstruction on the same filesystem, after checking
-the producer, teacher and dataset manifests. Reused work is excluded from the
-new preparation throughput and ETA calculation.
-Teacher hashes, corpus manifest hashes, per-row fingerprints, decision phase,
-wall count and own hand are checked. Reconstruction fails on unmatched states.
-The teacher's actual policy probabilities supply distillation targets; observed
-recorded actions identify the active head but are not distillation labels.
 
 A required evaluation argv JSON runs immediately after every saved pass and
 must succeed before the next pass starts. For example, `evaluation-command.json`:
@@ -168,9 +140,7 @@ screening winner or guarantee that the candidate improves.
 CUDA_VISIBLE_DEVICES=GPU-TRAIN0,GPU-TRAIN1,GPU-TRAIN2,GPU-TRAIN3,GPU-COLLECT \
 python -m training.candidate_training --collection-device GPU-COLLECT \
   --games 408 \
-  --initial /path/to/current.weights.h5 \
-  --teacher /path/to/production/saved_model \
-  --teacher-features /path/to/artifacts/teacher-features \
+  --initial /path/to/release/final.weights.h5 \
   --data /path/to/dataset/data --output /path/to/artifacts/candidate \
   --evaluation-command /path/to/evaluation-command.json
 ```
@@ -180,35 +150,24 @@ Evaluation workers use `--devices` GPU UUIDs in round-robin order.
 games per worker (default 8). Benchmark worker allocation and batch size
 separately from optimizer throughput; checkpoint evaluations pause training.
 
-For a fresh restart beginning at recorded AWR, use `--skip-distill` and
-pass a saved `distill.weights.h5` as `--initial` with a new output directory.
-This runs recorded AWR followed by five mixed passes, with fresh optimizers,
-zero counters, a restarted AWR learning-rate ramp and fresh TensorBoard history.
-No teacher inputs or repeated distillation evaluation are required.
+Every candidate run begins at recorded AWR from `--initial`, using a new
+output directory, fresh optimizers, zero counters and fresh TensorBoard history.
+The released distillation checkpoint is the starting model; candidate training
+does not load another model or recreate that checkpoint. An existing output
+directory is rejected. Candidate runs have no optimizer-state resume path.
 
-`--resume-after-distill` continues an interrupted distillation checkpoint
-match in the existing output directory, then enters recorded AWR. Pass that
-directory's exact `distill.weights.h5` as `--initial`. This narrow recovery
-requires the completed distillation exposure count and empty replay pools;
-AWR has not started, so its optimizer state is still fresh. Completed match
-records, exposure counters, elapsed time and TensorBoard history are retained.
-An existing evaluation export is reused only when its checkpoint hash matches.
-Later AWR boundaries require their own optimizer/replay state and are not
-supported by this flag.
-
-Distillation uses constant `--distill-learning-rate`. AWR ramps linearly from
-`--awr-learning-rate` to `--awr-final-learning-rate` across all AWR exposure
-budgets, excluding distillation and evaluation time. All three defaults are
-`1e-5`, so equal endpoints give a constant rate. The AWR ramp and optimizer
-persist across recorded and mixed pass boundaries.
+Each AWR pass uses one constant rate. Rates interpolate by self-play share from
+`--awr-learning-rate` at the first pass's share to `--awr-final-learning-rate`
+at the final share. Repeated shares use the same rate; if every share is equal,
+the initial rate is used throughout. Recorded AWR followed by 20%, 40%, 60%,
+80%, 80% self-play, with endpoints 5e-6 and 3e-6, gives 5e-6, 4.5e-6, 4e-6,
+3.5e-6, 3e-6, 3e-6. Optimizer state persists across pass boundaries.
 `--awr-pull` adds a nonnegative coefficient times KL(current || previous)
 on the legal action distribution in every AWR update. The previous actor is
 frozen for each cohort and refreshed at the next boundary; recorded AWR uses
-`--cohort-exposures` boundaries too. Distillation retains its teacher-to-student
-forward KL and does not use this pull. Pull diagnostics are `mirror_kl` and
+`--cohort-exposures` boundaries too. Pull diagnostics are `mirror_kl` and
 `weighted_mirror_loss`. A zero coefficient disables the reference forward pass.
-V fits the
-sampled replay return distribution; it is not guaranteed to equal current-policy
+V fits the sampled replay return distribution; it is not guaranteed to equal current-policy
 full-match value. Returns retain observed hand settlement plus fixed ST3
 continuation. V and actor are updated jointly, with detached advantage weights;
 this differs from original AWR's separate value fitting and policy regression.
@@ -217,9 +176,9 @@ training. Inspect value MSE/bias, payment NLL, weight clipping and effective
 sample fraction alongside matched-game results at each boundary.
 
 For a fresh mixed-AWR run from an existing checkpoint, use `--mixed-only`
-with `--initial`. This skips distillation and record-only training, initializes
+with `--initial`. This skips record-only training, initializes
 fresh optimizers and replay, and starts exposure counters and TensorBoard at
-zero. Teacher inputs are unnecessary in this mode. The five nonincreasing
+zero. The five nonincreasing
 `--record-fractions` may end above zero: `0.8,0.6,0.4,0.2,0.2` caps self play
 at 80% while retaining the five-pass exposure budget. Collection loads the
 initial architecture and receives the current learner weights before each
@@ -260,7 +219,7 @@ The rollout objective is selectable with `--rollout-objective`: `ppo`
 `awr` (all cohort passes use AWR). With `--ppo-epochs 2`, the latter two
 compare PPO then AWR against two AWR passes at equal exposure budgets.
 Recorded and generated replay use one AWR actor/value/settlement update and
-one AdamW optimizer, separate from PPO and supervised distillation. Its learning
+one AdamW optimizer, separate from PPO and supervised training. Its learning
 rate currently uses `--ppo-learning-rate`; the supervised cosine schedule counts
 only foundation updates. The
 recorded-data and native-rollout adapters only construct its inputs. AWR uses

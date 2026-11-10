@@ -35,7 +35,7 @@ starting each shard, in addition to space for the corpus itself.
 | `--archives DIR` | Read existing archives. |
 | `--databases DIR` | Enrich ranks from historical Tenhou databases. Without `--archives`, download the pinned Houou archives first. |
 | `--extra-archives DIR` | Add another enriched source; repeat for multiple sources. |
-| `--own-bots ID ...` | Import games against the configured [RiichiLab teachers](riichilab.py). |
+| `--own-bots ID ...` | Import games against the configured [RiichiLab expert players](riichilab.py). |
 | `--limit-games N` | Build a small sample before a full corpus. |
 | `--workers N` | Set the number of CPU record builders. |
 

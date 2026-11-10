@@ -1,4 +1,4 @@
-"""Warm policy distillation, recorded AWR, then five mixed replay AWR passes."""
+"""Recorded AWR, then five mixed replay AWR passes from released weights."""
 
 import argparse
 import functools
@@ -13,14 +13,11 @@ import numpy
 import tensorflow as tf
 
 from log_dataset import focus_sampling, scoring, training_data
-from model import actions
-from model import actor as actor_layers
-from model import export, joint_settlement
+from model import actions, export, joint_settlement
 from training import (
     candidate_collection,
     candidate_monitor,
     online_training,
-    optimization,
     self_play,
 )
 from training import trainer as training
@@ -196,40 +193,8 @@ def record_batch(raw):
     }
 
 
-def record_stream(args, repeat=False, teacher_fields=None):
+def record_stream(args, repeat=False):
     # Finite natural traversal: preserve the tail, do not repeat or oversample.
-    def parse(raw):
-        if teacher_fields is None:
-            return record_batch(raw)
-        batch = record_batch(raw["record"])
-        extra = tf.io.parse_example(
-            raw["teacher"],
-            {
-                name: tf.io.FixedLenFeature([], tf.string)
-                for name in (*teacher_fields, "fingerprint")
-            },
-        )
-        tf.debugging.assert_equal(
-            tf.io.decode_raw(extra["fingerprint"], tf.uint8),
-            tf.raw_ops.Fingerprint(data=raw["record"], method="farmhash64"),
-            message="Teacher records are out of alignment",
-        )
-        batch["features"].update(
-            {
-                name: tf.reshape(
-                    tf.io.decode_raw(
-                        extra[name],
-                        tf.as_dtype(spec["dtype"]),
-                        fixed_length=int(numpy.prod(spec["shape"]))
-                        * tf.as_dtype(spec["dtype"]).size,
-                    ),
-                    [-1, *spec["shape"]],
-                )
-                for name, spec in teacher_fields.items()
-            }
-        )
-        return batch
-
     return (
         training_data.dataset(
             root=args.data,
@@ -239,98 +204,10 @@ def record_stream(args, repeat=False, teacher_fields=None):
             repeat=repeat,
             seed=args.seed,
             drop_remainder=False,
-            companion=(
-                args.teacher_features if teacher_fields is not None else None
-            ),
         )
-        .map(parse, num_parallel_calls=2)
+        .map(record_batch, num_parallel_calls=2)
         .prefetch(2)
     )
-
-
-class Distiller:
-    """Frozen production forward KL on the active legal decision only."""
-
-    def __init__(self, trainer, teacher, learning_rate):
-        self.trainer = trainer
-        self.teacher = teacher
-        self.packing = training_data.PackedBatch(
-            {
-                **{
-                    name: tf.TensorSpec([None, *spec.shape], spec.dtype)
-                    for name, spec in trainer.feature_packing.structure.items()
-                },
-                **teacher.structured_input_signature[1],
-            }
-        )
-        self.optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0
-        )
-        self.optimizer.build(trainer.trainer.network.actor.trainable_variables)
-
-    @tf.function
-    def update(self, batch, counts):
-        def step(batch, count):
-            features = self.packing.unpack(batch["features"])
-            reference = tf.stop_gradient(
-                actor_layers.distribution(
-                    self.teacher(
-                        **{
-                            name: features[name]
-                            for name in self.teacher.structured_input_signature[
-                                1
-                            ]
-                        }
-                    ),
-                    batch["head"],
-                    batch["legal"],
-                )
-            )[:count]
-            with tf.GradientTape() as tape:
-                current = actor_layers.distribution(
-                    self.trainer.trainer.network.actor(
-                        {
-                            name: features[name]
-                            for name in self.trainer.feature_packing.structure
-                        },
-                        training=False,
-                    ),
-                    batch["head"],
-                    batch["legal"],
-                )[:count]
-                kl = actor_layers.policy_kl(reference, current)
-                loss = kl / self.trainer.strategy.num_replicas_in_sync
-            optimization.apply_gradients(
-                self.optimizer,
-                tape,
-                loss,
-                self.trainer.trainer.network.actor.trainable_variables,
-            )
-            return kl
-
-        return self.trainer.strategy.reduce(
-            tf.distribute.ReduceOp.MEAN,
-            self.trainer.strategy.run(step, args=(batch, counts)),
-            None,
-        )
-
-    def train(self, batch, count):
-        size = (
-            len(batch["chosen"]) // self.trainer.strategy.num_replicas_in_sync
-        )
-        counts = (
-            self.trainer.strategy.experimental_distribute_values_from_function(
-                lambda ctx: tf.clip_by_value(
-                    count - ctx.replica_id_in_sync_group * size, 0, size
-                )
-            )
-        )
-        return self.update(
-            self.trainer.distribute(
-                {name: batch[name] for name in ("features", "head", "legal")}
-            ),
-            counts,
-        )
 
 
 def prepare(batch, packing):
@@ -446,10 +323,6 @@ def settings(args):
         or any(a < b for a, b in zip(fractions, fractions[1:]))
     ):
         raise ValueError("Five nonincreasing record shares in [0, 1] required")
-    if not (
-        args.mixed_only or args.skip_distill or args.resume_after_distill
-    ) and (not args.teacher or not args.teacher_features):
-        raise ValueError("Distillation requires teacher and teacher features")
     if not 0 < args.target_fraction < 1:
         raise ValueError(
             "Target sampling fraction must be between zero and one"
@@ -468,7 +341,6 @@ def settings(args):
     for name in (
         "awr_learning_rate",
         "awr_final_learning_rate",
-        "distill_learning_rate",
         "awr_temperature",
     ):
         if not numpy.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
@@ -489,51 +361,6 @@ def settings(args):
     return fractions, command
 
 
-def teacher_contract(args, features, teacher):
-    required = teacher.structured_input_signature[1]
-    companion = json.loads(
-        (pathlib.Path(args.teacher_features) / "manifest.json").read_text()
-    )
-    if not companion["complete"]:
-        raise ValueError("Production input reconstruction is incomplete")
-    if (
-        companion["dataset_sha256"]
-        != hashlib.sha256(
-            (pathlib.Path(args.data) / "dataset_summary.json").read_bytes()
-        ).hexdigest()
-    ):
-        raise ValueError("Production companions belong to a different corpus")
-    teacher_files = {
-        str(path.relative_to(args.teacher)): hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
-        for path in sorted(pathlib.Path(args.teacher).rglob("*"))
-        if path.is_file()
-    }
-    if companion["teacher_files"] != teacher_files:
-        raise ValueError("Production companions belong to a different teacher")
-    if set(companion["fields"]) != set(required) - set(features):
-        raise ValueError("Production companion schema does not match teacher")
-    for name, spec in required.items():
-        if (
-            name in features
-            and (
-                features[name].shape[1:] != spec.shape[1:]
-                or tf.as_dtype(features[name].dtype) != spec.dtype
-            )
-        ) or (
-            name in companion["fields"]
-            and (
-                companion["fields"][name]["shape"] != list(spec.shape[1:])
-                or companion["fields"][name]["dtype"] != spec.dtype.name
-            )
-        ):
-            raise ValueError(f"Production feature contract differs: {name}")
-    if not set(actions.TRAIN_POLICY_HEADS) <= set(teacher.structured_outputs):
-        raise ValueError("Production policy must expose all five action heads")
-    return companion, teacher_files
-
-
 def save_cohort(network, root, exposures):
     """Keep each cohort immutable; latest is an atomic pointer to its weights."""
     checkpoint = root / "checkpoints" / f"{exposures:012d}.weights.h5"
@@ -547,11 +374,10 @@ def save_cohort(network, root, exposures):
 
 
 def finish_checkpoint(
-    stage, *, root, network, pools, report, evaluation_command, save=True
+    stage, *, root, network, pools, report, evaluation_command
 ):
     weights = root / f"{stage}.weights.h5"
-    if save:
-        network.save_weights(weights)
+    network.save_weights(weights)
     for pool in pools[1:]:
         pool.flush()
     report(stage + "_evaluation", {})
@@ -568,46 +394,17 @@ def finish_checkpoint(
     report(stage + "_complete", {})
 
 
-def restore_distillation(args, positions):
-    """Restore only the boundary before the first AWR optimizer update."""
-    if not args.resume_after_distill:
-        return {"exposures": 0, "cohort": 0, "games": 0, "elapsed_seconds": 0}
-    root = pathlib.Path(args.output)
-    progress = json.loads((root / "status.json").read_text())
-    if (
-        progress["stage"] != "distill_evaluation"
-        or progress["exposures"] != positions
-        or progress["cohort"] != 0
-        or progress["games"] != 0
-    ):
-        raise ValueError("Resume requires the completed distillation boundary")
-    if hashlib.sha256(pathlib.Path(args.initial).read_bytes()).digest() != (
-        hashlib.sha256((root / "distill.weights.h5").read_bytes()).digest()
-    ):
-        raise ValueError(
-            "Resume weights differ from the distillation checkpoint"
-        )
-    paths = [
-        root / "replay" / name
-        for name in (
-            "record-targeted",
-            "generated-natural",
-            "generated-targeted",
-        )
-    ]
-    if any(any(path.iterdir()) for path in paths):
-        raise ValueError("Distillation resume requires empty replay pools")
-    for path in paths:
-        path.rmdir()
-    progress["elapsed_seconds"] += time.time() - progress["updated_at"]
-    return progress
-
-
 def set_awr_learning_rate(trainer, args, exposures, positions):
-    """Ramp across AWR exposures, excluding distillation and evaluation."""
+    """Keep each pass constant; interpolate rates by its self-play share."""
+    fractions = ([1.0] if not args.mixed_only else []) + [
+        float(value) for value in args.record_fractions.split(",")
+    ]
+    phase = exposures // positions
     fraction = (
-        exposures - (0 if args.mixed_only or args.skip_distill else positions)
-    ) / ((5 if args.mixed_only else 6) * positions)
+        (fractions[0] - fractions[phase]) / (fractions[0] - fractions[-1])
+        if fractions[0] != fractions[-1]
+        else 0.0
+    )
     trainer.awr_optimizer.learning_rate.assign(
         args.awr_learning_rate
         + fraction * (args.awr_final_learning_rate - args.awr_learning_rate)
@@ -642,17 +439,15 @@ def run(args):
         raise ValueError("Batch size must divide evenly across replicas")
     tf.keras.utils.set_random_seed(args.seed)
     root = pathlib.Path(args.output)
-    progress = restore_distillation(args, positions)
-    root.mkdir(parents=True, exist_ok=args.resume_after_distill)
+    root.mkdir(parents=True, exist_ok=False)
     generator = numpy.random.default_rng(args.seed)
     args.ppo_learning_rate = args.awr_learning_rate
-    args.supervised_learning_rate = args.distill_learning_rate
+    args.supervised_learning_rate = args.awr_learning_rate
     args.foundation_exposures = args.awr_exposures = 0
     args.awr_only_exposures = args.final_awr_exposures = 0
     args.block_exposures = 1
     args.prior_weight = 0.0
     features = self_play.initial_features(args.seed)
-    teacher_metadata = {}
     with strategy.scope():
         network = export.load_network(args.initial, features)
         trainer = training.DistributedTrainer(
@@ -669,17 +464,6 @@ def run(args):
             ),
             strategy,
         )
-        if not (
-            args.mixed_only or args.skip_distill or args.resume_after_distill
-        ):
-            teacher_module = tf.saved_model.load(args.teacher)
-            teacher = teacher_module.signatures["policy"]
-            distiller = Distiller(trainer, teacher, args.distill_learning_rate)
-            companion, teacher_files = teacher_contract(args, features, teacher)
-            teacher_metadata = {
-                "teacher_files": teacher_files,
-                "teacher_feature_source": companion["source"],
-            }
     online_training.save(
         root / "plan.json",
         {
@@ -690,7 +474,6 @@ def run(args):
             "initial_sha256": hashlib.sha256(
                 pathlib.Path(args.initial).read_bytes()
             ).hexdigest(),
-            **teacher_metadata,
             "root_source": "generated_games",
             "optimizer_restart": True,
             "collection_policy_lag_cohorts": 1,
@@ -710,12 +493,8 @@ def run(args):
     ]
     with tf.device(strategy.extended.worker_devices[0]):
         evaluate_roots = online_training.disagreement_evaluator(network)
-    monitor = candidate_monitor.Monitor(
-        root, positions, vars(args), resume=progress
-    )
-    exposures = progress["exposures"]
-    cohort = progress["cohort"]
-    games = progress["games"]
+    monitor = candidate_monitor.Monitor(root, positions, vars(args))
+    exposures = cohort = games = 0
 
     def report(stage, metrics):
         monitor.report(
@@ -735,50 +514,21 @@ def run(args):
         evaluation_command=evaluation_command,
     )
 
-    if args.resume_after_distill:
-        finish("distill", save=False)
-    for stage in (
-        ()
-        if args.mixed_only
-        else ("distill", "record-awr")[
-            int(args.skip_distill or args.resume_after_distill) :
-        ]
-    ):
+    if not args.mixed_only:
+        stage = "record-awr"
         report(stage, {})
         seen = 0
         trainer.trainer.refresh_mirror()
-        for tensors in record_stream(
-            args,
-            teacher_fields=(
-                companion["fields"] if stage == "distill" else None
-            ),
-        ):
+        for tensors in record_stream(args):
             batch = tf.nest.map_structure(lambda value: value.numpy(), tensors)
             count = len(batch["chosen"])
-            if stage == "record-awr":
-                targets = classify_records(batch, evaluate_roots, generator)
-            packed = prepare(
-                batch,
-                (
-                    distiller.packing
-                    if stage == "distill"
-                    else trainer.feature_packing
-                ),
-            )
-            if stage == "record-awr":
-                pools[1].add(packed, numpy.flatnonzero(targets > 0))
+            targets = classify_records(batch, evaluate_roots, generator)
+            packed = prepare(batch, trainer.feature_packing)
+            pools[1].add(packed, numpy.flatnonzero(targets > 0))
             padded = full_batch(packed, args.batch_size)
-            if stage == "record-awr":
-                set_awr_learning_rate(trainer, args, exposures, positions)
-            metrics = (
-                {
-                    "teacher_kl": distiller.train(padded, count),
-                    "learning_rate": args.distill_learning_rate,
-                }
-                if stage == "distill"
-                else trainer.policy_update(
-                    padded, None, tf.constant(count, tf.int32), awr=True
-                )
+            set_awr_learning_rate(trainer, args, exposures, positions)
+            metrics = trainer.policy_update(
+                padded, None, tf.constant(count, tf.int32), awr=True
             )
             exposures += count
             seen += count
@@ -792,8 +542,6 @@ def run(args):
         if seen != positions:
             raise ValueError(f"Dataset count mismatch: {seen} != {positions}")
         finish(stage)
-        if stage == "distill":
-            del distiller, teacher, teacher_module
     pools[1].reservoir = False
     with candidate_collection.Prefetch(
         weights=args.initial,
@@ -962,12 +710,7 @@ def argument_parser():
         "collection-device",
     ):
         parser.add_argument("--" + name, required=True)
-    start = parser.add_mutually_exclusive_group()
-    start.add_argument("--mixed-only", action="store_true")
-    start.add_argument("--skip-distill", action="store_true")
-    start.add_argument("--resume-after-distill", action="store_true")
-    parser.add_argument("--teacher")
-    parser.add_argument("--teacher-features")
+    parser.add_argument("--mixed-only", action="store_true")
     parser.add_argument("--record-fractions", default="0.8,0.6,0.4,0.2,0")
     parser.add_argument("--target-fraction", type=float, default=0.4)
     parser.add_argument("--batch-size", type=int, default=9216)
@@ -979,7 +722,6 @@ def argument_parser():
     parser.add_argument("--root-copies", type=int, default=1)
     parser.add_argument("--awr-learning-rate", type=float, default=1e-5)
     parser.add_argument("--awr-final-learning-rate", type=float, default=1e-5)
-    parser.add_argument("--distill-learning-rate", type=float, default=1e-5)
     parser.add_argument("--awr-temperature", type=float, default=3)
     parser.add_argument("--awr-entropy", type=float, default=0.01)
     parser.add_argument("--awr-pull", type=float, default=0.0)

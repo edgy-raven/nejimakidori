@@ -19,12 +19,14 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
     monitor = candidate_monitor.Monitor(
         tmp_path,
         100,
-        {"awr_temperature": 3, "mixed_only": False, "skip_distill": False},
+        {"awr_temperature": 3, "mixed_only": False},
     )
-    monitor.report(stage="distill", metrics={}, exposures=0, cohort=0, games=0)
     monitor.report(
-        stage="distill",
-        metrics={"teacher_kl": 0.2},
+        stage="record-awr", metrics={}, exposures=0, cohort=0, games=0
+    )
+    monitor.report(
+        stage="record-awr",
+        metrics={"policy": 0.2},
         exposures=100,
         cohort=0,
         games=0,
@@ -32,14 +34,14 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
     monitor.report(
         stage="mixed-awr-1_collecting",
         metrics={},
-        exposures=200,
+        exposures=100,
         cohort=0,
         games=0,
     )
     monitor.report(
         stage="mixed-awr-1_updating",
         metrics={},
-        exposures=200,
+        exposures=100,
         cohort=0,
         games=2,
     )
@@ -53,24 +55,24 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
             "weight_clipped_fraction": 0.2,
             "replay/record_fraction": 0.8,
         },
-        exposures=250,
+        exposures=150,
         cohort=1,
         games=2,
     )
     monitor.close()
     status = json.loads((tmp_path / "status.json").read_text())
-    assert status["phase_index"] == 3
+    assert status["phase_index"] == 2
     assert status["phase_fraction"] == 0.5
-    assert status["budget_exposures"] == 700
+    assert status["budget_exposures"] == 600
     assert status["window_positions_per_second"] == 25
     events = accumulator.EventAccumulator(str(tmp_path / "tensorboard"))
     events.Reload()
     for name, expected in {
         "awr/value_rmse_st3": 50,
         "awr/value_bias_st3": -10,
-        "distill/teacher_kl": 0.2,
+        "awr/policy": 0.2,
         "replay/record_fraction": 0.8,
-        "progress/total_fraction": 250 / 700,
+        "progress/total_fraction": 150 / 600,
     }.items():
         numpy.testing.assert_allclose(
             tensorboard.util.tensor_util.make_ndarray(
@@ -149,7 +151,7 @@ def test_restart_monitor_starts_at_zero(tmp_path, mixed_only, phase, budget):
     monitor = candidate_monitor.Monitor(
         tmp_path,
         100,
-        {"mixed_only": mixed_only, "skip_distill": not mixed_only},
+        {"mixed_only": mixed_only},
     )
     monitor.report(stage=phase, metrics={}, exposures=0, cohort=0, games=0)
     status = json.loads((tmp_path / "status.json").read_text())
@@ -161,36 +163,4 @@ def test_restart_monitor_starts_at_zero(tmp_path, mixed_only, phase, budget):
     )
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["total_fraction"] == status["phase_fraction"] == 1
-    monitor.close()
-
-
-def test_resumed_monitor_preserves_exposures_and_elapsed_time(tmp_path):
-    monitor = candidate_monitor.Monitor(
-        tmp_path,
-        100,
-        {"mixed_only": False, "skip_distill": False},
-        resume={"exposures": 100, "elapsed_seconds": 300},
-    )
-    monitor.report(
-        stage="distill_evaluation",
-        metrics={},
-        exposures=100,
-        cohort=0,
-        games=0,
-    )
-    status = json.loads((tmp_path / "status.json").read_text())
-    assert status["phase_index"] == 1
-    assert status["total_exposures"] == 100
-    assert status["elapsed_seconds"] >= 300
-    monitor.report(
-        stage="record-awr",
-        metrics={},
-        exposures=101,
-        cohort=0,
-        games=0,
-    )
-    status = json.loads((tmp_path / "status.json").read_text())
-    assert status["phase_index"] == 2
-    assert status["phase_exposures"] == 1
-    assert status["budget_exposures"] == 700
     monitor.close()

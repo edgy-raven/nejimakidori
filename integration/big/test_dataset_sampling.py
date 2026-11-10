@@ -4,7 +4,6 @@ import json
 import pathlib
 
 import numpy
-import pytest
 import riichienv
 import tensorflow as tf
 
@@ -18,7 +17,6 @@ from log_dataset import (
     training_data,
 )
 from model import payment_scoring
-from training import teacher_features
 
 
 def test_retained_players_skip_work_without_changing_decisions_or_labels():
@@ -287,29 +285,6 @@ def test_afk_filter_removes_every_seat_from_two_tsumogiri_hands():
     )
 
     assert retained == []
-
-
-def test_retained_shards_skip_empty_and_removed_games(tmp_path):
-    for index, games in enumerate((("removed", "a"), (), ("c",))):
-        with tf.io.TFRecordWriter(
-            str(tmp_path / f"train-{index:05}.tfrecord.gz"), options="GZIP"
-        ) as writer:
-            for game in games:
-                row = tf.train.Example()
-                row.features.feature["meta/game_id"].bytes_list.value.append(
-                    game.encode()
-                )
-                writer.write(row.SerializeToString())
-    starts, paths = teacher_features.retained_shards(
-        tmp_path, ["a", "b", "c", "d"], 2
-    )
-    assert starts == [0, 2]
-    assert paths == [
-        str(tmp_path / "train-00000.tfrecord.gz"),
-        str(tmp_path / "train-00002.tfrecord.gz"),
-    ]
-    with pytest.raises(ValueError, match="order"):
-        teacher_features.retained_shards(tmp_path, ["c", "a"], 2)
 
 
 def test_numpy_and_tensor_packing_preserve_bits_and_nested_shapes():

@@ -1,11 +1,12 @@
-# Nejimakidori v2
+# Nejimakidori
 
 A four-player riichi mahjong AI that predicts moves, opponent hands and
 current-hand outcomes. This repository contains the model, dataset builder,
 HTTP API and local Mahjong Soul client.
 
-This branch is v2 source. The [v1 release](weights/README.md) uses a different
-architecture and must run with its matching source.
+The [current release](weights/README.md) is the promoted distillation model.
+Use it for inference and as the starting checkpoint for AWR training. The
+service loads this one model; there is no separate teacher service.
 
 ## Setup
 

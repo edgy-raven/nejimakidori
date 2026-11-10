@@ -149,16 +149,15 @@ Padded training rows do not contribute. Heuristic policy priors remain separate.
 
 Shared-head constraint loss has weight 0.01. Critic constraint loss joins the
 critic objective at its existing weight 0.1. Offline and AWR training both
-include these terms; the retained PPO path is consistent with them. Initial
-policy distillation remains teacher-KL-only. Existing weights remain loadable;
+include these terms; the retained PPO path is consistent with them. Candidate
+training starts from the released weights. Existing weights remain loadable;
 learning these corrections requires subsequent updates.
 
 Validation and phase scheduling use the same training coordinator.
 
-The [candidate replay schedule](../training/README.md#candidate-replay-schedule) adds frozen
-production-policy distillation followed by six shared AWR passes. Mixed recorded
+The [candidate replay schedule](../training/README.md#candidate-replay-schedule)
+starts from the released weights and runs six shared AWR passes. Mixed recorded
 and generated strata enter the same minibatch, so advantage weights share one
 normalization and one optimizer. Target selection uses observed state only;
-shanten features store actual distance plus one. Production-only input fields
-are reconstructed by its frozen producer in aligned companion shards, then
-transported only for distillation. They are not added to the student schema.
+shanten features store actual distance plus one. Recorded examples and generated
+rollouts use the same current feature schema.

@@ -1,7 +1,7 @@
 # Serve the model
 
 The HTTP service loads one SavedModel and handles stateless prediction requests.
-Create a matching export with the [training guide](../model/README.md#export-and-evaluate),
+Create a matching export with the [training guide](../training/README.md#export-and-evaluate),
 then run from the repository root:
 
 ```sh

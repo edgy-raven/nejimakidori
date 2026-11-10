@@ -45,6 +45,7 @@ pub fn prefer_red_calls(legal: Vec<Action>) -> Vec<Action> {
     selected
 }
 
+#[derive(Clone)]
 pub struct Legal {
     pub discards: [bool; 37],
     pub riichi: [bool; 37],

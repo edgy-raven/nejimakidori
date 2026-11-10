@@ -9,7 +9,8 @@ import riichienv
 
 from integration import collection_reference, feature_reference
 from log_dataset import _native_collection, features, replay
-from model import actions, self_play
+from model import actions
+from training import self_play
 
 
 def test_native_features_match_python_during_complete_games(monkeypatch):

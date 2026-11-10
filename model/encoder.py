@@ -376,9 +376,12 @@ class HandBank(tf.keras.layers.Layer):
         )
         for block in self.suits:
             suits = block(suits)
+        # A leading batch axis makes Gather's gradient dense, so repeated
+        # suits sum in float32 before the cast back to the compute dtype.
         suits = tf.reshape(
             tf.cast(
-                tf.gather(tf.cast(suits, tf.float32), inverse), suits.dtype
+                tf.gather(tf.cast(suits, tf.float32)[None], inverse, axis=1)[0],
+                suits.dtype,
             ),
             (-1, 27, 128),
         )

@@ -61,6 +61,7 @@ pub struct MeldEvent {
     pub upgrade_index: Option<usize>,
     pub upgrade_tile: Option<usize>,
 }
+#[derive(Clone)]
 pub struct PublicHistory {
     pub replay: GameState,
     pub events: Vec<Value>,

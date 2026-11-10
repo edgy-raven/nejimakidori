@@ -4,7 +4,8 @@ import numpy
 import riichienv
 
 from log_dataset import _native_collection, features, replay
-from model import actions, outcomes, self_play
+from model import actions, outcomes
+from training import self_play
 
 
 def advance(ctx, events, statistics):

@@ -41,14 +41,14 @@ def test_generated_records_store_and_read_native_focus(tmp_path):
 
     import tensorflow as tf
 
-    from log_dataset import afk, scoring, training_data
+    from log_dataset import afk, training_data
 
     events = json.loads(
         pathlib.Path(__file__)
         .parent.parent.joinpath("fixtures/model/payment_dealer_90fu.json")
         .read_text()
     )
-    targets = scoring.round_labels(events)
+    targets = training_data.game_targets(events + [{"type": "end_game"}])
     observations = list(
         replay.Replay(
             "focus-record",

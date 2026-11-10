@@ -29,6 +29,7 @@ from model import critic, joint_settlement, outcomes, payment_scoring
 AUXILIARY = {
     "bonus": [24],
     "score": [24, len(scoring.BONUS_HAN)],
+    "settlement": [12],
 }
 
 
@@ -37,6 +38,16 @@ VALIDATION_SAMPLE = {
     "decision_hash_modulus": 16,
     "hash": "sha256:validation-941:game_id:kyoku_id:decision_index:actor",
 }
+
+
+def game_targets(events):
+    """Scoring labels and observed continuation states from a complete game."""
+    targets = scoring.round_labels(events)
+    for target, settlement in zip(
+        targets.values(), outcomes.hand_continuation_states(events), strict=True
+    ):
+        target["settlement"] = settlement
+    return targets
 
 
 def serialize(observation, target):
@@ -61,11 +72,14 @@ def serialize(observation, target):
         target["payment"][:2, order][:, :, order],
     )
     for name in AUXILIARY:
-        value = target[name][:, order][:, :, order][
-            cells[:, 0], cells[:, 1], cells[:, 2]
-        ]
+        if name == "settlement":
+            value = target[name][observation.actor]
+        else:
+            value = target[name][:, order][:, :, order][
+                cells[:, 0], cells[:, 1], cells[:, 2]
+            ]
         example.features.feature["critic/" + name].bytes_list.value[:] = [
-            value.astype("int16").tobytes()
+            value.astype("int32" if name == "settlement" else "int16").tobytes()
         ]
     return example.SerializeToString()
 
@@ -77,19 +91,26 @@ def parse_batch(raw):
         {
             "critic/score": tf.io.FixedLenFeature([], tf.string),
             "critic/bonus": tf.io.FixedLenFeature([], tf.string),
+            "critic/settlement": tf.io.FixedLenFeature([], tf.string),
             "meta/focused": tf.io.FixedLenFeature([], tf.int64),
         },
     )
     auxiliary = {
         name: tf.cast(
             tf.reshape(
-                tf.io.decode_raw(parsed["critic/" + name], tf.int16),
+                tf.io.decode_raw(
+                    parsed["critic/" + name],
+                    tf.int32 if name == "settlement" else tf.int16,
+                ),
                 [-1, *shape],
             ),
             tf.int32,
         )
         for name, shape in AUXILIARY.items()
     }
+    auxiliary["returns"] = (
+        joint_settlement.observed_payoffs(auxiliary.pop("settlement")) / 100.0
+    )
     cells = numpy.asarray(scoring.CELLS)
     payments = tf.gather(
         tf.reshape(labels["terminal_payment"], [-1, 64]),
@@ -101,7 +122,12 @@ def parse_batch(raw):
         {
             **critic.public_inputs(features),
             **joint_settlement.public_inputs(features),
-            "focused": tf.cast(parsed["meta/focused"], tf.int32),
+            "focused": tf.cast(
+                (parsed["meta/focused"] > 0)
+                | (features["decision_phase"] == 1)
+                | (features["decision_phase"] == 2),
+                tf.int32,
+            ),
             **joint_settlement.payment_labels(payments, public),
             "points": tf.reduce_sum(
                 tf.cast(payments, tf.float32)
@@ -266,7 +292,7 @@ def process_shard(task):
             seats = events[0]["player_ranks"]["retained_seats"]
             if not seats:
                 continue
-            targets = scoring.round_labels(events)
+            targets = game_targets(events)
             partition = records.game_partition(game.game_id)
             for round_events in afk.retained_hands(events):
                 state = replay.Replay(game.game_id, round_events)
@@ -309,8 +335,22 @@ def process_shard(task):
     return summary
 
 
-def dataset(root, sampling, partition, batch_size, repeat, seed=941):
+def dataset(
+    root,
+    sampling,
+    partition,
+    batch_size,
+    repeat,
+    seed=941,
+    *,
+    drop_remainder=None,
+    companion=None,
+):
     sampling = focus_sampling.Sampling(sampling)
+    if companion is not None and sampling != focus_sampling.Sampling.NATURAL:
+        raise ValueError("Companion records require natural sampling")
+    if drop_remainder is None:
+        drop_remainder = partition != "validation"
     if sampling == focus_sampling.Sampling.MIXED:
         width = sum(share for _, share in focus_sampling.MIXTURE)
         assert batch_size % width == 0
@@ -363,8 +403,24 @@ def dataset(root, sampling, partition, batch_size, repeat, seed=941):
     stream = tf.data.Dataset.from_tensor_slices(paths)
     if repeat:
         stream = stream.shuffle(len(paths), seed=seed).repeat()
+
+    def read(path):
+        records = tf.data.TFRecordDataset(path, compression_type="GZIP")
+        if companion is not None:
+            filename = tf.strings.split(path, "/")[-1]
+            records = tf.data.Dataset.zip(
+                {
+                    "record": records,
+                    "teacher": tf.data.TFRecordDataset(
+                        tf.strings.join([str(companion), "/", filename]),
+                        compression_type="GZIP",
+                    ),
+                }
+            )
+        return records
+
     stream = stream.interleave(
-        lambda path: tf.data.TFRecordDataset(path, compression_type="GZIP"),
+        read,
         cycle_length=min(8, len(paths)),
         block_length=64 if repeat else 1,
         num_parallel_calls=min(8, len(paths)),
@@ -373,12 +429,13 @@ def dataset(root, sampling, partition, batch_size, repeat, seed=941):
 
     def select(raw):
         metadata = tf.io.parse_example(
-            raw,
+            raw["record"] if companion is not None else raw,
             {
                 "critic/partition": tf.io.FixedLenFeature([], tf.int64),
                 "meta/focus_categories": tf.io.FixedLenFeature([], tf.int64),
                 "meta/late_placement": tf.io.FixedLenFeature([], tf.int64),
                 "meta/placement_gap": tf.io.FixedLenFeature([], tf.int64),
+                "feature/decision_phase": tf.io.FixedLenFeature([], tf.string),
             },
         )
         selected = (
@@ -392,13 +449,22 @@ def dataset(root, sampling, partition, batch_size, repeat, seed=941):
         ):
             late = metadata["meta/late_placement"] > 0
             gap = metadata["meta/placement_gap"] > 0
+            phase = tf.io.decode_raw(
+                metadata["feature/decision_phase"], tf.int8, fixed_length=1
+            )[:, 0]
+            # Stored fast-call metadata is descriptive. Sampling includes
+            # every response/kan opportunity, as targeted self play does.
+            categories = tf.bitwise.bitwise_or(
+                metadata["meta/focus_categories"],
+                tf.cast((phase == 1) | (phase == 2), tf.int64),
+            )
             priorities = (
                 tf.cast(gap, tf.int32)
                 if sampling == focus_sampling.Sampling.PLACEMENT_GAP
                 else tf.gather(
                     tf.constant(focus_sampling.PRIORITIES),
                     tf.bitwise.bitwise_and(
-                        metadata["meta/focus_categories"],
+                        categories,
                         ~int(focus_sampling.Category.PLACEMENT),
                     )
                     + int(focus_sampling.Category.PLACEMENT)
@@ -413,7 +479,9 @@ def dataset(root, sampling, partition, batch_size, repeat, seed=941):
                     0,
                 ),
             )
-        return tf.boolean_mask(raw, selected)
+        return tf.nest.map_structure(
+            lambda value: tf.boolean_mask(value, selected), raw
+        )
 
     stream = stream.batch(1024).map(select, num_parallel_calls=2).unbatch()
     if repeat:
@@ -421,7 +489,7 @@ def dataset(root, sampling, partition, batch_size, repeat, seed=941):
     options = tf.data.Options()
     options.threading.private_threadpool_size = 12
     return (
-        stream.batch(batch_size, drop_remainder=partition != "validation")
+        stream.batch(batch_size, drop_remainder=drop_remainder)
         .with_options(options)
         .prefetch(2)
     )

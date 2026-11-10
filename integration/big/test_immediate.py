@@ -18,7 +18,7 @@ from log_dataset import (
 from model import actions, critic
 
 
-def test_calls_kans_and_declarations_change_scoring_before_prediction():
+def test_attempted_calls_preserve_possible_preemption_outcomes():
     packed = {
         name: numpy.zeros((3, *spec["shape"]), spec["dtype"])
         for name, spec in _native_collection.INPUTS.items()
@@ -37,21 +37,24 @@ def test_calls_kans_and_declarations_change_scoring_before_prediction():
     packed = {name: tf.constant(value) for name, value in packed.items()}
     selected = tf.constant([[0, 111], [0, 223], [1, 261], [2, 74]])
     public = critic.public_inputs(packed, selected)
-    numpy.testing.assert_array_equal(public["opened"][:, 0], [0, 1, 0, 0])
-    numpy.testing.assert_array_equal(public["public_fu"][:, 0], [0, 4, 32, 0])
-    numpy.testing.assert_array_equal(public["public_bonus"][:, 0], [0, 3, 0, 0])
+    numpy.testing.assert_array_equal(public["opened"][:, 0], [0, 0, 0, 0])
+    numpy.testing.assert_array_equal(public["public_fu"][:, 0], [0, 0, 32, 0])
+    numpy.testing.assert_array_equal(public["public_bonus"][:, 0], [0, 0, 0, 0])
+    # The hypothetical accepted hand remains available to learned context.
+    assert packed["candidate_public_fu"][0, 1] == 4
+    assert packed["candidate_public_bonus"][0, 1] == 3
     numpy.testing.assert_array_equal(
-        public["deposit_allowed"][:, 0], [1, 0, 1, 1]
+        public["deposit_allowed"][:, 0], [1, 1, 1, 1]
     )
     numpy.testing.assert_array_equal(
         public["deposit_required"][:, 0], [0, 0, 0, 1]
     )
     # Robbing a kan precedes its successful resolution and preserves ippatsu.
     numpy.testing.assert_array_equal(
-        public["immediate_ippatsu"][:, 1], [1, 0, 1, 1]
+        public["immediate_ippatsu"][:, 1], [1, 1, 1, 1]
     )
     numpy.testing.assert_array_equal(
-        actions.immediate_decisions(packed, selected), [0, 1, 1, 1]
+        actions.immediate_decisions(packed, selected), [0, 0, 1, 1]
     )
     model = critic.PaymentCritic()
     result = model.distributions(
@@ -66,9 +69,36 @@ def test_calls_kans_and_declarations_change_scoring_before_prediction():
     own_wins = [i for i, cell in enumerate(scoring.CELLS[:24]) if cell[2] == 0]
     probability = tf.nn.softmax(result["bonus_logits"]).numpy()
     assert probability.shape[-1] == 14
-    assert not probability[1, own_wins, 2:].any()
+    assert probability[1, own_wins, 2:].sum() > 0
     assert not probability[3, own_wins, 0].any()
     assert probability[1, own_wins].sum() > 0
+
+
+def test_response_pass_and_calls_wait_for_priority_on_last_discard():
+    packed = {
+        name: numpy.zeros((1, *spec["shape"]), spec["dtype"])
+        for name, spec in _native_collection.INPUTS.items()
+    }
+    packed["seat_context"][:, :, 0] = 0.25
+    packed["decision_phase"][:] = 1
+    packed["riichi_state"][:] = [0, 1, 2, 0]
+    packed["discard_abort"][:] = 1
+    feature_reference.public_scoring_features(packed)
+    packed = {name: tf.constant(value) for name, value in packed.items()}
+    # Pass, chii, pon and open kan all await simultaneous opponent claims.
+    selected = tf.constant([[0, 111], [0, 112], [0, 223], [0, 261]])
+    public = critic.public_inputs(packed, selected)
+    numpy.testing.assert_array_equal(public["immediate_draw_kind"], [0] * 4)
+    assert not numpy.any(actions.immediate_decisions(packed, selected))
+    assert not numpy.any(public["deposit_required"])
+    assert not numpy.any(public["immediate_deposit_required"])
+    numpy.testing.assert_array_equal(
+        public["riichi_required"], [[False, False, True, False]] * 4
+    )
+    # The pending stick remains possible; an already paid stick cannot recur.
+    numpy.testing.assert_array_equal(
+        public["deposit_allowed"], [[True, True, False, True]] * 4
+    )
 
 
 def test_post_call_ron_labels_match_native_post_call_discard_state():

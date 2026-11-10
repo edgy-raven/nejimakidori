@@ -6,6 +6,7 @@ use crate::candidate::Legal;
 pub use crate::candidate::code as tile_code;
 use crate::candidate::prefer_red_calls;
 
+#[derive(Clone)]
 pub struct Candidate {
     pub head: usize,
     pub code: usize,

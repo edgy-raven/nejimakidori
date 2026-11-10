@@ -220,8 +220,56 @@ def public_melds(inputs):
 class CompletionMask(tf.keras.layers.Layer):
     def call(self, values):
         logits, inputs = values
-        allowed = support(public_melds(inputs))[:, :, None]
-        logits = tf.where(allowed, logits, -1e9)
+        melds = public_melds(inputs)
+        allowed = support(melds)
+        # Concealed tiles can still be discarded and claimed later. Only
+        # publicly unavailable copies rule out a future yakuhai triplet.
+        available = (
+            4
+            - tf.cast(inputs["known_unavailable_counts"], tf.float32)[:, None]
+            + tf.cast(inputs["candidate_hand_counts"][:, 0], tf.float32)[
+                :, None
+            ]
+            + tf.reduce_sum(
+                tf.one_hot(inputs["meld_tile_ids"], 34)
+                * tf.cast(inputs["meld_tile_valid"], tf.float32)[..., None],
+                axis=(2, 3),
+            )
+        )
+        # The offered discard is still claimable, except by its discarder.
+        available += (
+            tf.one_hot(inputs["trigger_tile_id"], 34)[:, None]
+            * tf.cast(inputs["trigger_valid"], tf.float32)[:, None, None]
+            * tf.cast(
+                tf.range(4)[None]
+                != tf.cast(inputs["trigger_source"], tf.int32)[:, None],
+                tf.float32,
+            )[..., None]
+        )
+        triplets = tf.reduce_any(melds[..., 1:] > 0, axis=-1) | (
+            (available >= 3)
+            & (tf.reduce_sum(melds, axis=(-1, -2)) < 4)[..., None]
+        )
+        yakuhai = tf.concat(
+            [
+                triplets[..., 31:34],
+                tf.gather(
+                    triplets,
+                    tf.cast(inputs["seat_wind"], tf.int32) + 27,
+                    axis=2,
+                    batch_dims=2,
+                )[..., None],
+                tf.gather(
+                    triplets,
+                    tf.cast(inputs["prevailing_wind"], tf.int32) + 27,
+                    axis=2,
+                    batch_dims=1,
+                )[..., None],
+            ],
+            axis=-1,
+        )
+        allowed = tf.concat([allowed[..., :3], yakuhai, allowed[..., 8:]], -1)
+        logits = tf.where(allowed[:, :, None], logits, -1e9)
         # Each connected conflict is a scored-yaku exclusion, not a route.
         # For yaku i, competing alternatives contribute to its complement.
         # Thus every mutually exclusive clique has total probability <= 1.
@@ -565,7 +613,8 @@ class CompletionScoreCoupling(tf.keras.layers.Layer):
             * tf.constant([0, 1])[None, None, :, None]
         )
         levels = tf.constant(
-            [(1, 2, 3, 4, 5, 6, 8, 11, 13, 0).index(han) for han in SCORE_HAN]
+            [(1, 2, 3, 4, 5, 6, 8, 11, 13, 0).index(han) for han in SCORE_HAN],
+            dtype=tf.float32,
         )
         # Collapsed haneman/baiman/sanbaiman states include 7/10/12 han.
         upper_han = tf.constant(
@@ -593,7 +642,10 @@ class CompletionScoreCoupling(tf.keras.layers.Layer):
                 tf.einsum(
                     "...yt,cy->...ct",
                     yaku[..., None]
-                    * tf.cast(floor[..., None] > tf.range(9), tf.float32),
+                    * tf.cast(
+                        floor[..., None] > tf.range(9, dtype=tf.float32),
+                        tf.float32,
+                    ),
                     tf.constant(EXCLUSIVE_CLIQUES),
                 ),
                 axis=-2,

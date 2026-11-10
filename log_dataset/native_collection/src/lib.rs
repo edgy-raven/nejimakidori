@@ -106,5 +106,6 @@ fn _native_collection(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scoring::score_hand, m)?)?;
     m.add_class::<FeatureReplay>()?;
     m.add_class::<collector::NativeCollector>()?;
+    m.add_class::<collector::NativeRoot>()?;
     Ok(())
 }

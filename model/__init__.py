@@ -1,1 +1,1 @@
-"""Mahjong feature production, training, and inference."""
+"""Mahjong network components, scoring, export and inference."""

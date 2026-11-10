@@ -413,7 +413,9 @@ def immediate_decisions(inputs, selected):
     """Discard ron and robbery of an actor's concealed/added kan."""
     import tensorflow as tf
 
-    return discard_decisions(inputs, selected) | (
-        (tf.gather(inputs["decision_phase"], selected[:, 0]) == 2)
-        & (selected[:, 1] >= 261)
+    phase = tf.gather(inputs["decision_phase"], selected[:, 0])
+    # A call's planned discard is contingent on priority resolution, not
+    # the next guaranteed transition of the attempted action.
+    return (discard_decisions(inputs, selected) & (phase != 1)) | (
+        (phase == 2) & (selected[:, 1] >= 261)
     )

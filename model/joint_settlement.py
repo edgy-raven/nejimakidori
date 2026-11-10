@@ -590,6 +590,18 @@ def continuation_forecast(scores, ranks, support, dealer, hand_number, pot):
     )
 
 
+def observed_payoffs(settlements):
+    """Score the recorded hand endings used by expert AWR and fresh PPO."""
+    return post_hand_forecast(
+        scores=tf.cast(settlements[:, :4], tf.float32),
+        ranks=tf.cast(settlements[:, 4:8], tf.int64),
+        next_dealer=tf.cast(settlements[:, 8], tf.int64),
+        next_hand=tf.cast(settlements[:, 9], tf.int32),
+        terminal=tf.cast(settlements[:, 10], tf.bool),
+        pot=tf.cast(settlements[:, 11], tf.float32),
+    )[0]
+
+
 def post_hand_forecast(scores, ranks, next_dealer, next_hand, terminal, pot):
     """Common observed/predicted hand settlement plus fixed continuation."""
     rounds = tf.cast(tf.maximum(8 - next_hand, 0), tf.float32)

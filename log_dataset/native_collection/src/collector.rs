@@ -7,7 +7,7 @@ use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict},
 };
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use riichienv_core::{
     action::{Action, ActionType},
     hand_evaluator::HandEvaluator,
@@ -37,6 +37,7 @@ const COUNTERS: &[&str] = &[
 fn add(counts: &mut HashMap<String, i64>, name: &str, value: i64) {
     *counts.get_mut(name).unwrap() += value;
 }
+#[derive(Clone)]
 struct Game {
     engine: GameState,
     history: PublicHistory,
@@ -49,6 +50,7 @@ struct Game {
     won: u8,
     dealt: u8,
     cuts: [i64; 4],
+    riichi_turn_sum: i64,
 }
 impl Game {
     fn new(seed: u64) -> Self {
@@ -68,6 +70,7 @@ impl Game {
             won: 0,
             dealt: 0,
             cuts: [0; 4],
+            riichi_turn_sum: 0,
         }
     }
     fn sync(&mut self, counts: &mut HashMap<String, i64>) {
@@ -84,7 +87,7 @@ impl Game {
                     self.won = 0;
                     self.dealt = 0;
                     self.cuts = [0; 4];
-                    add(counts, "hands", 1);
+                    self.riichi_turn_sum = 0;
                 }
                 "chi" | "pon" | "daiminkan" => {
                     let actor = event["actor"].as_u64().unwrap() as usize;
@@ -112,7 +115,7 @@ impl Game {
                 "reach_accepted" => {
                     let actor = event["actor"].as_u64().unwrap() as usize;
                     self.reached |= 1 << actor;
-                    add(counts, "riichi_turn_sum", self.cuts[actor]);
+                    self.riichi_turn_sum += self.cuts[actor];
                 }
                 "hora" => {
                     self.pending = [None; 4];
@@ -154,6 +157,8 @@ impl Game {
                 }
                 "end_kyoku" => {
                     self.pending = [None; 4];
+                    add(counts, "hands", 1);
+                    add(counts, "riichi_turn_sum", self.riichi_turn_sum);
                     for (name, seats) in [
                         ("wins", self.won),
                         ("dealin_hands", self.dealt),
@@ -180,6 +185,7 @@ impl Game {
         }
     }
 }
+#[derive(Clone)]
 struct Request {
     game: usize,
     seat: usize,
@@ -189,6 +195,67 @@ struct Request {
     legal: candidate::Legal,
     candidates: Vec<actions::Candidate>,
 }
+#[pyclass]
+pub struct NativeRoot {
+    game: Game,
+    requests: Vec<Request>,
+    decision: usize,
+}
+#[pymethods]
+impl NativeRoot {
+    #[getter]
+    fn decision(&self) -> usize {
+        self.decision
+    }
+
+    /// Keep the full simulator state; optionally resample only unseen wall tiles.
+    #[pyo3(signature = (copies, seed, shuffle_remaining=true))]
+    fn fork(&self, copies: usize, seed: u64, shuffle_remaining: bool) -> PyResult<NativeCollector> {
+        if copies == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "copies must be positive",
+            ));
+        }
+        let mut games = Vec::with_capacity(copies);
+        let mut requests = Vec::with_capacity(copies * self.requests.len());
+        for index in 0..copies {
+            let mut game = self.game.clone();
+            if shuffle_remaining {
+                let seed = seed.wrapping_add(index as u64);
+                let mut rng = StdRng::seed_from_u64(seed);
+                let mut unseen = game
+                    .engine
+                    .wall
+                    .tiles
+                    .iter()
+                    .copied()
+                    .filter(|tile| !game.engine.wall.dora_indicators.contains(tile))
+                    .collect::<Vec<_>>();
+                unseen.shuffle(&mut rng);
+                let mut unseen = unseen.into_iter();
+                for tile in &mut game.engine.wall.tiles {
+                    if !game.engine.wall.dora_indicators.contains(tile) {
+                        *tile = unseen.next().unwrap();
+                    }
+                }
+                game.engine.wall.seed = Some(seed);
+            }
+            games.push(game);
+            requests.extend(self.requests.iter().cloned().map(|mut request| {
+                request.game = index;
+                request
+            }));
+        }
+        Ok(NativeCollector {
+            games,
+            requests,
+            rng: StdRng::seed_from_u64(seed),
+            counts: COUNTERS.iter().map(|name| (name.to_string(), 0)).collect(),
+            submitted: true,
+        })
+    }
+}
+
 #[pyclass]
 pub struct NativeCollector {
     games: Vec<Game>,
@@ -360,6 +427,29 @@ impl NativeCollector {
         result.set_item("legal", legal)?;
         Ok(Some(result))
     }
+    /// Capture after next(), before submit(), including all simultaneous claims.
+    fn snapshot(&self, decision: usize) -> PyResult<NativeRoot> {
+        if self.submitted || decision >= self.requests.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "snapshot requires a pending decision index",
+            ));
+        }
+        let game = self.requests[decision].game;
+        Ok(NativeRoot {
+            game: self.games[game].clone(),
+            decision: self.requests[..decision]
+                .iter()
+                .filter(|r| r.game == game)
+                .count(),
+            requests: self
+                .requests
+                .iter()
+                .filter(|r| r.game == game)
+                .cloned()
+                .collect(),
+        })
+    }
+
     fn submit(&mut self, py: Python<'_>, chosen: Vec<usize>) -> PyResult<()> {
         if self.submitted || chosen.len() != self.requests.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -460,5 +550,62 @@ impl NativeCollector {
             .iter()
             .map(|r| serde_json::to_string(&r.obs).unwrap())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod root_tests {
+    use super::*;
+
+    #[test]
+    fn snapshots_preserve_state_and_shuffle_only_unseen_wall() {
+        let mut collector = NativeCollector::new(1, 941).unwrap();
+        collector.prepare();
+        collector.submitted = false;
+        let root = collector.snapshot(0).unwrap();
+        let unchanged = root.fork(1, 17, false).unwrap();
+        assert_eq!(
+            format!("{:?}", collector.games[0].engine),
+            format!("{:?}", unchanged.games[0].engine)
+        );
+        assert_eq!(collector.games[0].logs, unchanged.games[0].logs);
+        assert_eq!(
+            collector.requests[0].row.bytes,
+            unchanged.requests[0].row.bytes
+        );
+        let branches = root.fork(2, 17, true).unwrap();
+        for branch in &branches.games {
+            let mut before = collector.games[0].engine.wall.tiles.clone();
+            let mut after = branch.engine.wall.tiles.clone();
+            before.sort();
+            after.sort();
+            assert_eq!(before, after);
+            for (index, tile) in collector.games[0].engine.wall.tiles.iter().enumerate() {
+                if collector.games[0]
+                    .engine
+                    .wall
+                    .dora_indicators
+                    .contains(tile)
+                {
+                    assert_eq!(*tile, branch.engine.wall.tiles[index]);
+                }
+            }
+            assert_eq!(
+                branch.engine.wall.drawable_count,
+                collector.games[0].engine.wall.drawable_count
+            );
+            assert_eq!(
+                format!("{:?}", branch.engine.players),
+                format!("{:?}", collector.games[0].engine.players)
+            );
+        }
+        assert_ne!(
+            branches.games[0].engine.wall.tiles,
+            branches.games[1].engine.wall.tiles
+        );
+        assert_eq!(
+            format!("{:?}", root.game.engine),
+            format!("{:?}", collector.games[0].engine)
+        );
     }
 }

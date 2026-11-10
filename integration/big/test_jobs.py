@@ -8,23 +8,18 @@ import subprocess
 import sys
 import zipfile
 
+import numpy
 import tensorflow as tf
 
-from integration.big import test_dataset_sampling
-from log_dataset import _native_collection
+from integration import archive_fixture
+from log_dataset import training_data
+from model import joint_settlement
 
 
 def test_dataset_job_builds_joint_records_and_resumes(tmp_path):
-    result = subprocess.run(
-        [sys.executable, "dataset.py", "--help"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "usage:" in result.stdout
     archives = tmp_path / "archives"
     archives.mkdir()
-    test_dataset_sampling.write_enriched_archive(archives)
+    archive_fixture.write_enriched_archive(archives)
     reserve = tmp_path / "reserve.json"
     reserve.write_text(json.dumps({"games": []}))
     command = [
@@ -53,6 +48,31 @@ def test_dataset_job_builds_joint_records_and_resumes(tmp_path):
         row["validation_count"] for row in summary["shard_manifest"]
     )
     for row in summary["shard_manifest"]:
+        raw_batch = next(
+            iter(
+                tf.data.TFRecordDataset(
+                    str(data / row["path"]), compression_type="GZIP"
+                ).batch(8)
+            )
+        )
+        inputs = training_data.parse_batch(raw_batch)
+        settlements = numpy.stack(
+            [
+                numpy.frombuffer(
+                    tf.train.Example.FromString(raw)
+                    .features.feature["critic/settlement"]
+                    .bytes_list.value[0],
+                    dtype=numpy.int32,
+                )
+                for raw in raw_batch.numpy()
+            ]
+        )
+        # Serialized expert outcomes use the same payoff as fresh rollouts.
+        numpy.testing.assert_allclose(
+            inputs[2]["returns"],
+            joint_settlement.observed_payoffs(settlements) / 100,
+        )
+        assert numpy.isfinite(inputs[2]["returns"]).all()
         validation_rows = list(
             tf.data.TFRecordDataset(
                 str(data / row["validation_path"]), compression_type="GZIP"

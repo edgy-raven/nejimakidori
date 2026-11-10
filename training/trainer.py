@@ -15,23 +15,21 @@ import tensorboard.plugins.custom_scalar.layout_pb2 as scalar_layout
 import tensorboard.plugins.custom_scalar.summary as scalar_summary
 import tensorflow as tf
 
-from log_dataset import focus_sampling, training_data
+from log_dataset import focus_sampling, scoring, training_data
 from model import actions
 from model import actor as actor_layers
 from model import beliefs, critic, joint_settlement, losses
 from model import network as joint_network
-from model import optimization, self_play
+from training import optimization, self_play
 
 PAYMENT_LOSS_WEIGHT = 0.1
 AUXILIARY_LOSS_WEIGHT = 0.01
 
 
-def objective_metrics(inputs, outputs, advantages=None, statistics=None):
+def objective_metrics(inputs, outputs, statistics=None):
     means = losses.MaskedMeans()
     if statistics is None:
-        objective_terms(
-            inputs, outputs, mean=means.collect, advantages=advantages
-        )
+        objective_terms(inputs, outputs, mean=means.collect)
         means.reduce()
     else:
         means.values = iter(
@@ -39,20 +37,23 @@ def objective_metrics(inputs, outputs, advantages=None, statistics=None):
                 tf.math.divide_no_nan(statistics[:, 0], statistics[:, 1])
             )
         )
-    return objective_terms(
-        inputs, outputs, mean=means.read, advantages=advantages
-    )
+    return objective_terms(inputs, outputs, mean=means.read)
 
 
-def objective_terms(inputs, outputs, mean=losses.mean_valid, advantages=None):
+def objective_terms(inputs, outputs, mean=losses.mean_valid):
     loss, metrics = critic.objective_metrics(outputs, mean=mean)
     metrics["critic_loss"] = loss
     loss *= PAYMENT_LOSS_WEIGHT
-    metrics.update(
-        actor_layers.offline_loss_terms(
-            inputs, outputs, mean=mean, advantages=advantages
-        )
+    metrics["value_loss"] = mean(
+        tf.square(outputs["state_value"] - inputs[2]["returns"]),
+        tf.ones_like(inputs[2]["returns"]),
     )
+    metrics["value_bias"] = mean(
+        outputs["state_value"] - inputs[2]["returns"],
+        tf.ones_like(inputs[2]["returns"]),
+    )
+    loss += metrics["value_loss"]
+    metrics.update(actor_layers.offline_loss_terms(inputs, outputs, mean=mean))
     belief_terms, belief_metrics = beliefs.belief_loss_terms(
         inputs[0], inputs[1], outputs, mean=mean
     )
@@ -80,7 +81,10 @@ def objective_terms(inputs, outputs, mean=losses.mean_valid, advantages=None):
         metrics["score_nll"] + metrics["bonus_han_nll"]
     )
     loss += metrics["specialist_loss"] + metrics["scoring_loss"]
-    loss += metrics["policy_guidance_adjustment"]
+    metrics["constraint_loss"] = mean(
+        outputs["constraint_loss"], tf.ones_like(outputs["constraint_loss"])
+    )
+    loss += AUXILIARY_LOSS_WEIGHT * metrics["constraint_loss"]
     metrics["joint_loss"] = loss
     return loss, metrics
 
@@ -263,6 +267,8 @@ def validate(
                 "imitation_top3_accuracy",
                 "payment_nll",
                 "belief_loss",
+                "value_loss",
+                "value_bias",
             } or (
                 name.startswith(("discard_", "riichi_", "response_", "kan_"))
                 and name.endswith(("_accuracy", "_nll"))
@@ -280,31 +286,42 @@ def ppo_exposures(args):
 
 
 def supervised_schedule(args):
-    # Include partial updates at every block boundary, in both offline phases.
-    return optimization.OfflineSchedule(
-        total_steps=sum(
-            (budget // args.block_exposures)
-            * ((args.block_exposures + args.batch_size - 1) // args.batch_size)
-            + (budget % args.block_exposures + args.batch_size - 1)
-            // args.batch_size
-            for budget in (
-                args.foundation_exposures,
-                args.awr_only_exposures,
-                args.awr_exposures - args.awr_only_exposures,
-                args.final_awr_exposures,
-            )
-        ),
-        peak=args.supervised_learning_rate,
+    # Only foundation updates advance this optimizer; AWR has shared state.
+    total_steps = (args.foundation_exposures // args.block_exposures) * (
+        (args.block_exposures + args.batch_size - 1) // args.batch_size
+    ) + (
+        args.foundation_exposures % args.block_exposures + args.batch_size - 1
+    ) // args.batch_size
+    warmup_steps = max(1, total_steps * 2 // 100)
+    return tf.keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=args.supervised_learning_rate * 0.1,
+        decay_steps=max(1, total_steps - warmup_steps),
+        alpha=0.1,
+        warmup_target=args.supervised_learning_rate,
+        warmup_steps=warmup_steps,
     )
 
 
 class Trainer:
-    def __init__(self, *, network, args, first):
+    def __init__(
+        self, *, network, args, first, mirror=None, mirror_coefficient=0.0
+    ):
         self.network = network
+        self.mirror = mirror
+        if mirror is not None:
+            mirror.trainable = False
+            self.mirror_coefficient = tf.Variable(
+                mirror_coefficient, trainable=False, dtype=tf.float32
+            )
         self.args = args
         self.packing = training_data.PackedBatch(first)
         self.feature_packing = training_data.PackedBatch(first[0])
         self.policy_optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=args.ppo_learning_rate,
+            weight_decay=1e-4,
+            clipnorm=1.0,
+        )
+        self.awr_optimizer = tf.keras.optimizers.AdamW(
             learning_rate=args.ppo_learning_rate,
             weight_decay=1e-4,
             clipnorm=1.0,
@@ -315,6 +332,7 @@ class Trainer:
             clipnorm=1.0,
         )
         self.policy_optimizer.build(network.trainable_variables)
+        self.awr_optimizer.build(network.trainable_variables)
         self.auxiliary_optimizer.build(network.trainable_variables)
         if args.final_awr_exposures:
             reference = joint_network.JointPolicyPayment()
@@ -323,6 +341,11 @@ class Trainer:
             self.anchor = reference.actor
             self.anchor.trainable = False
             self.anchor_ready = tf.Variable(False, trainable=False)
+
+    def refresh_mirror(self):
+        """Freeze the current actor for the next AWR update cohort."""
+        if self.mirror is not None:
+            self.mirror.set_weights(self.network.actor.get_weights())
 
     @tf.function(reduce_retracing=True)
     def predict(self, batch):
@@ -337,19 +360,204 @@ class Trainer:
     @tf.function(reduce_retracing=True)
     def baseline(self, features):
         features = self.feature_packing.unpack(features)
-        outputs, state = self.network.candidate_context(
-            features, self.network.actor(features, training=False)
+        return self.network.actor(features, training=False)["state_value"]
+
+    def awr_update(
+        self,
+        *,
+        features,
+        labels,
+        returns,
+        payment_points,
+        count,
+        legal=None,
+        head=None,
+        train=True,
+        anchored=False,
+    ):
+        """One actor/value/settlement update for every replay source.
+
+        Features are compact packed buffers. Returns and V use ST3 / 100;
+        the single AWR temperature uses ST3. No behavior-policy probabilities
+        or PPO advantages are consumed here.
+        """
+        features = self.feature_packing.unpack(features)
+        selected_labels = tf.stack(
+            [
+                tf.cast(labels[name], tf.int32)
+                for name in actions.TRAIN_POLICY_HEADS
+            ],
+            axis=1,
         )
-        return (
-            critic.action_values(self.network, features, outputs, state)[2]
-            / 100.0
-        )
+        if head is None:
+            tf.debugging.assert_equal(
+                tf.reduce_sum(tf.cast(selected_labels >= 0, tf.int32), axis=1),
+                1,
+                message="Replay decisions require one active policy head",
+            )
+            head = tf.argmax(
+                tf.cast(selected_labels >= 0, tf.int32),
+                axis=1,
+                output_type=tf.int32,
+            )
+        chosen = tf.gather(selected_labels, head, batch_dims=1)[:count]
+        if self.mirror is not None:
+            reference = self.mirror(features, training=False)
+        with tf.GradientTape() as tape:
+            outputs, state = self.network.candidate_context(
+                features, self.network.actor(features, training=False)
+            )
+            recorded = self.network.chosen_inputs(
+                features,
+                outputs,
+                state,
+                critic.chosen_actions(features, labels),
+            )
+            statistics = self.network.critic.supervised_statistics(
+                recorded,
+                joint_settlement.payment_labels(payment_points, recorded),
+                valid=tf.range(tf.shape(returns)[0]) < count,
+            )
+            if legal is None:
+                legal = tf.sequence_mask(
+                    tf.gather(
+                        [
+                            outputs[name].shape[-1]
+                            for name in actions.TRAIN_POLICY_HEADS
+                        ],
+                        head,
+                    ),
+                    150,
+                )
+            current = actor_layers.distribution(outputs, head, legal)[:count]
+            if self.mirror is not None:
+                reference = actor_layers.distribution(reference, head, legal)[
+                    :count
+                ]
+            valid = tf.ones(count, tf.bool)
+            advantages = tf.stop_gradient(
+                (returns[:count] - outputs["state_value"][:count])
+                * 100.0
+                / self.args.awr_temperature
+            )
+
+            def terms(mean):
+                return {
+                    **(
+                        {
+                            "mirror_kl": actor_layers.policy_kl(
+                                reference, current, mean=mean, reverse=True
+                            )
+                        }
+                        if self.mirror is not None
+                        else {}
+                    ),
+                    **actor_layers.awr_policy_terms(
+                        -tf.gather(current, chosen, batch_dims=1),
+                        advantages,
+                        valid,
+                        mean=mean,
+                    ),
+                    "value_loss": mean(
+                        tf.square(
+                            outputs["state_value"][:count] - returns[:count]
+                        ),
+                        valid,
+                    ),
+                    "value_bias": mean(
+                        outputs["state_value"][:count] - returns[:count], valid
+                    ),
+                    **actor_layers.decision_regularizers(
+                        outputs=outputs,
+                        current=current,
+                        heads=head,
+                        count=count,
+                        mean=mean,
+                    ),
+                    **{
+                        name: value
+                        for name, value in critic.settlement_metrics(
+                            statistics, mean
+                        ).items()
+                        if name not in ("score_nll", "bonus_han_nll")
+                    },
+                }
+
+            means = losses.MaskedMeans()
+            terms(means.collect)
+            means.reduce()
+            metrics = terms(means.read)
+            loss = (
+                metrics["loss"]
+                + metrics["value_loss"]
+                + PAYMENT_LOSS_WEIGHT
+                * (metrics["payment_nll"] + metrics["critic_constraint_loss"])
+                + AUXILIARY_LOSS_WEIGHT * metrics["constraint_loss"]
+                + self.args.prior_weight * metrics["policy_prior_loss"]
+                - self.args.awr_entropy * metrics["entropy"]
+            )
+            if self.mirror is not None:
+                metrics["weighted_mirror_loss"] = (
+                    self.mirror_coefficient * metrics["mirror_kl"]
+                )
+                loss += metrics["weighted_mirror_loss"]
+            if anchored:
+                reference = self.anchor(features, training=False)
+                metrics["anchor_kl"] = actor_layers.decision_kl(
+                    reference, outputs, labels
+                )
+                metrics["weighted_anchor_loss"] = (
+                    self.args.final_awr_kl * metrics["anchor_kl"]
+                )
+                loss += metrics["weighted_anchor_loss"]
+            scaled = loss / tf.distribute.get_strategy().num_replicas_in_sync
+        if train:
+            metrics.update(
+                optimization.apply_gradients(
+                    self.awr_optimizer,
+                    tape,
+                    scaled,
+                    self.network.trainable_variables,
+                )
+            )
+        # Preserve exact counts for distributed dataset reporting.
+        matches = tf.math.top_k(current, k=3).indices == chosen[:, None]
+        return {
+            **metrics,
+            "policy": metrics["loss"],
+            "auxiliary": loss,
+            "joint_loss": loss,
+            "belief_loss": tf.constant(0.0),
+            "learning_rate": tf.identity(self.awr_optimizer.learning_rate),
+            "imitation_count": tf.reduce_sum(tf.cast(valid, tf.float32)),
+            "imitation_correct": tf.reduce_sum(
+                tf.cast(matches[:, 0], tf.float32)
+            ),
+            "imitation_top3_correct": tf.reduce_sum(
+                tf.cast(tf.reduce_any(matches, axis=1), tf.float32)
+            ),
+        }
 
     @tf.function(reduce_retracing=True)
-    def policy_update(self, batch, inputs, count):
-        inputs = self.packing.unpack(inputs)
+    def policy_update(self, batch, inputs, count, awr=False):
+        if awr:
+            return self.awr_update(
+                features=batch["features"],
+                labels={
+                    name: tf.where(batch["head"] == index, batch["chosen"], -1)
+                    for index, name in enumerate(actions.TRAIN_POLICY_HEADS)
+                },
+                returns=batch["returns"],
+                payment_points=batch["payment_points"],
+                count=count,
+                legal=batch["legal"],
+                head=batch["head"],
+            )
+        if inputs is not None:
+            inputs = self.packing.unpack(inputs)
         features = self.feature_packing.unpack(batch["features"])
-        learning_rate = tf.identity(self.policy_optimizer.learning_rate)
+        optimizer = self.policy_optimizer
+        learning_rate = tf.identity(optimizer.learning_rate)
         with tf.GradientTape() as tape:
             outputs, state = self.network.candidate_context(
                 features, self.network.actor(features, training=False)
@@ -373,23 +581,37 @@ class Trainer:
                 joint_settlement.payment_labels(
                     batch["payment_points"], recorded_inputs
                 ),
-                valid=batch["critic_valid"]
-                & (tf.range(tf.shape(batch["chosen"])[0]) < count),
+                valid=tf.range(tf.shape(batch["chosen"])[0]) < count,
             )
             current = actor_layers.distribution(
                 outputs, batch["head"], batch["legal"]
             )[:count]
-            belief_outputs = self.network.actor(inputs[0], training=False)
+            if inputs is not None:
+                belief_outputs = self.network.actor(inputs[0], training=False)
 
             def terms(mean):
-                belief_terms, _ = beliefs.belief_loss_terms(
-                    *tf.nest.map_structure(
-                        lambda value: value[:count],
-                        (inputs[0], inputs[1], belief_outputs),
-                    ),
-                    mean=mean,
-                )
+                belief_terms = {}
+                if inputs is not None:
+                    belief_terms, _ = beliefs.belief_loss_terms(
+                        *tf.nest.map_structure(
+                            lambda value: value[:count],
+                            (inputs[0], inputs[1], belief_outputs),
+                        ),
+                        mean=mean,
+                    )
                 return {
+                    "value_loss": mean(
+                        tf.square(
+                            outputs["state_value"][:count]
+                            - batch["returns"][:count]
+                        ),
+                        tf.ones(count),
+                    ),
+                    "value_bias": mean(
+                        outputs["state_value"][:count]
+                        - batch["returns"][:count],
+                        tf.ones(count),
+                    ),
                     **{
                         name: value
                         for name, value in critic.settlement_metrics(
@@ -397,10 +619,6 @@ class Trainer:
                         ).items()
                         if name not in ("score_nll", "bonus_han_nll")
                     },
-                    "critic_valid_fraction": mean(
-                        tf.cast(batch["critic_valid"][:count], tf.float32),
-                        tf.ones(count),
-                    ),
                     **actor_layers.online_loss_terms(
                         outputs=outputs,
                         batch=batch,
@@ -411,7 +629,11 @@ class Trainer:
                         mean=mean,
                     ),
                     **belief_terms,
-                    "belief_loss": tf.add_n(list(belief_terms.values())) / 3,
+                    "belief_loss": (
+                        tf.add_n(list(belief_terms.values())) / 3
+                        if inputs is not None
+                        else tf.constant(0.0)
+                    ),
                 }
 
             means = losses.MaskedMeans()
@@ -420,13 +642,16 @@ class Trainer:
             metrics = terms(means.read)
             loss = (
                 metrics["policy"]
+                + metrics["value_loss"]
                 + self.args.prior_weight * metrics["policy_prior_loss"]
-                + PAYMENT_LOSS_WEIGHT * metrics["payment_nll"]
+                + PAYMENT_LOSS_WEIGHT
+                * (metrics["payment_nll"] + metrics["critic_constraint_loss"])
+                + AUXILIARY_LOSS_WEIGHT * metrics["constraint_loss"]
                 + metrics["belief_loss"]
                 - self.args.entropy * metrics["entropy"]
             ) / tf.distribute.get_strategy().num_replicas_in_sync
         optimization.apply_gradients(
-            self.policy_optimizer,
+            optimizer,
             tape,
             loss,
             self.network.trainable_variables,
@@ -435,55 +660,32 @@ class Trainer:
 
     @tf.function(reduce_retracing=True)
     def auxiliary_update(self, inputs, awr, train=True, anchored=False):
-        learning_rate = tf.identity(self.auxiliary_optimizer.learning_rate)
         inputs = self.packing.unpack(inputs)
+        if awr:
+            return self.awr_update(
+                features=self.feature_packing.pack(inputs[0]),
+                labels={
+                    name: inputs[1][name] for name in actions.TRAIN_POLICY_HEADS
+                },
+                returns=inputs[2]["returns"],
+                payment_points=tf.gather(
+                    tf.reshape(inputs[1]["terminal_payment"], [-1, 64]),
+                    numpy.ravel_multi_index(
+                        numpy.asarray(scoring.CELLS).T, (4, 4, 4)
+                    ),
+                    axis=1,
+                ),
+                count=tf.shape(inputs[2]["returns"])[0],
+                train=train,
+                anchored=anchored,
+            )
+        learning_rate = tf.identity(self.auxiliary_optimizer.learning_rate)
         with tf.GradientTape() as tape:
             outputs = self.network(inputs)
-            advantages = None
-            if awr:
-                with tape.stop_recording():
-                    advantages = critic.advantages(
-                        self.network,
-                        inputs,
-                        outputs,
-                        self.args.awr_temperature,
-                    )
-            loss, metrics = objective_metrics(
-                inputs, outputs, advantages=advantages
-            )
-            if awr:
-                loss -= (
-                    self.args.awr_entropy - actor_layers.POLICY_ENTROPY_WEIGHT
-                ) * metrics["policy_entropy"]
+            loss, metrics = objective_metrics(inputs, outputs)
             loss += (self.args.prior_weight - 1.0) * metrics[
                 "policy_prior_loss"
             ]
-            if anchored:
-                with tape.stop_recording():
-                    size = tf.shape(inputs[0]["decision_phase"])[0]
-                    selected = tf.random.shuffle(tf.range(size))[
-                        : tf.maximum(1, size // 4)
-                    ]
-                    reference = self.anchor(
-                        tf.nest.map_structure(
-                            lambda value: tf.gather(value, selected), inputs[0]
-                        ),
-                        training=False,
-                    )
-                metrics["anchor_kl"] = actor_layers.decision_kl(
-                    reference,
-                    {
-                        name: tf.gather(outputs[name], selected)
-                        for name in actions.TRAIN_POLICY_HEADS
-                    },
-                    tf.nest.map_structure(
-                        lambda value: tf.gather(value, selected), inputs[1]
-                    ),
-                )
-                metrics["weighted_anchor_loss"] = (
-                    self.args.final_awr_kl * metrics["anchor_kl"]
-                )
-                loss += metrics["weighted_anchor_loss"]
             metrics["joint_loss"] = loss
             scaled_loss = (
                 loss / tf.distribute.get_strategy().num_replicas_in_sync
@@ -525,6 +727,7 @@ class DistributedTrainer:
         self.packing = trainer.packing
         self.feature_packing = trainer.feature_packing
         self.policy_optimizer = trainer.policy_optimizer
+        self.awr_optimizer = trainer.awr_optimizer
         self.auxiliary_optimizer = trainer.auxiliary_optimizer
         if trainer.args.final_awr_exposures:
             self.anchor = trainer.anchor
@@ -550,11 +753,20 @@ class DistributedTrainer:
             )
 
     @tf.function
-    def update(self, batch, inputs, count, awr, train=True, anchored=False):
+    def update(
+        self,
+        batch,
+        inputs,
+        count,
+        awr,
+        train=True,
+        anchored=False,
+        rollout_awr=False,
+    ):
         if awr is None:
             metrics = self.strategy.run(
                 self.trainer.policy_update.python_function,
-                args=(batch, inputs, count),
+                args=(batch, inputs, count, rollout_awr),
             )
         else:
             metrics = self.strategy.run(
@@ -566,7 +778,7 @@ class DistributedTrainer:
         )
         values = self.strategy.reduce(tf.distribute.ReduceOp.MEAN, packed, None)
         metrics = dict(zip(metrics, tf.unstack(values)))
-        if awr is not None:
+        if "imitation_count" in metrics:
             count = metrics.pop("imitation_count")
             metrics["imitation_accuracy"] = tf.math.divide_no_nan(
                 metrics.pop("imitation_correct"), count
@@ -586,7 +798,20 @@ class DistributedTrainer:
             anchored=anchored,
         )
 
-    def policy_update(self, batch, inputs, count):
+    def policy_update(self, batch, inputs, count, awr=False):
+        if awr:
+            batch = {
+                name: batch[name]
+                for name in (
+                    "features",
+                    "head",
+                    "legal",
+                    "chosen",
+                    "returns",
+                    "payment_points",
+                )
+            }
+            inputs = None
         size = len(batch["chosen"]) // self.strategy.num_replicas_in_sync
         valid = self.strategy.experimental_distribute_values_from_function(
             lambda ctx: tf.clip_by_value(
@@ -594,7 +819,11 @@ class DistributedTrainer:
             )
         )
         return self.update(
-            self.distribute(batch), self.distribute(inputs), valid, None
+            batch=self.distribute(batch),
+            inputs=(self.distribute(inputs) if inputs is not None else None),
+            count=valid,
+            awr=None,
+            rollout_awr=awr,
         )
 
     @tf.function
@@ -621,10 +850,10 @@ class DistributedTrainer:
         )
 
 
-def offline_stream(args, seed, packing, skip=0):
+def offline_stream(args, seed, packing, skip=0, *, sampling="mixed"):
     dataset = training_data.dataset(
         root=args.data,
-        sampling=focus_sampling.Sampling.MIXED,
+        sampling=focus_sampling.Sampling[sampling.upper()],
         partition="train",
         batch_size=args.batch_size,
         repeat=True,
@@ -703,7 +932,7 @@ def cohort_kl(trainer, batch, batch_size):
         indices = numpy.arange(start, min(start + batch_size, count))
         part = padded_batch(batch, indices, batch_size)
         total += float(
-            actor_layers.forward_kl(
+            actor_layers.policy_kl(
                 part["behavior"][: len(indices)],
                 trainer.predict(part)[: len(indices)],
             )
@@ -717,8 +946,9 @@ def ppo_block(trainer, args, stream, batch, remaining):
     collected = len(batch["chosen"])
     generator = numpy.random.default_rng(args.seed)
     # Select uniformly before scoring, retaining each decision's hand ending.
-    if collected > remaining:
-        selected = generator.permutation(collected)[:remaining]
+    selected_count = min(collected, math.ceil(remaining / args.ppo_epochs))
+    if collected > selected_count:
+        selected = generator.permutation(collected)[:selected_count]
         batch = tf.nest.map_structure(lambda value: value[selected], batch)
     count = len(batch["chosen"])
     batch = {
@@ -733,39 +963,40 @@ def ppo_block(trainer, args, stream, batch, remaining):
     # Project once per distinct hand/seat, without TensorFlow in CPU workers.
     with tf.device("/CPU:0"):
         batch["returns"] = (
-            joint_settlement.post_hand_forecast(
-                scores=tf.convert_to_tensor(settlements[:, :4], tf.float32),
-                ranks=tf.convert_to_tensor(settlements[:, 4:8], tf.int64),
-                next_dealer=tf.convert_to_tensor(settlements[:, 8], tf.int64),
-                next_hand=tf.convert_to_tensor(settlements[:, 9], tf.int32),
-                terminal=tf.convert_to_tensor(settlements[:, 10], tf.bool),
-                pot=tf.convert_to_tensor(settlements[:, 11], tf.float32),
-            )[0].numpy()[settlement_rows]
+            joint_settlement.observed_payoffs(
+                tf.convert_to_tensor(settlements)
+            ).numpy()[settlement_rows]
             / 100.0
         )
-    baseline = numpy.concatenate(
-        [
-            trainer.baseline(
-                padded_batch(batch["features"], part, args.batch_size)
-            ).numpy()[: len(part)]
-            for part in numpy.split(
-                indices, range(args.batch_size, count, args.batch_size)
-            )
-        ]
-    )
-    scoring_seconds = time.monotonic() - scoring_started
-    advantage = batch["returns"] - baseline
-    batch["advantages"] = (advantage - advantage.mean()) / max(
-        advantage.std(), 1e-8
-    )
-    diagnostic_started = time.monotonic()
-    diagnostics = {
-        "behavior_kl_before": cohort_kl(trainer, batch, args.batch_size)
-    }
-    diagnostic_seconds = time.monotonic() - diagnostic_started
+    diagnostics = {}
+    diagnostic_seconds = 0.0
+    if args.rollout_objective != "awr":
+        baseline = numpy.concatenate(
+            [
+                trainer.baseline(
+                    padded_batch(batch["features"], part, args.batch_size)
+                ).numpy()[: len(part)]
+                for part in numpy.split(
+                    indices, range(args.batch_size, count, args.batch_size)
+                )
+            ]
+        )
+        advantage = batch["returns"] - baseline
+        batch["advantages"] = (advantage - advantage.mean()) / max(
+            advantage.std(), 1e-8
+        )
+        diagnostic_started = time.monotonic()
+        diagnostics["behavior_kl_before"] = cohort_kl(
+            trainer, batch, args.batch_size
+        )
+        diagnostic_seconds = time.monotonic() - diagnostic_started
+    scoring_seconds = time.monotonic() - scoring_started - diagnostic_seconds
     used = 0
     update_started = time.monotonic()
     for epoch in range(args.ppo_epochs):
+        awr = args.rollout_objective == "awr" or (
+            args.rollout_objective == "ppo-awr" and epoch % 2 == 1
+        )
         shuffled = generator.permutation(count)
         for start in range(0, count, args.batch_size):
             selected = shuffled[
@@ -774,17 +1005,21 @@ def ppo_block(trainer, args, stream, batch, remaining):
             part = padded_batch(batch, selected, args.batch_size)
             valid = len(selected)
             metrics = trainer.policy_update(
-                part, next(stream), tf.constant(valid, tf.int32)
+                part,
+                None if awr or stream is None else next(stream),
+                tf.constant(valid, tf.int32),
+                awr=awr,
             )
             used += valid
             if used == remaining:
                 break
-        diagnostic_started = time.monotonic()
-        total_kl = cohort_kl(trainer, batch, args.batch_size)
-        diagnostics[f"behavior_kl_epoch_{epoch + 1}"] = total_kl
-        duration = time.monotonic() - diagnostic_started
-        diagnostic_seconds += duration
-        update_started += duration
+        if args.rollout_objective != "awr":
+            diagnostic_started = time.monotonic()
+            total_kl = cohort_kl(trainer, batch, args.batch_size)
+            diagnostics[f"behavior_kl_epoch_{epoch + 1}"] = total_kl
+            duration = time.monotonic() - diagnostic_started
+            diagnostic_seconds += duration
+            update_started += duration
         if used == remaining:
             break
     metrics = {name: float(value) for name, value in metrics.items()}
@@ -794,15 +1029,17 @@ def ppo_block(trainer, args, stream, batch, remaining):
     metrics["update_seconds"] = update_seconds
     metrics["diagnostic_seconds"] = diagnostic_seconds
     metrics["update_positions_per_second"] = used / update_seconds
-    metrics["behavior_kl"] = total_kl
+    if args.rollout_objective != "awr":
+        metrics["behavior_kl"] = total_kl
     metrics["ppo_epochs"] = epoch + 1
     metrics["collected_decisions"] = collected
     metrics["scored_decisions"] = count
     metrics["trained_exposures"] = used
     metrics["return_mean"] = float(numpy.mean(batch["returns"]))
     metrics["return_std"] = float(numpy.std(batch["returns"]))
-    metrics["baseline_mean"] = float(numpy.mean(baseline))
-    metrics["advantage_std"] = float(numpy.std(advantage))
+    if args.rollout_objective != "awr":
+        metrics["baseline_mean"] = float(numpy.mean(baseline))
+        metrics["advantage_std"] = float(numpy.std(advantage))
     metrics["reuse"] = used / count
     return used, metrics
 
@@ -935,7 +1172,15 @@ def offline_phase(args, trainer, progress, manager, report, name, target):
     if int(progress[name]) >= target:
         return
     stream = offline_stream(
-        args, args.seed, trainer.packing, int(progress[name])
+        args=args,
+        seed=args.seed,
+        packing=trainer.packing,
+        skip=int(progress[name]),
+        sampling=(
+            args.final_awr_sampling
+            if name == "final_awr"
+            else args.expert_sampling
+        ),
     )
     while int(progress[name]) < target:
         end = min(target, int(progress[name]) + args.block_exposures)
@@ -985,6 +1230,13 @@ def train_cycles(
     ppo_manager,
     report,
 ):
+    expert_stream = offline_stream(
+        args=args,
+        seed=args.seed + 1000,
+        packing=trainer.packing,
+        skip=int(progress["awr"]) - args.awr_only_exposures,
+        sampling=args.expert_sampling,
+    )
     while int(progress["awr"]) < args.awr_exposures or int(
         progress["ppo"]
     ) < ppo_exposures(args):
@@ -1001,17 +1253,9 @@ def train_cycles(
             * fractions.Fraction(str(args.ppo_exposure_ratio))
         )
         if int(progress["awr"]) < target:
-            stream = offline_stream(
-                args,
-                args.seed + 1000 + int(progress["cycle"]),
-                trainer.packing,
-                int(progress["awr"])
-                - args.awr_only_exposures
-                - int(progress["cycle"]) * args.block_exposures,
-            )
             for count, metrics in auxiliary_updates(
                 trainer=trainer,
-                stream=stream,
+                stream=expert_stream,
                 exposures=target - int(progress["awr"]),
                 batch_size=args.batch_size,
                 awr=True,
@@ -1044,7 +1288,9 @@ def train_cycles(
                     int(progress[name]) for name in ("foundation", "awr", "ppo")
                 ),
             )
-            stream = offline_stream(args, seed, trainer.packing)
+            stream = offline_stream(
+                args, seed, trainer.packing, sampling=args.replay_sampling
+            )
             used, metrics = ppo_block(
                 trainer=trainer,
                 args=args,
@@ -1134,7 +1380,8 @@ def validate_settings(args):
         > 0
         and (
             (
-                0 < args.ppo_exposure_ratio <= 1
+                math.isfinite(args.ppo_exposure_ratio)
+                and args.ppo_exposure_ratio > 0
                 and ppo_exposures(args) > 0
                 and args.awr_only_exposures < args.awr_exposures
             )
@@ -1194,13 +1441,17 @@ def run(args):
         "critic": "shared_joint_payment_st3",
         "ppo_target": "observed_hand_settlement_fixed_continuation_st3",
         "ppo_critic": "fresh_chosen_action_payment_likelihood",
+        "ppo_baseline": "fresh_return_state_value_mse",
         "entropy_objective": "branch_detached_conditional",
         "ppo_ratio_basis": "middle_awr_exposures",
         "final_awr_reference": "end_of_middle_actor",
         "anchor_sample_fraction": 0.25,
-        "response_utility": "neutral_awr_weight_conditional_call_forecasts",
+        "awr_target": "observed_hand_settlement_fixed_continuation_st3",
+        "awr_baseline": "replay_state_value_mse",
         "phase_rule": "initial_foundation_then_fixed_awr_ppo",
+        "expert_stream": "continuous_middle",
         "optimizer": "AdamW",
+        "rollout_optimizer_state": "shared_replay_awr_separate_ppo",
         "weight_decay": 1e-4,
         "clipnorm": 1.0,
         "supervised_schedule": supervised_schedule(args).get_config(),
@@ -1253,6 +1504,7 @@ def run(args):
         elapsed_seconds=elapsed,
         network=network,
         policy_optimizer=trainer.policy_optimizer,
+        awr_optimizer=trainer.awr_optimizer,
         auxiliary_optimizer=trainer.auxiliary_optimizer,
         **(
             dict(anchor=trainer.anchor, anchor_ready=trainer.anchor_ready)
@@ -1291,6 +1543,8 @@ def run(args):
                     r"validation/discard_(focused|ordinary)_accuracy$"
                 ),
                 "Payment NLL": r"validation/payment_nll$",
+                "Value MSE": r"validation/value_loss$",
+                "Value bias": r"validation/value_bias$",
                 "Belief health": r"validation/belief_loss$",
             },
             "Policy updates": {
@@ -1299,20 +1553,26 @@ def run(args):
                     r"imitation_accuracy$"
                 ),
                 "Sampled policy NLL": (
-                    r"(foundation|awr_only|awr|final_awr)/policy_loss$"
+                    r"(foundation|awr_only|awr|final_awr)/(policy_loss|policy)$"
                 ),
                 "Sampled entropy": r".*/(policy_entropy|entropy)$",
                 "AWR effective sample fraction": (
-                    r"(awr_only|awr|final_awr)/"
-                    r"utility_effective_sample_fraction$"
+                    r"(awr_only|awr|final_awr)/" r"effective_sample_fraction$"
                 ),
                 "AWR clipped weight fraction": (
-                    r"(awr_only|awr|final_awr)/"
-                    r"utility_weight_clipped_fraction$"
+                    r"(awr_only|awr|final_awr)/" r"weight_clipped_fraction$"
+                ),
+                "Rollout AWR effective sample fraction": (
+                    r"ppo/effective_sample_fraction$"
+                ),
+                "Rollout AWR clipped weight fraction": (
+                    r"ppo/weight_clipped_fraction$"
                 ),
                 "PPO cohort KL": r"ppo/behavior_kl$",
                 "Final anchor KL": r"final_awr/anchor_kl$",
                 "Learning rate": r".*/learning_rate$",
+                "Value MSE": r".*/value_loss$",
+                "Value bias": r".*/value_bias$",
             },
             "Self-play": {
                 "Projected return and baseline (ST3 / 100)": (
@@ -1510,6 +1770,13 @@ def argument_parser():
     )
     parser.add_argument("--foundation-exposures", type=int, required=True)
     parser.add_argument("--awr-exposures", type=int, required=True)
+    for name in ("expert", "replay", "final-awr"):
+        parser.add_argument(
+            f"--{name}-sampling",
+            choices=("mixed", "natural", "focused", "placement_gap"),
+            default="mixed",
+            help="Expert-record sampling for this training phase",
+        )
     parser.add_argument("--awr-only-exposures", type=int, default=0)
     parser.add_argument("--final-awr-exposures", type=int, default=0)
     parser.add_argument("--final-awr-kl", type=float, default=0.1)
@@ -1527,6 +1794,12 @@ def argument_parser():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--ppo-epochs", type=int, default=4)
     parser.add_argument(
+        "--rollout-objective",
+        choices=("ppo", "ppo-awr", "awr"),
+        default="ppo",
+        help="Cohort passes: PPO, alternating PPO/AWR, or AWR only",
+    )
+    parser.add_argument(
         "--ppo-exposure-ratio",
         type=float,
         default=1.0,
@@ -1539,7 +1812,12 @@ def argument_parser():
     parser.add_argument("--validation-data")
     parser.add_argument("--ppo-learning-rate", type=float, required=True)
     parser.add_argument("--supervised-learning-rate", type=float, default=2e-4)
-    parser.add_argument("--awr-temperature", type=float, default=3.0)
+    parser.add_argument(
+        "--awr-temperature",
+        type=float,
+        default=3.0,
+        help="Shared replay AWR temperature in ST3 units",
+    )
     parser.add_argument("--seed", type=int, default=941)
     return parser
 

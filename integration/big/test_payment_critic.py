@@ -9,7 +9,6 @@ import pytest
 import riichienv
 import tensorflow as tf
 
-from integration import settlement_reference
 from log_dataset import _native_collection, scoring
 from model import actions, beliefs, critic, export, inference
 from model import network as joint_network
@@ -227,7 +226,8 @@ def test_joint_training_checkpoint_export_and_placement_inference(
     monkeypatch,
 ):
     from log_dataset import afk, replay, training_data
-    from model import critic, joint_settlement, training
+    from model import critic
+    from training import trainer as training
 
     events = json.loads(
         pathlib.Path(__file__)
@@ -235,7 +235,7 @@ def test_joint_training_checkpoint_export_and_placement_inference(
         .joinpath("payment_dealer_90fu.json")
         .read_text()
     )
-    targets = scoring.round_labels(events)
+    targets = training_data.game_targets(events + [{"type": "end_game"}])
     key, ctx = next(scoring.win_contexts(events))
     assert (ctx.actual.han, ctx.actual.fu, ctx.actual.ron_agari) == (
         3,
@@ -289,78 +289,22 @@ def test_joint_training_checkpoint_export_and_placement_inference(
     network.compile_training()
     with tf.GradientTape(persistent=True) as tape:
         outputs = network(inputs)
-        advantages = critic.advantages(
-            network,
-            inputs,
-            outputs,
-            3.0,
-        )
         loss, metrics = training.objective_metrics(
             inputs,
             outputs,
-            advantages=advantages,
         )
-    # Sharing position payoffs must preserve every action's AWR advantage.
-    # This batch also exercises both padded position and action chunks.
-    active = critic.active_candidates(inputs[0], outputs["selected"])
-    selected = tf.boolean_mask(outputs["selected"], active)
-    candidate_inputs = {
-        "state": tf.boolean_mask(outputs["critic_candidate_state"], active),
-        "immediate_safe": tf.boolean_mask(outputs["immediate_safe"], active),
-        "immediate_wait": tf.boolean_mask(outputs["immediate_wait"], active),
-        "immediate_allowed": actions.immediate_decisions(inputs[0], selected),
-        **{
-            name: tf.gather(value, selected[:, 0])
-            for name, value in joint_settlement.public_inputs(inputs[0]).items()
-        },
-        **critic.public_inputs(inputs[0], selected),
-    }
-
-    @tf.function(jit_compile=True)
-    def reference_utilities(values):
-        return settlement_reference.projected_st3(
-            network.critic.joint_distributions(values), values
-        )
-
-    reference = tf.concat(
-        [
-            reference_utilities(
-                {
-                    name: value[begin : begin + 16]
-                    for name, value in candidate_inputs.items()
-                }
+    assert (
+        float(
+            tf.linalg.global_norm(
+                tape.gradient(
+                    metrics["value_loss"],
+                    network.actor.get_layer("state_value").trainable_variables,
+                )
             )
-            for begin in range(0, selected.shape[0], 16)
-        ],
-        0,
+        )
+        > 0
     )
-    baseline = tf.math.unsorted_segment_sum(
-        reference
-        * tf.gather_nd(
-            critic.candidate_probabilities(inputs[0], outputs), selected
-        ),
-        selected[:, 0],
-        len(observations),
-    )
-    recorded = (
-        tf.gather(critic.chosen_actions(inputs[0], inputs[1]), selected[:, 0])
-        == selected[:, 1]
-    )
-    numpy.testing.assert_allclose(
-        advantages,
-        tf.where(
-            inputs[0]["decision_phase"] == 1,
-            0.0,
-            (tf.boolean_mask(reference, recorded) - baseline) / 3,
-        ),
-        atol=2e-5,
-        rtol=2e-5,
-    )
-    assert tape.gradient(advantages, network.trainable_variables) == [
-        None
-    ] * len(network.trainable_variables)
     assert all(numpy.isfinite(float(value)) for value in metrics.values())
-    assert 0 < float(metrics["utility_effective_sample_fraction"]) <= 1
     # Full-batch critic supervision includes every policy position.
     assert float(
         outputs["critic_statistics"][
@@ -422,6 +366,8 @@ def test_joint_training_checkpoint_export_and_placement_inference(
         "belief_loss",
         "specialist_loss",
         "critic_loss",
+        "value_loss",
+        "value_bias",
         "joint_loss",
     ):
         numpy.testing.assert_allclose(combined[name], expected[name], atol=2e-5)
@@ -509,6 +455,26 @@ def test_joint_training_checkpoint_export_and_placement_inference(
         )
     serving = export.ServingModel(restored)
     expected = serving.serve(**inputs[0])
+
+    @tf.function
+    def actor_value(features):
+        return restored.actor(features, training=False)["state_value"]
+
+    root_outputs = serving.root_evaluation(**inputs[0])
+    assert "state_value" not in expected
+    numpy.testing.assert_allclose(
+        root_outputs["state_value"],
+        actor_value(inputs[0]),
+        atol=1e-6,
+    )
+    for name in (
+        "critic_action_indices",
+        "critic_projected_st3",
+        "discard_policy_logits",
+    ):
+        numpy.testing.assert_allclose(
+            root_outputs[name], expected[name], rtol=1e-5, atol=1e-6
+        )
     numpy.testing.assert_allclose(
         tf.reduce_sum(expected["final_placement_probabilities"], -1),
         1,

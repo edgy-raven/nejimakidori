@@ -115,7 +115,7 @@ def summarize(results, bootstrap_seed=0):
 
 
 def start_worker(root, devices):
-    from model import frozen_policy
+    from training import frozen_policy
 
     device = devices.get()
     for name in ("new", "old"):
@@ -147,6 +147,7 @@ def play_games(tasks):
             if not env.done()
             for actor, observation in observations[game].items()
         ]
+        pending = []
         for name, policy in WORKER_POLICIES.items():
             policy_requests = [
                 request
@@ -155,13 +156,17 @@ def play_games(tasks):
                 == (name == "new")
             ]
             if policy_requests:
-                for request, action in zip(
-                    policy_requests,
-                    policy.select_many(policy_requests),
-                    strict=True,
-                ):
-                    game, actor = divmod(request[0], 4)
-                    choices[game][actor] = action
+                policy.send_requests(policy_requests)
+                pending.append((policy, policy_requests))
+        # Both frozen policies can construct features and infer concurrently.
+        for policy, policy_requests in pending:
+            for request, action in zip(
+                policy_requests,
+                policy.receive_actions(policy_requests),
+                strict=True,
+            ):
+                game, actor = divmod(request[0], 4)
+                choices[game][actor] = action
         for game, env in enumerate(games):
             if not env.done():
                 observations[game] = env.step(choices[game])
@@ -197,7 +202,7 @@ def publish_summary(root, results, bootstrap_seed):
 
 
 def run(args):
-    from model import frozen_policy
+    from training import frozen_policy
 
     if args.games <= 0 or args.games % 4:
         raise ValueError(

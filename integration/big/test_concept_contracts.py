@@ -6,8 +6,10 @@ import tensorflow as tf
 
 from integration import feature_reference
 from log_dataset import _native_collection, scoring
+from model import actions
 from model import actor as actor_layers
-from model import critic, payment_scoring
+from model import critic, losses, network, payment_scoring
+from training import self_play
 
 
 def test_route_families_include_yakuman_shapes_and_kan_completions():
@@ -147,3 +149,119 @@ def test_bonus_prediction_uses_counts_without_bonus_type_heads():
     numpy.testing.assert_allclose(
         tf.reduce_sum(result["score_probability"], -1), 1, atol=1e-6
     )
+
+
+def test_yakuhai_masks_follow_visible_copies_claims_and_exact_winds():
+    inputs = {
+        name: numpy.zeros((6, *spec["shape"]), spec["dtype"])
+        for name, spec in _native_collection.INPUTS.items()
+    }
+    inputs["seat_wind"][:] = [0, 1, 2, 3]
+    # Two dead white dragons (including revealed indicators) prevent a pon.
+    inputs["known_unavailable_counts"][:2, 31] = 2
+    # The offered second copy is still claimable by everyone but seat 1.
+    inputs["trigger_valid"][1] = 1
+    inputs["trigger_tile_id"][1] = 31
+    inputs["trigger_source"][1] = 1
+    # A fixed white triplet is retained for its owner, unavailable to others.
+    inputs["known_unavailable_counts"][2, 31] = 3
+    for row, tiles in ((2, [31]), (3, [0, 9, 18, 29]), (4, [0, 9, 18, 27])):
+        for slot, tile in enumerate(tiles):
+            inputs["meld_valid"][row, 0, slot] = 1
+            inputs["meld_type"][row, 0, slot] = 2
+            inputs["meld_tile_ids"][row, 0, slot, :3] = tile
+            inputs["meld_tile_valid"][row, 0, slot, :3] = 1
+            inputs["known_unavailable_counts"][row, tile] = 3
+    # Our concealed pair isn't dead: opponents could receive later discards.
+    inputs["known_unavailable_counts"][5, 31] = 2
+    inputs["candidate_hand_counts"][5, 0, 31] = 2
+    raw_logits = tf.Variable(tf.zeros((6, 4, 2, len(scoring.NAMES))))
+    with tf.GradientTape() as tape:
+        logits = payment_scoring.CompletionMask()(
+            [
+                raw_logits,
+                {name: tf.constant(value) for name, value in inputs.items()},
+            ]
+        )
+        # The same constrained logits feed completion-yaku training loss.
+        loss = tf.reduce_sum(
+            tf.nn.sigmoid_cross_entropy_with_logits(
+                labels=tf.zeros_like(logits), logits=logits
+            )
+        )
+    probability = tf.sigmoid(logits).numpy()
+    gradients = tape.gradient(loss, raw_logits).numpy()
+    assert numpy.isfinite(gradients).all()
+    numpy.testing.assert_array_equal(gradients[probability == 0], 0)
+    assert numpy.any(gradients[1, 0, :, scoring.NAMES.index("haku")] != 0)
+    assert numpy.any(gradients[0, 0, :, scoring.NAMES.index("hatsu")] != 0)
+    possible = probability[:, :, 0, scoring.NAMES.index("haku")] > 0
+    numpy.testing.assert_array_equal(
+        possible[:3],
+        [
+            [False, False, False, False],
+            [True, False, True, True],
+            [True, False, False, False],
+        ],
+    )
+    assert possible[5].all()
+    for name in ("seat_wind", "round_wind"):
+        assert probability[3, 0, :, scoring.NAMES.index(name)].sum() == 0
+        assert (probability[4, 0, :, scoring.NAMES.index(name)] > 0).all()
+
+
+def test_constraint_learning_corrects_shared_features_without_moving_targets():
+    # A small shared representation feeds two heads. Hard masking alone
+    # cannot change the forbidden raw logit; the explicit loss must do so.
+    shared = tf.Variable([[0.5, 1.0, -0.5]])
+    target = tf.Variable([[0.5, -1e9, -0.5]])
+    for binary in (True, False):
+        with tf.GradientTape(persistent=True) as tape:
+            raw = shared * 2
+            penalty = tf.reduce_mean(
+                losses.constraint_divergence(raw, target, binary=binary)
+            )
+        gradient = tape.gradient(penalty, shared)
+        assert gradient[0, 1] > 0
+        assert numpy.isfinite(gradient).all()
+        assert tape.gradient(penalty, target) is None
+        updated = shared - 0.1 * gradient
+        assert updated[0, 1] < shared[0, 1]
+        assert (
+            tf.reduce_mean(
+                losses.constraint_divergence(updated * 2, target, binary=binary)
+            )
+            < penalty
+        )
+
+
+def test_sparse_policy_padding_cannot_train_score_offsets():
+    tf.keras.utils.set_random_seed(941)
+    model = network.JointPolicyPayment()
+    features = self_play.initial_features(941)
+    scores = model.actor.get_layer("final_scores")
+    original = model.actor(features, training=False)
+    legal = actions.legal_choices(features)["discard_policy_logits"]
+    assert tf.reduce_any(legal) and tf.reduce_any(~legal)
+    for offset in (-1000.0, 1000.0):
+        scores.bias.assign([offset])
+        with tf.GradientTape() as tape:
+            shifted = model.actor(features, training=False)
+            penalty = tf.reduce_sum(shifted["constraint_loss"])
+        assert tape.gradient(penalty, scores.bias) is None
+        numpy.testing.assert_array_equal(
+            shifted["constraint_loss"], original["constraint_loss"]
+        )
+        numpy.testing.assert_allclose(
+            tf.nn.softmax(shifted["discard_policy_logits"]),
+            tf.nn.softmax(original["discard_policy_logits"]),
+            atol=1e-5,
+        )
+    # Win logits mean accept/decline conditional on a legal win opportunity.
+    # Non-winning states cannot provide negative win-policy supervision.
+    with tf.GradientTape() as tape:
+        penalty = tf.reduce_sum(
+            model.actor(features, training=False)["constraint_loss"]
+        )
+    win = model.actor.get_layer("win_decision_logits")
+    assert tape.gradient(penalty, win.trainable_variables) == [None, None]

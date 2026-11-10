@@ -1,9 +1,12 @@
 """Feature extraction preserves native post-discard yaku semantics."""
 
+import json
+import pathlib
+
 import numpy
 
 from integration import collection_reference, feature_reference
-from log_dataset import features, shanten
+from log_dataset import features, replay, shanten
 from model import actions
 
 
@@ -60,8 +63,6 @@ def test_discard_yaku_matches_native_transitions_including_reds_and_melds(
 
 
 def test_reachable_ranges_follow_each_discard_and_riichi_slot():
-    from log_dataset import replay
-
     start = dict(
         type="start_kyoku",
         bakaze="E",
@@ -96,3 +97,37 @@ def test_reachable_ranges_follow_each_discard_and_riichi_slot():
         packed["action_value_range"][27],
     )
     assert not packed["action_value_eligible"][74 + 24]
+
+
+def test_reported_public_safety_features_reach_native_inputs():
+    for filename, actor in (("passed_7m", 2), ("riichi_push", 3)):
+        events = json.loads(
+            pathlib.Path(
+                f"integration/fixtures/model/{filename}.json"
+            ).read_text()
+        )
+        state = replay.Replay.from_start(filename, events[0])
+        for event in events[1:]:
+            state.apply(event)
+        phase = actions.phase_for_actions(
+            state.legal_observation(actor).legal_actions()
+        )
+        packed = features.pack(state, actor, phase)
+        if filename == "passed_7m":
+            assert packed["passed_unchanged_to_seat"][2, 6] == 1
+            assert packed["genbutsu_to_seat"][2, 6] == 0
+            assert packed["passed_unchanged_to_seat"][2, 1] == 0
+        else:
+            expected = numpy.zeros((4, 4), numpy.int8)
+            expected[:, 3] = [1, 3, 1, 0]
+            numpy.testing.assert_array_equal(
+                packed["riichi_push_count"], expected
+            )
+            # Later safety must not erase earlier pushes.
+            numpy.testing.assert_array_equal(
+                packed["genbutsu_to_seat"][3, [30, 12, 15]], [1, 1, 1]
+            )
+            numpy.testing.assert_array_equal(
+                packed["last_tedashi_tile"],
+                numpy.eye(37, dtype=numpy.int8)[[32, 15, 1, 2]],
+            )

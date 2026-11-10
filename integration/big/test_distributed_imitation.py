@@ -258,7 +258,7 @@ tf.config.set_logical_device_configuration(
 )
 from log_dataset import _native_collection
 from model import actions
-from model import training
+from training import trainer as training
 from model import losses
 import types
 strategies = {
@@ -281,6 +281,7 @@ class Payment(tf.keras.Model):
             tf.zeros(2),
             losses.masked_totals(tf.zeros_like(prediction), valid),
             losses.masked_totals(tf.ones_like(prediction), valid),
+            losses.masked_totals(prediction ** 2, valid),
         ])
 
 
@@ -295,6 +296,8 @@ class Network(tf.keras.Model):
             {"x": x},
             {
                 "board": board,
+                "state_value": logits[:, 0],
+                "constraint_loss": tf.keras.ops.sum(logits ** 2, -1),
                 **{
                     name + "_prior_loss": logits[:, 0] ** 2
                     for name in actions.TRAIN_POLICY_HEADS
@@ -333,8 +336,7 @@ def belief_terms(features, labels, outputs, mean=losses.mean_valid):
 training.critic.chosen_actions = lambda features, labels: (
     labels["discard_policy_logits"])
 training.beliefs.belief_loss_terms = belief_terms
-training.critic.advantages = lambda *args: tf.zeros(1)
-training.objective_metrics = lambda inputs, outputs, advantages: (
+training.objective_metrics = lambda inputs, outputs: (
     belief_terms(inputs[0], inputs[1], outputs)[0]["belief"],
     {
         name.removesuffix("_logits") + "_" + suffix: tf.reduce_sum(
@@ -386,8 +388,8 @@ for replicas in (1, 2):
         legal=tf.ones((4, 150), tf.bool),
         chosen=tf.constant([0, 1, 2, 3]),
         advantages=tf.constant([0.02, -0.01, 0.03, 0.04]),
+        returns=tf.constant([0.1, -0.1, 0.2, -0.2]),
         payment_points=tf.zeros((4, 40), tf.int32),
-        critic_valid=tf.constant([False, False, True, True]),
     )
     batch["behavior"] = trainer.predict(
         {**batch, "unused_replay_metadata": object()})
@@ -406,7 +408,17 @@ for replicas in (1, 2):
                 batch, inputs, tf.constant(count)
             ).values()
         )
-    for awr in (False, True):
+    for count in (3, 1):
+        update = trainer.policy_update(
+            batch, None, tf.constant(count), awr=True)
+        # Local gradient norms depend on replica partitioning; global
+        # objectives and resulting weights must still match.
+        assert numpy.isfinite(float(update["gradient/local_norm"]))
+        metrics.extend(
+            value for name, value in update.items()
+            if name != "gradient/local_norm"
+        )
+    for awr in (False,):
         auxiliary = trainer.auxiliary_update(inputs, awr)
         assert float(auxiliary["imitation_accuracy"]) == 0.5
         assert float(auxiliary["imitation_top3_accuracy"]) == 1.0
@@ -417,7 +429,7 @@ for replicas in (1, 2):
     else:
         for left, right in zip(expected, result):
             numpy.testing.assert_allclose(left, right, rtol=1e-5, atol=1e-6)
-from model import self_play
+from training import self_play
 from model import losses
 class Actor(tf.Module):
     def __init__(self):

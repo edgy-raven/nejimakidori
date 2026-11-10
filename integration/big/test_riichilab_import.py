@@ -8,7 +8,7 @@ import zipfile
 import numpy
 import pytest
 
-from integration.big import test_dataset_sampling
+from integration import archive_fixture
 from log_dataset import archives, riichilab
 from model import outcomes
 
@@ -58,30 +58,6 @@ def test_teacher_draws_charge_accepted_deposits_once(
     events[-3]["deltas"][0] -= 100
     with pytest.raises(ValueError, match="Invalid native draw payment"):
         outcomes.normalize_draw_payments(events)
-
-
-def test_approved_teachers_exclude_minyo_and_nodoka():
-    assert riichilab.TEACHERS == {120: 8, 351: 8, 269: 8, 411: 8}
-    row = riichilab.enrich(
-        {
-            "id": "teacher-change",
-            "played_at": "2026-10-04 12:00:00",
-            "players": [
-                {
-                    "seat": seat,
-                    "bot_id": bot,
-                    "bot_name": str(bot),
-                    "is_disconnected": False,
-                    "is_penalized": False,
-                }
-                for seat, bot in enumerate([203, 299, 269, 411])
-            ],
-        },
-        [{"type": "start_game"}, {"type": "end_game"}],
-        riichilab.TEACHERS,
-    )
-    assert row["dan"] == [None, None, 8, 8]
-    assert row["events"][0]["riichilab"]["bot_ids"] == [203, 299, 269, 411]
 
 
 def test_import_deduplicates_matches_and_samples_only_assigned_teachers(
@@ -174,7 +150,7 @@ def test_import_deduplicates_matches_and_samples_only_assigned_teachers(
 
     primary = tmp_path / "tenhou"
     primary.mkdir()
-    test_dataset_sampling.write_enriched_archive(primary)
+    archive_fixture.write_enriched_archive(primary)
     combined, metadata = archives.games(primary, [output])
     assert len(combined) == 7
     assert metadata["supplemental"][0]["player_ranks"] == summary

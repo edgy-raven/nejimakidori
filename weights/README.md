@@ -6,7 +6,7 @@ has its own [download and run instructions](https://github.com/edgy-raven/nejima
 V1 weights require their matching source and cannot initialize the current v2
 architecture.
 
-For v2, follow [training and export](../model/README.md) to create compatible
+For v2, follow [training and export](../training/README.md) to create compatible
 artifacts:
 
 | Artifact | Use |
@@ -17,7 +17,7 @@ artifacts:
 | `policy/saved_model/` | Serve predictions or evaluate against another model. |
 | `policy/source/` | Source preserved by export for the frozen player. |
 
-`model.training` initializes joint weights with `--initial` and writes
+`training.trainer` initializes joint weights with `--initial` and writes
 `latest.weights.h5` alongside recovery checkpoints for fresh starts.
 
 Keep the export and its source together. The current

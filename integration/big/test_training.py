@@ -13,7 +13,8 @@ from model import actions
 from model import actor as actor_layers
 from model import losses
 from model import network as joint_network
-from model import self_play, training
+from training import self_play
+from training import trainer as training
 
 
 class CpuStaging:
@@ -63,7 +64,7 @@ def test_prefetch_preserves_order_and_partial_budget():
 def test_validation_covers_partial_batch_and_saves_best_weights(
     tmp_path, monkeypatch
 ):
-    from model import training
+    from training import trainer as training
 
     rows = tf.constant([str(n) for n in range(130)])
     (tmp_path / "dataset_summary.json").write_text(
@@ -88,6 +89,8 @@ def test_validation_covers_partial_batch_and_saves_best_weights(
                 "policy_loss": tf.constant(0.5),
                 "payment_nll": tf.constant(1.2),
                 "belief_loss": tf.constant(0.1),
+                "value_loss": tf.constant(0.2),
+                "value_bias": tf.constant(-0.05),
                 "completion_yaku_loss": tf.constant(0.01),
             }
         seen.extend(batch[0].numpy().tolist())
@@ -125,6 +128,8 @@ def test_validation_covers_partial_batch_and_saves_best_weights(
         "validation/policy_loss",
         "validation/payment_nll",
         "validation/belief_loss",
+        "validation/value_loss",
+        "validation/value_bias",
     }
     assert result["completion_yaku_loss"] > 0
     assert (
@@ -141,18 +146,19 @@ def test_validation_covers_partial_batch_and_saves_best_weights(
 )
 def test_entropy_explores_followups_without_biasing_the_parent(head, gap, tail):
     parent = tf.Variable(
-        [numpy.log(0.25), 0.0, numpy.log(4.0), -1e9], dtype=tf.float32
+        [numpy.log(0.25), 0.0, numpy.log(4.0), -85.0, -90.0, -1e9],
+        dtype=tf.float32,
     )
     followup = tf.Variable(
-        [[numpy.log(0.8), numpy.log(0.2)]] * 4, dtype=tf.float32
+        [[numpy.log(0.8), numpy.log(0.2)]] * parent.shape[0], dtype=tf.float32
     )
     with tf.GradientTape(persistent=True) as tape:
         logits = tf.concat(
             [
-                tf.zeros((4, 1)),
-                tf.fill((4, gap), -1e9),
+                tf.zeros((parent.shape[0], 1)),
+                tf.fill((parent.shape[0], gap), -1e9),
                 parent[:, None] + tf.nn.log_softmax(followup),
-                tf.fill((4, tail), -1e9),
+                tf.fill((parent.shape[0], tail), -1e9),
             ],
             axis=1,
         )
@@ -161,27 +167,32 @@ def test_entropy_explores_followups_without_biasing_the_parent(head, gap, tail):
         total = tf.reduce_sum(entropy)
         offline = actor_layers.policy_entropy(
             {
-                name: tf.fill((4,), 0 if name == head else -1)
+                name: tf.fill((parent.shape[0],), 0 if name == head else -1)
                 for name in actions.TRAIN_POLICY_HEADS
             },
             {
-                name: logits if name == head else tf.zeros((4, 150))
+                name: (
+                    logits if name == head else tf.zeros((parent.shape[0], 150))
+                )
                 for name in actions.TRAIN_POLICY_HEADS
             },
         )
     # Parent exploration is exactly binary entropy, independent of the
-    # continuation's entropy. Impossible call branches have finite gradients.
-    expected = [0.16 * numpy.log(4), 0, -0.16 * numpy.log(4), 0]
+    # continuation's entropy. Rare and impossible branches stay finite.
+    expected = [0.16 * numpy.log(4), 0, -0.16 * numpy.log(4), 0, 0, 0]
     numpy.testing.assert_allclose(
         tape.gradient(total, parent), expected, atol=1e-6
     )
     numpy.testing.assert_allclose(
-        tape.gradient(offline, parent), numpy.array(expected) / 4, atol=1e-6
+        tape.gradient(offline, parent),
+        numpy.array(expected) / parent.shape[0],
+        atol=1e-6,
     )
     gradient = tape.gradient(total, followup).numpy()
     assert (gradient[:3, 0] < 0).all()
     assert (gradient[:3, 1] > 0).all()
-    numpy.testing.assert_array_equal(gradient[3], 0)
+    assert numpy.isfinite(gradient).all()
+    numpy.testing.assert_array_equal(gradient[-1], 0)
     numpy.testing.assert_allclose(
         entropy,
         -tf.reduce_sum(tf.exp(log_probability) * log_probability, axis=-1),
@@ -189,7 +200,7 @@ def test_entropy_explores_followups_without_biasing_the_parent(head, gap, tail):
     )
 
 
-def test_clipped_ppo_and_forward_kl_have_the_expected_gradients():
+def test_clipped_ppo_and_policy_kl_have_the_expected_gradients():
     behavior = tf.math.log([[0.5, 0.5]] * 2 + [[0.1, 0.9]] * 3 + [[0.5, 0.5]])
     logits = tf.Variable(tf.math.log([[0.8, 0.2], [0.2, 0.8]] * 3))
     # Ratios: 1.6, 0.4, 8, 2, 8, 0.4. Cover ordinary clipping,
@@ -214,12 +225,25 @@ def test_clipped_ppo_and_forward_kl_have_the_expected_gradients():
     )
     reference = tf.Variable(behavior)
     with tf.GradientTape(persistent=True) as tape:
-        kl = actor_layers.forward_kl(reference, tf.nn.log_softmax(logits))
+        kl = actor_layers.policy_kl(reference, tf.nn.log_softmax(logits))
     assert tape.gradient(kl, reference) is None
     assert float(kl) > 0
     assert numpy.linalg.norm(tape.gradient(kl, logits)) > 0
+    numpy.testing.assert_allclose(actor_layers.policy_kl(behavior, behavior), 0)
+
+    with tf.GradientTape(persistent=True) as tape:
+        current = tf.nn.log_softmax(logits)
+        reverse = actor_layers.policy_kl(reference, current, reverse=True)
     numpy.testing.assert_allclose(
-        actor_layers.forward_kl(behavior, behavior), 0
+        reverse,
+        tf.reduce_mean(
+            tf.reduce_sum(tf.exp(current) * (current - reference), axis=-1)
+        ),
+    )
+    assert tape.gradient(reverse, reference) is None
+    assert numpy.linalg.norm(tape.gradient(reverse, logits)) > 0
+    numpy.testing.assert_allclose(
+        actor_layers.policy_kl(behavior, behavior, reverse=True), 0
     )
 
     # Multiple active heads sum within a decision; unlabeled rows add no mass.
@@ -243,7 +267,7 @@ def test_clipped_ppo_and_forward_kl_have_the_expected_gradients():
         kl,
         4
         / 3
-        * actor_layers.forward_kl(
+        * actor_layers.policy_kl(
             tf.nn.log_softmax(reference), tf.nn.log_softmax(current)
         ),
         atol=1e-7,
@@ -252,8 +276,12 @@ def test_clipped_ppo_and_forward_kl_have_the_expected_gradients():
     assert numpy.linalg.norm(tape.gradient(kl, current)) > 0
 
 
-def test_alternating_updates_use_awr_for_every_offline_segment(monkeypatch):
+@pytest.mark.parametrize("cycle_blocks,ratio", [(1, 0.5), (2, 2)])
+def test_alternating_updates_use_awr_for_every_offline_segment(
+    monkeypatch, cycle_blocks, ratio
+):
     updates = []
+    expert_rows = []
     monkeypatch.setattr(
         training, "save_checkpoint", lambda manager: manager.save()
     )
@@ -264,6 +292,7 @@ def test_alternating_updates_use_awr_for_every_offline_segment(monkeypatch):
 
         def auxiliary_update(self, inputs, awr, anchored=False):
             updates.append(("awr" if awr else "foundation", len(inputs)))
+            expert_rows.extend(inputs[:, 0].numpy().tolist())
             self.auxiliary_optimizer.iterations.assign_add(1)
             return {}
 
@@ -274,7 +303,9 @@ def test_alternating_updates_use_awr_for_every_offline_segment(monkeypatch):
     monkeypatch.setattr(
         training,
         "offline_stream",
-        lambda *args: iter([numpy.ones((2, 1))] * 10),
+        lambda *args, **kwargs: iter(
+            [numpy.arange(i, i + 2)[:, None] for i in range(0, 20, 2)]
+        ),
     )
     monkeypatch.setattr(training, "ppo_block", ppo_block)
     monkeypatch.setattr(
@@ -297,14 +328,16 @@ def test_alternating_updates_use_awr_for_every_offline_segment(monkeypatch):
     reports = []
     training.train_cycles(
         args=types.SimpleNamespace(
+            expert_sampling="mixed",
+            replay_sampling="mixed",
             awr_exposures=8,
             awr_only_exposures=0,
             final_awr_exposures=0,
             final_awr_kl=0.1,
             prior_weight=1.0,
-            ppo_exposure_ratio=0.5,
+            ppo_exposure_ratio=ratio,
             block_exposures=4,
-            cycle_blocks=1,
+            cycle_blocks=cycle_blocks,
             batch_size=2,
             seed=1,
             ppo_epochs=1,
@@ -317,21 +350,20 @@ def test_alternating_updates_use_awr_for_every_offline_segment(monkeypatch):
         ppo_manager=types.SimpleNamespace(save=lambda: None),
         report=lambda stage, metrics: reports.append(stage),
     )
-    assert updates == [
-        ("awr", 2),
-        ("awr", 2),
-        ("ppo", 2),
-        ("awr", 2),
-        ("awr", 2),
-        ("ppo", 2),
-    ]
+    assert expert_rows == list(range(8))
+    assert updates == (
+        ([("awr", 2)] * 2 + [("ppo", 2)] * int(2 * ratio)) * 2
+        if cycle_blocks == 1
+        else [("awr", 2)] * 4 + [("ppo", 2)] * int(4 * ratio)
+    )
     assert int(progress["awr"]) == 8
-    assert int(progress["ppo"]) == 4
+    assert int(progress["ppo"]) == int(8 * ratio)
     assert "foundation_repair" not in reports
 
 
-@pytest.mark.parametrize("needed", [4, 8])
-def test_collection_report_uses_cohort_deltas_and_snapshot_provenance(needed):
+def test_collection_report_uses_cohort_deltas_and_snapshot_provenance():
+    needed = 8
+
     class Collector:
         metrics = dict(
             **self_play.collection_counts(),
@@ -352,8 +384,7 @@ def test_collection_report_uses_cohort_deltas_and_snapshot_provenance(needed):
                 inference_calls=2,
             ).items():
                 self.metrics[name] += value
-            self.batch = {"chosen": numpy.zeros(4)}
-            return self.batch
+            return {"chosen": numpy.zeros(4)}
 
     collector = Collector()
     batch, games, metrics = training.collect_cohort(
@@ -367,8 +398,6 @@ def test_collection_report_uses_cohort_deltas_and_snapshot_provenance(needed):
     )
     assert games == needed // 4
     assert len(batch["chosen"]) == needed
-    if games == 1:
-        assert batch is collector.batch
     assert metrics["collection_seed_start"] == 12
     assert metrics["collection_seed_end"] == 12 + games
     assert metrics["collection_snapshot_exposures"] == 123
@@ -466,7 +495,7 @@ def test_native_self_play_records_legal_sampled_actions(monkeypatch):
     assert actor.traces == 1
 
 
-def test_fresh_critic_targets_preserve_deposits_and_censor_preempted_calls(
+def test_fresh_critic_targets_preserve_deposits_and_preempted_calls(
     monkeypatch,
 ):
     from log_dataset import _native_collection
@@ -542,7 +571,7 @@ def test_fresh_critic_targets_preserve_deposits_and_censor_preempted_calls(
         1,
         12,
     )
-    numpy.testing.assert_array_equal(batch["critic_valid"], [1, 0, 1, 1])
+    numpy.testing.assert_array_equal(batch["chosen"], [37, 112, 112, 0])
     # Honba is removed; carried pots and only future deposits remain.
     expected = numpy.zeros((4, 4, 4), numpy.int32)
     expected[0, 3, 1] = 8000
@@ -562,10 +591,11 @@ def test_fresh_critic_targets_preserve_deposits_and_censor_preempted_calls(
     )
 
 
-@pytest.mark.parametrize("awr", [False, True])
 def test_phases_update_actor_and_preserve_stored_behavior(
-    monkeypatch, tmp_path, awr
+    monkeypatch, tmp_path
 ):
+    awr = False
+
     class Payment(tf.keras.Model):
         def __init__(self):
             super().__init__()
@@ -580,6 +610,7 @@ def test_phases_update_actor_and_preserve_stored_behavior(
                     tf.zeros(2),
                     losses.masked_totals(tf.zeros_like(prediction), valid),
                     losses.masked_totals(tf.ones_like(prediction), valid),
+                    losses.masked_totals(prediction**2, valid),
                 ]
             )
 
@@ -594,6 +625,8 @@ def test_phases_update_actor_and_preserve_stored_behavior(
                 {"x": inputs},
                 {
                     "board": board,
+                    "state_value": logits[:, 0],
+                    "constraint_loss": tf.keras.ops.sum(logits**2, -1),
                     **{
                         name + "_prior_loss": logits[:, 0] * 0
                         for name in actions.TRAIN_POLICY_HEADS
@@ -619,16 +652,9 @@ def test_phases_update_actor_and_preserve_stored_behavior(
         lambda features, labels: labels["discard_policy_logits"],
     )
     monkeypatch.setattr(
-        training.critic,
-        "advantages",
-        lambda *args: (
-            tf.zeros(2) if awr else pytest.fail("CE-only phase scored AWR")
-        ),
-    )
-    monkeypatch.setattr(
         training,
         "objective_metrics",
-        lambda inputs, outputs, advantages: (
+        lambda inputs, outputs: (
             -tf.reduce_mean(outputs["discard_policy_logits"][:, 0]),
             {
                 "policy_entropy": tf.constant(0.5),
@@ -658,8 +684,11 @@ def test_phases_update_actor_and_preserve_stored_behavior(
             {},
         ),
     )
+    mirror = Network().actor
     trainer = training.Trainer(
         network=network,
+        mirror=mirror,
+        mirror_coefficient=0.3,
         first=inputs,
         args=types.SimpleNamespace(
             ppo_learning_rate=0.01,
@@ -679,25 +708,19 @@ def test_phases_update_actor_and_preserve_stored_behavior(
             awr_temperature=3.0,
         ),
     )
+    trainer.refresh_mirror()
+    mirror_weights = mirror.get_weights()
+    assert not mirror.trainable_variables
     assert type(trainer.auxiliary_optimizer) is tf.keras.optimizers.AdamW
     assert type(trainer.policy_optimizer) is tf.keras.optimizers.AdamW
-    if awr:
-        before = trainer.auxiliary_update.python_function(
-            trainer.packing.pack(inputs), True, train=False
-        )["auxiliary"]
-        trainer.args.awr_entropy = 0.03
-        after = trainer.auxiliary_update.python_function(
-            trainer.packing.pack(inputs), True, train=False
-        )["auxiliary"]
-        numpy.testing.assert_allclose(after - before, -0.01, atol=1e-6)
-        trainer.args.awr_entropy = 0.01
     for optimizer in (trainer.auxiliary_optimizer, trainer.policy_optimizer):
         assert optimizer.weight_decay == 1e-4
         assert optimizer.clipnorm == 1.0
     schedule = training.supervised_schedule(trainer.args)
+    assert type(schedule) is tf.keras.optimizers.schedules.CosineDecay
     numpy.testing.assert_allclose(
-        [schedule(0), schedule(10), schedule(375), schedule(500)],
-        [2e-5, 2e-4, 2e-4, 2e-5],
+        [schedule(0), schedule(4), schedule(102), schedule(200)],
+        [2e-5, 2e-4, 1.1e-4, 2e-5],
         rtol=1e-6,
     )
     batch = dict(
@@ -706,7 +729,6 @@ def test_phases_update_actor_and_preserve_stored_behavior(
         legal=tf.ones((2, 150), tf.bool),
         chosen=tf.constant([0, 1]),
         payment_points=tf.zeros((2, 40), tf.int32),
-        critic_valid=tf.ones(2, tf.bool),
         returns=tf.constant([1.0, -1.0]),
         advantages=tf.zeros(2),
     )
@@ -720,6 +742,36 @@ def test_phases_update_actor_and_preserve_stored_behavior(
         numpy.any(old != new)
         for old, new in zip(before_belief, network.actor.get_weights())
     )  # Beliefs and fresh settlement train even with zero PPO advantages.
+    assert int(trainer.awr_optimizer.iterations) == 0
+    ppo_state = [v.numpy().copy() for v in trainer.policy_optimizer.variables]
+    before = network.actor.get_weights()
+    metrics = trainer.policy_update(
+        batch, trainer.packing.pack(inputs), tf.constant(2), awr=True
+    )
+    assert float(metrics["mirror_kl"]) > 0
+    numpy.testing.assert_allclose(
+        metrics["weighted_mirror_loss"], 0.3 * metrics["mirror_kl"]
+    )
+    for expected, actual in zip(mirror_weights, mirror.get_weights()):
+        numpy.testing.assert_array_equal(expected, actual)
+    trainer.refresh_mirror()
+    for expected, actual in zip(
+        network.actor.get_weights(), mirror.get_weights()
+    ):
+        numpy.testing.assert_array_equal(expected, actual)
+    assert int(trainer.awr_optimizer.iterations) == 1
+    for expected, variable in zip(
+        ppo_state, trainer.policy_optimizer.variables
+    ):
+        numpy.testing.assert_array_equal(expected, variable.numpy())
+    assert any(
+        numpy.any(old != new)
+        for old, new in zip(before, network.actor.get_weights())
+    )
+    awr_state = [v.numpy().copy() for v in trainer.awr_optimizer.variables]
+    trainer.policy_update(batch, trainer.packing.pack(inputs), tf.constant(2))
+    for expected, variable in zip(awr_state, trainer.awr_optimizer.variables):
+        numpy.testing.assert_array_equal(expected, variable.numpy())
     batch["reference"] = trainer.predict(batch)
     snapshot = batch["reference"].numpy().copy()
     before = [v.numpy().copy() for v in network.trainable_variables]
@@ -736,15 +788,20 @@ def test_phases_update_actor_and_preserve_stored_behavior(
     checkpoint = tf.train.Checkpoint(
         network=network,
         policy_optimizer=trainer.policy_optimizer,
+        awr_optimizer=trainer.awr_optimizer,
         auxiliary_optimizer=trainer.auxiliary_optimizer,
     )
     saved = checkpoint.save(str(tmp_path / "cycle"))
     expected = trainer.predict(batch).numpy()
     trainer.policy_update(batch, trainer.packing.pack(inputs), tf.constant(2))
     trainer.auxiliary_update(trainer.packing.pack(inputs), awr)
+    trainer.policy_update(
+        batch, trainer.packing.pack(inputs), tf.constant(2), awr=True
+    )
     checkpoint.restore(saved).assert_consumed()
     numpy.testing.assert_allclose(trainer.predict(batch), expected)
-    assert int(trainer.policy_optimizer.iterations) == 1
+    assert int(trainer.policy_optimizer.iterations) == 2
+    assert int(trainer.awr_optimizer.iterations) == 1
     assert int(trainer.auxiliary_optimizer.iterations) == 1
 
     metrics = trainer.policy_update(
@@ -770,6 +827,19 @@ def test_phases_update_actor_and_preserve_stored_behavior(
         numpy.testing.assert_allclose(left, right, atol=1e-7)
     assert trainer.policy_update.experimental_get_tracing_count() == traces
 
+    # Pure self-play must not consult expert labels or the belief replay loss.
+    def no_expert_loss(*args, **kwargs):
+        pytest.fail("Pure self-play requested expert supervision")
+
+    monkeypatch.setattr(training.beliefs, "belief_loss_terms", no_expert_loss)
+    before = network.actor.get_weights()
+    metrics = trainer.policy_update(batch, None, tf.constant(2), awr=awr)
+    assert float(metrics["belief_loss"]) == 0
+    assert all(numpy.isfinite(float(v)) for v in metrics.values())
+    assert any(
+        numpy.any(a != b) for a, b in zip(before, network.actor.get_weights())
+    )
+
 
 def test_real_joint_network_supports_both_training_phases(
     monkeypatch, tmp_path
@@ -777,14 +847,14 @@ def test_real_joint_network_supports_both_training_phases(
     import json
     import pathlib
 
-    from log_dataset import afk, replay, scoring, training_data
+    from log_dataset import afk, replay, training_data
 
     events = json.loads(
         pathlib.Path(__file__)
         .parent.parent.joinpath("fixtures/model/payment_dealer_90fu.json")
         .read_text()
     )
-    targets = scoring.round_labels(events)
+    targets = training_data.game_targets(events + [{"type": "end_game"}])
     observations = list(
         replay.Replay(
             "training-probe",
@@ -801,11 +871,6 @@ def test_real_joint_network_supports_both_training_phases(
     )
     network = joint_network.JointPolicyPayment()
     outputs = network(inputs)
-    assert [
-        layer.name
-        for layer in network.actor.layers
-        if layer.name.startswith("board_block_") and layer.name.endswith("_add")
-    ] == [f"board_block_{block}_add" for block in range(4)]
     network.compile_training()
     trainer = training.Trainer(
         network=network,
@@ -868,16 +933,70 @@ def test_real_joint_network_supports_both_training_phases(
             axis=1,
             batch_dims=1,
         ),
-        critic_valid=tf.ones(2, tf.bool),
         returns=tf.constant([1.0, -1.0]),
         advantages=tf.constant([1.0, -1.0]),
     )
     batch["behavior"] = trainer.predict(batch)
+    # Actor regression must not backpropagate through its value baseline.
+    with tf.GradientTape(persistent=True) as tape:
+        awr_metrics = trainer.auxiliary_update.python_function(
+            trainer.packing.pack(inputs), True, train=False
+        )
+    value_variables = network.actor.get_layer("state_value").trainable_variables
+    assert (
+        float(
+            tf.linalg.global_norm(
+                tape.gradient(awr_metrics["policy"], value_variables)
+            )
+        )
+        == 0
+    )
+    assert (
+        float(
+            tf.linalg.global_norm(
+                tape.gradient(awr_metrics["value_loss"], value_variables)
+            )
+        )
+        > 0
+    )
+    # Identical decisions take identical updates regardless of replay source.
+    checkpoint = tf.train.Checkpoint(
+        network=network, awr_optimizer=trainer.awr_optimizer
+    )
+    saved_awr = checkpoint.save(str(tmp_path / "awr-parity"))
+    dataset_metrics = trainer.auxiliary_update(
+        trainer.packing.pack(inputs), True
+    )
+    dataset_weights = [value.numpy().copy() for value in network.weights]
+    dataset_optimizer = [
+        value.numpy().copy() for value in trainer.awr_optimizer.variables
+    ]
+    checkpoint.restore(saved_awr).assert_consumed()
+    native_metrics = trainer.policy_update(
+        {**batch, "returns": inputs[2]["returns"]},
+        None,
+        tf.constant(2),
+        awr=True,
+    )
+    for expected, actual in zip(dataset_weights, network.weights):
+        numpy.testing.assert_allclose(expected, actual, rtol=1e-5, atol=1e-6)
+    for expected, actual in zip(
+        dataset_optimizer, trainer.awr_optimizer.variables
+    ):
+        numpy.testing.assert_allclose(expected, actual, rtol=1e-5, atol=1e-6)
+    for name in ("policy", "value_loss", "payment_nll"):
+        numpy.testing.assert_allclose(
+            dataset_metrics[name], native_metrics[name], rtol=1e-5, atol=1e-6
+        )
+    assert int(trainer.auxiliary_optimizer.iterations) == 0
+    assert int(trainer.policy_optimizer.iterations) == 0
+    checkpoint.restore(saved_awr).assert_consumed()
     shared_before = (
         network.actor.get_layer("board_block_3_contract").kernel.numpy().copy()
     )
     before = network.actor.get_layer("final_pass").kernel.numpy().copy()
     critic_before = network.critic.event.kernel.numpy().copy()
+    value_before = network.actor.get_layer("state_value").kernel.numpy().copy()
     policy = trainer.policy_update(
         batch, trainer.packing.pack(inputs), tf.constant(2)
     )
@@ -892,11 +1011,18 @@ def test_real_joint_network_supports_both_training_phases(
     assert float(policy["payment_nll"]) > 0
     assert float(policy["settlement_supported_fraction"]) == 1
     assert numpy.any(critic_before != network.critic.event.kernel.numpy())
+    assert numpy.any(
+        value_before != network.actor.get_layer("state_value").kernel.numpy()
+    )
     shared_before = (
         network.actor.get_layer("board_block_3_contract").kernel.numpy().copy()
     )
     batch["reference"] = trainer.predict(batch)
+    value_before = network.actor.get_layer("state_value").kernel.numpy().copy()
     auxiliary = trainer.auxiliary_update(trainer.packing.pack(inputs), True)
+    assert numpy.any(
+        value_before != network.actor.get_layer("state_value").kernel.numpy()
+    )
     assert numpy.any(
         shared_before
         != network.actor.get_layer("board_block_3_contract").kernel.numpy()
@@ -951,30 +1077,13 @@ def test_real_joint_network_supports_both_training_phases(
     baseline = trainer.baseline(trainer.feature_packing.pack(inputs[0]))
     assert baseline.shape == (2,)
     assert numpy.isfinite(baseline).all()
-    # PPO keeps the state baseline; AWR cannot rank conditional call values.
-    from model import critic
 
+    # AWR and PPO share a fitted state value, not counterfactual forecasts.
     @tf.function
-    def shared_values():
-        outputs = network(inputs)
-        selected, values, expected = critic.action_values(
-            network, inputs[0], outputs, outputs["critic_candidate_state"]
-        )
-        chosen = critic.chosen_actions(inputs[0], inputs[1])
-        recorded = tf.gather(chosen, selected[:, 0]) == selected[:, 1]
-        return (
-            expected,
-            (tf.boolean_mask(values, recorded) - expected) / 3.0,
-            critic.advantages(network, inputs, outputs, 3.0),
-        )
+    def state_value(features):
+        return network.actor(features, training=False)["state_value"]
 
-    expected, advantage, awr_advantage = shared_values()
-    numpy.testing.assert_allclose(baseline * 100, expected, atol=1e-4)
-    numpy.testing.assert_allclose(
-        awr_advantage,
-        tf.where(inputs[0]["decision_phase"] == 1, 0.0, advantage),
-        atol=1e-4,
-    )
+    numpy.testing.assert_allclose(baseline, state_value(inputs[0]), atol=1e-6)
 
     encoded = network.actor(inputs[0])
     context = network.context(
@@ -1014,9 +1123,12 @@ def test_real_joint_network_supports_both_training_phases(
         numpy.testing.assert_array_equal(before, after)
 
 
-@pytest.mark.parametrize("rows, remaining", [(20, 5), (3, 7)])
+@pytest.mark.parametrize(
+    "objective,rows,remaining",
+    [("ppo", 20, 5), ("ppo-awr", 3, 7), ("awr", 20, 5)],
+)
 def test_ppo_scores_only_uniformly_selected_eligible_decisions(
-    rows, remaining, monkeypatch
+    rows, remaining, objective, monkeypatch
 ):
     monkeypatch.setattr(
         training.joint_settlement,
@@ -1024,7 +1136,7 @@ def test_ppo_scores_only_uniformly_selected_eligible_decisions(
         lambda **kwargs: (kwargs["scores"][:, 0], None),
     )
     scored, trained = [], []
-    selected_count = min(rows, remaining)
+    selected_count = min(rows, (remaining + 2) // 3)
 
     class Trainer:
         feature_packing = training_data.PackedBatch({"row": tf.zeros(2)})
@@ -1034,24 +1146,36 @@ def test_ppo_scores_only_uniformly_selected_eligible_decisions(
             scored.extend(features["float32"][:, 0].tolist())
             return tf.zeros(2)
 
-        def policy_update(self, batch, inputs, count):
-            assert len(scored) == 2 * ((selected_count + 1) // 2)
+        def policy_update(self, batch, inputs, count, awr=False):
+            epoch = len(trained) // selected_count
+            assert awr == (
+                objective == "awr"
+                or (objective == "ppo-awr" and epoch % 2 == 1)
+            )
+            assert len(scored) == (
+                0 if objective == "awr" else 2 * ((selected_count + 1) // 2)
+            )
             numpy.testing.assert_array_equal(
                 batch["returns"], batch["features"]["float32"][:, 0] * 2
             )
-            numpy.testing.assert_allclose(
-                batch["advantages"],
-                (batch["returns"] - numpy.mean(scored[:selected_count]) * 2)
-                / (numpy.std(scored[:selected_count]) * 2),
-                atol=1e-6,
-            )
-            assert len(inputs) == len(batch["chosen"])
+            if objective != "awr":
+                numpy.testing.assert_allclose(
+                    batch["advantages"],
+                    (batch["returns"] - numpy.mean(scored[:selected_count]) * 2)
+                    / (numpy.std(scored[:selected_count]) * 2),
+                    atol=1e-6,
+                )
+            if awr:
+                assert inputs is None
+            else:
+                assert len(inputs) == len(batch["chosen"])
             trained.extend(batch["features"]["float32"][: int(count), 0])
             return {
                 "belief_loss": tf.constant(1.0),
             }
 
         def predict(self, batch):
+            assert objective != "awr", "AWR must not run PPO KL scans"
             # Diagnose before training and after each (possibly partial) epoch.
             assert len(trained) in (0, remaining) or (
                 len(trained) % selected_count == 0
@@ -1070,7 +1194,9 @@ def test_ppo_scores_only_uniformly_selected_eligible_decisions(
     }
     used, metrics = training.ppo_block(
         trainer=Trainer(),
-        args=types.SimpleNamespace(batch_size=2, ppo_epochs=3, seed=941),
+        args=types.SimpleNamespace(
+            batch_size=2, ppo_epochs=3, seed=941, rollout_objective=objective
+        ),
         stream=iter([numpy.zeros(2)] * remaining),
         batch=batch,
         remaining=remaining,
@@ -1078,22 +1204,32 @@ def test_ppo_scores_only_uniformly_selected_eligible_decisions(
     assert metrics["update_positions_per_second"] > 0
     assert metrics["scoring_seconds"] >= 0
     assert metrics["diagnostic_seconds"] >= 0
-    assert metrics["behavior_kl"] > 0.02
-    assert metrics["behavior_kl_before"] == metrics["behavior_kl"]
-    assert metrics[f"behavior_kl_epoch_{metrics['ppo_epochs']}"] == (
-        metrics["behavior_kl"]
-    )
+    if objective != "awr":
+        assert metrics["behavior_kl"] > 0.02
+        assert metrics["behavior_kl_before"] == metrics["behavior_kl"]
+        assert metrics[f"behavior_kl_epoch_{metrics['ppo_epochs']}"] == (
+            metrics["behavior_kl"]
+        )
+    else:
+        assert "behavior_kl" not in metrics
     assert used == metrics["trained_exposures"] == remaining
     assert metrics["scored_decisions"] == selected_count
     assert metrics["collected_decisions"] == len(batch["chosen"]) == rows
-    assert len(set(scored)) == selected_count
-    assert sorted(scored[:selected_count]) == sorted(set(trained))
+    if objective != "awr":
+        assert len(set(scored)) == selected_count
+        assert sorted(scored[:selected_count]) == sorted(set(trained))
+    else:
+        assert not scored
 
 
-@pytest.mark.parametrize("collection_size", [2, 5])
 @pytest.mark.parametrize(
-    "awr_budget, block, ratio, foundation",
-    [(28, 16, 0.25, 0), (31, 17, 0.25, 5), (7, 4, 1.0, 5)],
+    "collection_size, awr_budget, block, ratio, foundation",
+    [
+        (2, 28, 16, 0.25, 0),
+        (5, 31, 17, 0.25, 5),
+        (2, 7, 4, 1.0, 5),
+        (5, 5, 3, 1.5, 0),
+    ],
 )
 def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
     monkeypatch, tmp_path, collection_size, awr_budget, block, ratio, foundation
@@ -1127,8 +1263,10 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
                 type(self.anchor_ready), "__bool__", lambda value: True
             )
             self.policy_optimizer = tf.keras.optimizers.Adam(0.01)
+            self.awr_optimizer = tf.keras.optimizers.Adam(0.01)
             self.auxiliary_optimizer = tf.keras.optimizers.Adam(0.01)
             self.policy_optimizer.build(network.trainable_variables)
+            self.awr_optimizer.build(network.trainable_variables)
             self.auxiliary_optimizer.build(network.trainable_variables)
 
         def evaluate(self, batch, statistics=None):
@@ -1142,7 +1280,7 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
             scored.append(len(features["float32"]))
             return tf.zeros(len(features["float32"]))
 
-        def policy_update(self, batch, inputs, count):
+        def policy_update(self, batch, inputs, count, awr=False):
             calls.append(("ppo", int(count)))
             assert len(inputs["float32"]) == len(batch["chosen"]) == 3
             self.policy_optimizer.apply_gradients(
@@ -1185,13 +1323,13 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
                 "belief_loss": tf.constant(1.0),
                 "policy_loss": tf.constant(0.5),
                 **(
-                    {"utility_effective_sample_fraction": tf.constant(0.8)}
+                    {"effective_sample_fraction": tf.constant(0.8)}
                     if awr
                     else {}
                 ),
             }
 
-    def collect(actor, games, seed):
+    def collect(actor, games, seed, *, retain_features):
         if seed == 100944 and not interrupted:
             interrupted.append(True)
             raise RuntimeError("interrupted between fresh cohorts")
@@ -1239,13 +1377,13 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
         training.tf.distribute.get_strategy,
     )
     monkeypatch.setattr(training.self_play, "collect", collect)
-    monkeypatch.setattr(
-        training.training_data,
-        "dataset",
-        lambda **kwargs: tf.data.Dataset.range(30)
-        .repeat()
-        .batch(kwargs["batch_size"]),
-    )
+    sampled = []
+
+    def dataset(**kwargs):
+        sampled.append(kwargs["sampling"])
+        return tf.data.Dataset.range(30).repeat().batch(kwargs["batch_size"])
+
+    monkeypatch.setattr(training.training_data, "dataset", dataset)
     monkeypatch.setattr(
         training.training_data,
         "parse_batch",
@@ -1254,6 +1392,9 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
     assert training.argument_parser().get_default("ppo_exposure_ratio") == 1.0
     args = types.SimpleNamespace(
         data="fixture",
+        expert_sampling="natural",
+        replay_sampling="focused",
+        final_awr_sampling="placement_gap",
         initial=None,
         resume=False,
         cohort_exposures=1572864,
@@ -1267,6 +1408,7 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
         collection_workers=1,
         batch_size=3,
         ppo_epochs=1,
+        rollout_objective="ppo",
         ppo_exposure_ratio=ratio,
         clip=0.2,
         dual_clip=3.0,
@@ -1298,6 +1440,7 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
     training.run(args)
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["stage"] == "complete"
+    assert set(sampled) == set(focus_sampling.Sampling)
     assert status["final_awr"] == args.final_awr_exposures
     assert (status["foundation"], status["awr"], status["ppo"]) == (
         foundation,
@@ -1314,8 +1457,8 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
     assert "runtime/window_positions_per_second" in tags
     assert not any(tag.endswith("/belief_loss") for tag in tags)
     assert "final_awr/policy_loss" in tags
-    assert "awr/utility_effective_sample_fraction" in tags
-    assert "final_awr/utility_effective_sample_fraction" in tags
+    assert "awr/effective_sample_fraction" in tags
+    assert "final_awr/effective_sample_fraction" in tags
     assert all(
         float(tf.make_ndarray(event.tensor_proto)) > 0
         for event in log.Tensors("runtime/window_positions_per_second")
@@ -1337,7 +1480,7 @@ def test_schedule_preserves_phase_budgets_anchor_and_explicit_resume(
     ]
     for stage in ("awr_only", "awr", "final_awr"):
         assert any(
-            re.fullmatch(pattern, stage + "/utility_effective_sample_fraction")
+            re.fullmatch(pattern, stage + "/effective_sample_fraction")
             for pattern in patterns
         )
     assert calls[0][0] == ("foundation" if foundation else "awr")

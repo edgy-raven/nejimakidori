@@ -174,9 +174,8 @@ def freeze_source(source, target, include_native=False):
 def source_directory(model_path):
     """Find the enclosing release/run snapshot for a SavedModel artifact."""
     for parent in pathlib.Path(model_path).resolve().parents:
-        source = parent / "source/model"
-        if (source / "frozen_policy.py").is_file():
-            return source
+        for worker in parent.glob("source/*/frozen_policy.py"):
+            return worker.parent
     raise FileNotFoundError(f"frozen policy source missing for {model_path}")
 
 
@@ -190,7 +189,7 @@ class FrozenPolicy:
                 sys.executable,
                 "-c",
                 "import sys; sys.path.pop(0); "
-                "from model.frozen_policy import WORKER; exec(WORKER)",
+                f"from {self.source.name}.frozen_policy import WORKER; exec(WORKER)",
                 str(self.model_path),
                 str(memory_mb),
             ],
@@ -216,6 +215,15 @@ class FrozenPolicy:
         self.reset_pending = True
 
     def select_many(self, requests):
+        self.send_requests(requests)
+        return self.receive_actions(requests)
+
+    def send_requests(self, requests):
+        # RiichiEnv decodes its entire log on access; share it across seats.
+        events = {
+            key: env.mjai_log
+            for key, env in {id(env): env for _, env, _ in requests}.items()
+        }
         self.process.stdin.write(
             json.dumps(
                 {
@@ -225,7 +233,7 @@ class FrozenPolicy:
                     "items": [
                         {
                             "stream": stream,
-                            "events": env.mjai_log,
+                            "events": events[id(env)],
                             "observation": observation.serialize_to_base64(),
                         }
                         for stream, env, observation in requests
@@ -236,6 +244,8 @@ class FrozenPolicy:
         )
         self.process.stdin.flush()
         self.reset_pending = False
+
+    def receive_actions(self, requests):
         response = self.process.stdout.readline()
         if not response:
             raise RuntimeError(f"frozen policy exited: {self.process.poll()}")

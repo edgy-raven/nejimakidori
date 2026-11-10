@@ -51,7 +51,7 @@ def workloads():
     import tensorflow as tf
 
     from log_dataset import features, replay
-    from model import self_play
+    from training import self_play
 
     tf.keras.utils.set_random_seed(941)
     events = json.loads(

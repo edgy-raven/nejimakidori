@@ -124,11 +124,16 @@ class OpponentBeliefs(tf.keras.Model):
             )
             for name in BELIEF_HEADS
         }
+        raw_counts = outputs[BELIEF_HEADS[2]]
         outputs[BELIEF_HEADS[2]] = self.held_count_mask(
             [outputs[BELIEF_HEADS[2]], inputs]
         )
         outputs[BELIEF_HEADS[2]] = self.count_projection(
             [outputs[BELIEF_HEADS[2]], inputs]
+        )
+        outputs["belief_constraint_loss"] = tf.reduce_mean(
+            losses.constraint_divergence(raw_counts, outputs[BELIEF_HEADS[2]]),
+            axis=(1, 2),
         )
         return outputs
 

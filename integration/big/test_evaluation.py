@@ -8,13 +8,14 @@ import shutil
 import tensorflow as tf
 
 from log_dataset import _native_collection
-from model import actions, evaluate, frozen_policy
+from model import actions
+from training import evaluate, frozen_policy
 
 
 def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(tmp_path):
     root = pathlib.Path(__file__).parents[2]
     bundle = tmp_path / "policy"
-    for name in ("model", "log_dataset"):
+    for name in ("model", "training", "log_dataset"):
         frozen_policy.freeze_source(
             root / name, bundle / "source" / name, include_native=True
         )
@@ -53,6 +54,7 @@ def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(tmp_path):
     # import dataset helpers stored beside, rather than inside, source/.
     shutil.move(opponent / "source/log_dataset", opponent / "log_dataset")
     worker = opponent / "source/model/frozen_policy.py"
+    shutil.move(opponent / "source/training/frozen_policy.py", worker)
     worker.write_text(
         worker.read_text()
         .replace(

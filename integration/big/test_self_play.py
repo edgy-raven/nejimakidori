@@ -9,7 +9,8 @@ import pytest
 import tensorflow as tf
 
 from log_dataset import _native_collection
-from model import actions, joint_settlement, outcomes, self_play
+from model import actions, joint_settlement, outcomes
+from training import self_play
 
 
 def uniform_predict(features):
@@ -153,6 +154,62 @@ def test_parallel_complete_games_are_repeatable_and_workers_are_reaped():
             collector.collect(1, 14)
     assert all(process.poll() is not None for process in processes)
     assert processes[1].returncode == 0
+
+
+def test_batched_root_streams_preserve_serial_features_and_targets(monkeypatch):
+    def score_roots(features):
+        legal = actions.legal_choices(features)
+        pairs = numpy.full(
+            (len(features["decision_phase"]), 2), -1, numpy.int32
+        )
+        for row, phase in enumerate(features["decision_phase"]):
+            codes = numpy.flatnonzero(
+                legal[actions.TRAIN_POLICY_HEADS[[0, 2, 3, 1, 4][phase]]][row]
+            )
+            if len(codes) > 1:
+                pairs[row] = codes[[0, -1]]
+        return {"priority": numpy.zeros(len(pairs)), "actions": pairs}
+
+    with self_play.Collector(
+        uniform_predict,
+        2,
+        focus="targeted",
+        root_copies=2,
+        root_evaluate=score_roots,
+    ) as collector:
+        actual = collector.collect(6, 941)
+        assert 0 < collector.metrics["selected_roots"] <= 4
+        assert collector.metrics["root_continuations"] == (
+            4 * collector.metrics["selected_roots"]
+        )
+    collect_streams = self_play.collect_streams
+    monkeypatch.setattr(
+        self_play,
+        "collect_streams",
+        lambda predict, streams: [
+            collect_streams(predict, [stream])[0] for stream in streams
+        ],
+    )
+    expected = [
+        self_play.collect_focused(
+            uniform_predict,
+            3,
+            seed,
+            focus="targeted",
+            root_copies=2,
+            root_evaluate=lambda rows: score_roots(
+                {name: rows[name] for name in self_play.FEATURE_DTYPE.names}
+            ),
+        )[0]
+        for seed in (941, 944)
+    ]
+    tf.nest.map_structure(
+        numpy.testing.assert_array_equal,
+        actual,
+        tf.nest.map_structure(
+            lambda *values: numpy.concatenate(values), *expected
+        ),
+    )
 
 
 def test_inference_failure_reaps_workers_waiting_for_outputs():

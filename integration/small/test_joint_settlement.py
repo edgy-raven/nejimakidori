@@ -462,7 +462,7 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
         "pot": public["pot"],
         "points": tf.zeros(3),
         "score": tf.fill((3, 24, len(scoring.BONUS_HAN)), -1),
-        "bonus": tf.fill((3, 24), 2),
+        "bonus": tf.broadcast_to(tf.constant([[2], [-1], [2]]), (3, 24)),
     }
     # Sparse scoring labels keep their valid counts across chunks.
     labels["score"] = tf.where(
@@ -475,6 +475,19 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
     )
     predictor = critic.PaymentCritic()
     predictor(public)
+    # Partial chunks have a dynamic batch dimension. Their compiled loss
+    # must stay stateless so replicas can execute the backward pass together.
+    compiled = tf.function(predictor.chunk_statistics).get_concrete_function(
+        *tf.nest.map_structure(
+            lambda value: tf.TensorSpec((None, *value.shape[1:]), value.dtype),
+            (public, {**labels, "valid": tf.ones(3)}),
+        ),
+        weights=[
+            tf.TensorSpec(value.shape, value.dtype)
+            for value in predictor.trainable_variables
+        ],
+    )
+    assert not compiled.function_def.signature.is_stateful
     statistics, gradients = [], []
     for method in (predictor.chunk_statistics, predictor.supervised_statistics):
         with tf.GradientTape() as tape:
@@ -497,8 +510,29 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
         assert full is not None and streamed is not None
         numpy.testing.assert_allclose(full, streamed, atol=3e-4, rtol=1e-4)
 
-    # Fresh-game labels have only transfers. Preempted calls and padding
-    # contribute neither gradients nor support/count normalization mass.
+    # Flattening must preserve the original categorical loss and derivative,
+    # including unknown labels, while avoiding its graph-level shape assert.
+    with tf.GradientTape(persistent=True) as tape:
+        tape.watch(public["state"])
+        reference = tf.reduce_sum(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=tf.maximum(labels["bonus"], 0),
+                logits=predictor.distributions(public)["bonus_logits"],
+            )
+            * tf.cast(labels["bonus"] >= 0, tf.float32)
+        )
+        actual = predictor.chunk_statistics(
+            public, {**labels, "valid": tf.ones(3)}
+        )[critic.CRITIC_METRICS.index("bonus_han_nll"), 0]
+    numpy.testing.assert_allclose(actual, reference, rtol=1e-6)
+    variables = [public["state"], *predictor.bonus.trainable_variables]
+    for actual, expected in zip(
+        tape.gradient(actual, variables), tape.gradient(reference, variables)
+    ):
+        numpy.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
+
+    # Fresh-game labels have only transfers. Padding contributes neither
+    # gradients nor support/count normalization mass.
     fresh = {name: labels[name] for name in ("payment", "pot")}
     for valid in ([False, True, False], [False] * 3):
         with tf.GradientTape() as tape:
@@ -506,7 +540,10 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
             result = predictor.supervised_statistics(
                 public, fresh, valid=tf.constant(valid)
             )
-            loss = critic.settlement_metrics(result)["payment_nll"]
+            loss = sum(
+                critic.settlement_metrics(result)[name]
+                for name in ("payment_nll", "critic_constraint_loss")
+            )
         gradients = tape.gradient(
             loss,
             [
@@ -516,7 +553,7 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
             ],
         )
         numpy.testing.assert_array_equal(
-            result[:, 1], [sum(valid), 0, 0, sum(valid), sum(valid)]
+            result[:, 1], [sum(valid), 0, 0, sum(valid), sum(valid), sum(valid)]
         )
         for gradient in gradients[:2]:
             numpy.testing.assert_array_equal(
@@ -673,6 +710,11 @@ def test_observed_hand_target_matches_critic_without_future_outcomes():
         pot=public["pot"],
     )
     numpy.testing.assert_allclose(observed[0, 0], payoffs[0, row, 2], atol=1e-5)
+    numpy.testing.assert_allclose(
+        joint_settlement.observed_payoffs(tf.constant(flat)),
+        observed.reshape(-1),
+        atol=1e-5,
+    )
     final_scores = [21200, 29500, 31800, 17500]
     numpy.testing.assert_array_equal(
         observed[1],
@@ -683,40 +725,8 @@ def test_observed_hand_target_matches_critic_without_future_outcomes():
     events[5]["deltas"] = [0, -8300, 11300, 0]
     changed = outcomes.hand_continuation_states(events)
     numpy.testing.assert_array_equal(changed[0], states[0])
+    numpy.testing.assert_array_equal(
+        joint_settlement.observed_payoffs(tf.constant(changed[0])),
+        joint_settlement.observed_payoffs(tf.constant(states[0])),
+    )
     assert not numpy.array_equal(changed[1], states[1])
-
-
-def test_payoff_contexts_share_only_identical_public_settlements():
-    from model import critic
-
-    public = {
-        name: inputs()[name]
-        for name in (
-            "scores",
-            "dealer",
-            "pot",
-            "honba",
-            "first_dealer",
-            "hand_number",
-        )
-    }
-    # Duplicate contexts share a table. Changing any rule input must split
-    # it, including first-dealer tie priority and terminal round thresholds.
-    rows = [public, public]
-    for name in public:
-        rows.append(
-            {
-                **public,
-                name: public[name] + (1000 if name in ("scores", "pot") else 1),
-            }
-        )
-    batch = {name: tf.concat([row[name] for row in rows], 0) for name in public}
-    contexts, mapping = critic.payoff_contexts(batch)
-    numpy.testing.assert_array_equal(mapping, [0, 0, 1, 2, 3, 4, 5, 6])
-    for name in public:
-        numpy.testing.assert_array_equal(
-            tf.gather(contexts[name], mapping), batch[name]
-        )
-    expected = critic.position_payoffs(batch)
-    actual = tf.gather(critic.position_payoffs(contexts), mapping)
-    numpy.testing.assert_array_equal(actual, expected)

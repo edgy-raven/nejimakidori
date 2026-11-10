@@ -34,12 +34,13 @@ ENTRYPOINT ["python", "/app/model_entrypoint.py"]
 FROM dependencies AS training
 WORKDIR /workspace
 COPY model /workspace/model
+COPY training /workspace/training
 COPY log_dataset /workspace/log_dataset
 COPY --from=native /tmp/nejimakidori/log_dataset/_native_collection.so /workspace/log_dataset/
 COPY dataset.py /workspace/
 COPY docker /workspace/docker
 RUN python -c "from log_dataset import shanten; shanten.native()"
-CMD ["python", "-m", "model.training", "--help"]
+CMD ["python", "-m", "training.trainer", "--help"]
 
 FROM dependencies AS runtime
 RUN pip install --no-cache-dir mahjong==2.0.0

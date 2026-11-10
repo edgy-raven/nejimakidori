@@ -1,20 +1,46 @@
-"""Joint training preserves AdamW math for dense and sparse parameters."""
+"""Joint training uses dense AdamW updates and detached AWR weights."""
 
 import numpy
+import pytest
 import tensorflow as tf
 
-from model import actions
 from model import actor as actor_layers
-from model import optimization
+from training import optimization
 
 
-def test_offline_schedule_warms_up_and_decays():
-    schedule = optimization.OfflineSchedule(total_steps=1000)
-    numpy.testing.assert_allclose(
-        [float(schedule(step)) for step in (0, 500, 1000)],
-        [2e-5, 2e-4, 2e-5],
-        rtol=1e-6,
+def test_repeated_tiles_match_dense_adamw_updates():
+    table = tf.Variable(tf.reshape(tf.range(544, dtype=tf.float32), (34, 16)))
+    reference = tf.Variable(table)
+    optimizer = tf.keras.optimizers.AdamW(
+        learning_rate=0.01, weight_decay=0.1, clipnorm=1.0
     )
+    reference_optimizer = tf.keras.optimizers.AdamW(
+        learning_rate=0.01, weight_decay=0.1, clipnorm=1.0
+    )
+    for tiles, weights in (([0, 0, 33], [1, 2, -1]), ([5, 5, 33], [2, -1, 3])):
+        with tf.GradientTape() as tape:
+            loss = tf.reduce_sum(
+                tf.gather(table, tiles)
+                * tf.constant(weights, tf.float32)[:, None]
+            )
+        metrics = optimization.apply_gradients(optimizer, tape, loss, [table])
+        with tf.GradientTape() as tape:
+            loss = tf.reduce_sum(
+                tf.matmul(tf.one_hot(tiles, 34), reference)
+                * tf.constant(weights, tf.float32)[:, None]
+            )
+        gradient = tape.gradient(loss, reference)
+        numpy.testing.assert_allclose(
+            metrics["gradient/local_norm"], tf.linalg.norm(gradient)
+        )
+        reference_optimizer.apply_gradients([(gradient, reference)])
+        for actual, expected in zip(
+            [table, *optimizer.variables],
+            [reference, *reference_optimizer.variables],
+        ):
+            numpy.testing.assert_allclose(
+                actual, expected, rtol=1e-6, atol=1e-7
+            )
 
 
 def test_awr_ess_matches_effective_weights_and_survives_tiny_advantages():
@@ -47,62 +73,20 @@ def test_awr_ess_matches_effective_weights_and_survives_tiny_advantages():
         assert tape.gradient(terms["loss"], advantages) is None
 
 
-def test_conditional_call_values_do_not_reweight_response_imitation(
-    monkeypatch,
-):
+def test_nonfinite_gradients_fail_before_optimizer_mutation():
+    value = tf.Variable(1.0)
+    optimizer = tf.keras.optimizers.AdamW(0.01, clipnorm=1.0)
+    optimizer.build([value])
 
-    from model import critic
+    @tf.function
+    def update():
+        with tf.GradientTape() as tape:
+            loss = value * tf.constant(float("nan"))
+        return optimization.apply_gradients(optimizer, tape, loss, [value])
 
-    features = {
-        "decision_phase": tf.constant([0, 1, 1, 1, 1]),
-        "trigger_tile_id": tf.zeros(5, tf.int32),
-    }
-    labels = {name: tf.fill([5], -1) for name in actions.TRAIN_POLICY_HEADS}
-    labels["discard_policy_logits"] = tf.constant([0, -1, -1, -1, -1])
-    labels["response_policy_logits"] = tf.constant([-1, 0, 1, 112, 149])
-    selected = tf.constant(
-        [
-            [0, 0],
-            [0, 1],
-            [1, 111],
-            [1, 112],
-            [2, 112],
-            [2, 111],
-            [3, 223],
-            [3, 111],
-            [4, 261],
-            [4, 111],
-        ]
-    )
-    monkeypatch.setattr(
-        critic,
-        "action_values",
-        lambda network, features, outputs, state: (
-            selected,
-            state,
-            tf.reduce_mean(tf.reshape(state, [5, 2]), 1),
-        ),
-    )
-    for scale in (1.0, -10.0):
-        values = tf.Variable(
-            [6, -6, *[scale * x for x in (12, -12, -12, 12, 30, -30, -30, 30)]],
-            dtype=tf.float32,
-        )
-        nll = tf.Variable(tf.ones(5))
-        with tf.GradientTape(persistent=True) as tape:
-            advantages = critic.advantages.python_function(
-                None,
-                (features, labels),
-                {"critic_candidate_state": values},
-                3.0,
-            )
-            terms = actor_layers.awr_policy_terms(
-                nll, advantages, tf.ones(5, tf.bool)
-            )
-        numpy.testing.assert_array_equal(advantages, [2, 0, 0, 0, 0])
-        numpy.testing.assert_allclose(
-            tape.gradient(terms["loss"], nll),
-            numpy.array([numpy.exp(2), 1, 1, 1, 1]) / (numpy.exp(2) + 4),
-            rtol=1e-6,
-        )
-        assert tape.gradient(terms["loss"], values) is None
+    with pytest.raises(
+        tf.errors.InvalidArgumentError, match="Non-finite local gradient norm"
+    ):
+        update()
+    assert float(value) == 1.0
+    assert int(optimizer.iterations) == 0

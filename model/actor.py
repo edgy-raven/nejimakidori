@@ -155,6 +155,7 @@ def build_policy_heads(inputs, hidden, candidates, selected, context):
     route = tf.keras.layers.Dense(3, dtype="float32", name="route_affinity")(
         candidates
     )
+    raw_route = route
     route = RouteMask(dtype="float32")([route, inputs, selected])
     ron = tf.keras.layers.Dense(3, dtype="float32", name="candidate_ron")(
         candidates
@@ -164,6 +165,9 @@ def build_policy_heads(inputs, hidden, candidates, selected, context):
     )
     outputs = {
         "route_affinity_logits": route,
+        "route_constraint_loss": losses.ConstraintLoss(
+            binary=True, dtype="float32"
+        )([raw_route, route, selected[:, 0]]),
         "candidate_ron_logits": ron,
         "sakigiri_scores": UnpackCandidates()([order, selected, hidden])[
             :, :, 0
@@ -193,6 +197,8 @@ def build_policy_heads(inputs, hidden, candidates, selected, context):
         dtype="float32",
         name="final_pass_normalized",
     )(final)
+    # Uncomputed actions are constant padding, not learned illegal logits.
+    # Only the legal candidate scores participate in policy training.
     final = UnpackCandidates()(
         [
             tf.keras.layers.Dense(1, dtype="float32", name="final_scores")(
@@ -221,19 +227,13 @@ def build_policy_heads(inputs, hidden, candidates, selected, context):
 
 
 def build_board_heads(inputs, hidden, predictions):
+    win = tf.keras.layers.Dense(2, dtype="float32", name="win_decision_logits")(
+        hidden
+    )
     outputs = {
         "win_decision_logits": PolicyMask(
             "win_decision_logits", name="win_legality", dtype="float32"
-        )(
-            [
-                tf.keras.layers.Dense(
-                    2,
-                    dtype="float32",
-                    name="win_decision_logits",
-                )(hidden),
-                inputs,
-            ]
-        )
+        )([win, inputs]),
     }
     outputs["win_decision_logits_prior_loss"] = PolicyPrior(
         "win_decision_logits", dtype="float32"
@@ -250,6 +250,7 @@ def build_board_heads(inputs, hidden, predictions):
         values = tf.keras.layers.Reshape(
             actions.ACTOR_OUTPUTS[name], dtype="float32"
         )(values)
+        raw = values
         if name == "round_completion_yaku_logits":
             values = payment_scoring.CompletionMask(dtype="float32")(
                 [values, inputs]
@@ -265,6 +266,9 @@ def build_board_heads(inputs, hidden, predictions):
                 [values, outputs["round_completion_yaku_logits"], inputs]
             )
             auxiliary_logits.append(tf.keras.layers.Softmax()(values))
+        outputs[name + "_constraint_loss"] = losses.ConstraintLoss(
+            binary=name == "round_completion_yaku_logits", dtype="float32"
+        )([raw, values])
         outputs[name] = values
     # Completion probabilities carry the same constraints into the policy.
     # Other heads retain their established representation.
@@ -565,12 +569,14 @@ def action_entropy(log_probability, head):
         )
     entropies = []
     for branch in tf.split(log_probability[:, : sum(sizes)], sizes, axis=-1):
-        probability = tf.exp(branch)
-        mass = tf.reduce_sum(probability, axis=-1)
-        log_mass = tf.math.log(tf.maximum(mass, 1e-30))
-        conditional = tf.math.divide_no_nan(
-            -tf.reduce_sum(probability * (branch - log_mass[:, None]), axis=-1),
-            mass,
+        log_mass = tf.reduce_logsumexp(branch, axis=-1)
+        mass = tf.exp(log_mass)
+        # Normalize logits directly; dividing by tiny branch mass can give
+        # nonfinite gradients even when the entropy itself is finite.
+        conditional_log_probability = tf.nn.log_softmax(branch, axis=-1)
+        conditional = -tf.reduce_sum(
+            tf.exp(conditional_log_probability) * conditional_log_probability,
+            axis=-1,
         )
         entropies.append(
             -mass * log_mass + tf.stop_gradient(mass) * conditional
@@ -610,10 +616,12 @@ def distribution(outputs, heads, legal):
     return tf.nn.log_softmax(tf.where(legal, logits, -1e9), axis=-1)
 
 
-def forward_kl(reference, current, mean=losses.mean_valid):
+def policy_kl(reference, current, mean=losses.mean_valid, *, reverse=False):
+    """KL over legal normalized actions; reference never receives gradients."""
     reference = tf.stop_gradient(reference)
+    first, second = (current, reference) if reverse else (reference, current)
     return mean(
-        tf.reduce_sum(tf.exp(reference) * (reference - current), axis=-1),
+        tf.reduce_sum(tf.exp(first) * (first - second), axis=-1),
         tf.ones(tf.shape(current)[0]),
     )
 
@@ -666,9 +674,7 @@ def ppo_loss(
     )
 
 
-def offline_loss_terms(
-    inputs, outputs, mean=losses.mean_valid, advantages=None
-):
+def offline_loss_terms(inputs, outputs, mean=losses.mean_valid):
     metrics = {}
     metrics["policy_loss"] = policy_loss(inputs[1], outputs, mean=mean)
     metrics["policy_prior_loss"] = mean(
@@ -705,16 +711,6 @@ def offline_loss_terms(
         inputs[1]["round_completion_score"] >= 0,
     )
     metrics["policy_entropy"] = policy_entropy(inputs[1], outputs, mean=mean)
-    metrics["policy_guidance_adjustment"] = tf.constant(0.0)
-    if advantages is not None:
-        nll, valid = policy_nll(inputs[1], outputs)
-        guidance = awr_policy_terms(nll, advantages, valid, mean=mean)
-        metrics.update(
-            {"utility_" + name: value for name, value in guidance.items()}
-        )
-        metrics["policy_guidance_adjustment"] = (
-            guidance["loss"] - metrics["policy_loss"]
-        )
     for name in actions.TRAIN_POLICY_HEADS:
         prefix = name.removesuffix("_logits")
         valid = inputs[1][name] >= 0
@@ -769,9 +765,16 @@ def offline_loss_terms(
 
 
 def online_loss_terms(
-    *, outputs, batch, current, count, clip, dual_clip, mean=losses.mean_valid
+    *,
+    outputs,
+    batch,
+    current,
+    count,
+    clip,
+    dual_clip,
+    mean=losses.mean_valid,
 ):
-    return {
+    policy = {
         "policy": ppo_loss(
             current=current,
             behavior=batch["behavior"][:count],
@@ -780,6 +783,25 @@ def online_loss_terms(
             clip=clip,
             dual_clip=dual_clip,
             mean=mean,
+        )
+    }
+    return {
+        **policy,
+        **decision_regularizers(
+            outputs=outputs,
+            current=current,
+            heads=batch["head"],
+            count=count,
+            mean=mean,
+        ),
+    }
+
+
+def decision_regularizers(*, outputs, current, heads, count, mean):
+    """Prior and branch-aware entropy for each decision's active head."""
+    return {
+        "constraint_loss": mean(
+            outputs["constraint_loss"][:count], tf.ones(count)
         ),
         "policy_prior_loss": mean(
             tf.gather(
@@ -790,7 +812,7 @@ def online_loss_terms(
                     ],
                     axis=1,
                 ),
-                batch["head"][:count],
+                heads[:count],
                 batch_dims=1,
             ),
             tf.ones(count),
@@ -804,7 +826,7 @@ def online_loss_terms(
                     ],
                     axis=1,
                 ),
-                batch["head"][:count],
+                heads[:count],
                 batch_dims=1,
             ),
             tf.ones(count),

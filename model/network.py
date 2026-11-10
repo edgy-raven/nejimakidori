@@ -79,6 +79,24 @@ class JointPolicyPayment(tf.keras.Model):
         outputs.update(
             actor_layers.PolicySummaries(dtype="float32")([outputs, inputs])
         )
+        outputs["constraint_loss"] = tf.keras.layers.Add(dtype="float32")(
+            [
+                encoded["belief_constraint_loss"],
+                outputs["route_constraint_loss"],
+                outputs["round_completion_yaku_logits_constraint_loss"],
+                outputs["round_completion_score_logits_constraint_loss"],
+            ]
+        )
+        # Replay state value in ST3 / 100 units; no chosen action or label.
+        outputs["state_value"] = tf.keras.layers.Dense(
+            1, kernel_initializer="zeros", dtype="float32", name="state_value"
+        )(
+            tf.keras.layers.Dense(
+                128, activation="gelu", dtype="float32", name="value_hidden"
+            )(encoded["board"])
+        )[
+            :, 0
+        ]
         # Auxiliary heads have visible-route and hindsight targets.
         # Only predictions enter the actor; labels stay in the trainer.
         self.actor = tf.keras.Model(inputs, {**outputs, **encoded})
@@ -178,7 +196,6 @@ class JointPolicyPayment(tf.keras.Model):
         return {
             **outputs,
             **self.supervised_outputs(inputs, encoded, state),
-            "critic_candidate_state": state,
             "immediate_safe": encoded["immediate_safe"],
             "immediate_wait": encoded["immediate_wait"],
         }

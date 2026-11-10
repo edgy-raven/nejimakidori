@@ -28,8 +28,11 @@ python -c 'from log_dataset import _native_collection as n; print(n.INPUTS)'
 
 Shapes exclude the batch dimension. Seats are actor-relative unless the producer
 explicitly converts them. Packed rows contain consecutive fields in declaration
-order, without alignment padding. `model.self_play.FEATURE_DTYPE` exposes NumPy
+order, without alignment padding. `training.self_play.FEATURE_DTYPE` exposes NumPy
 views of those rows.
+
+Self-shanten fields encode actual shanten + 1: 0 is complete, 1 is tenpai,
+and 2 is one away. Target samplers must account for that offset.
 
 | Source | Responsibility |
 | --- | --- |
@@ -53,9 +56,25 @@ late-placement and score-gap flags for dataset construction.
 2. `submit(codes)` supplies one legal action per pending decision.
 3. `finish()` returns completed game logs and counters.
 
-[model/self_play.py](../../model/self_play.py) batches worker
+[training/self_play.py](../../training/self_play.py) batches worker
 requests for inference and retains their packed rows for training. Completed
 worker results contain actions, behavior probabilities and targets.
+
+`snapshot(decision)` captures a pending decision between `next()` and
+`submit()`, including every simultaneous request in that game. The returned
+root exposes `decision` (its local request offset) and
+`fork(copies, seed, shuffle_remaining=True)`. Forks retain public history,
+concealed hands, pending actions and prefix logs. They shuffle unrevealed wall
+tiles without moving revealed dora indicators, and seed future hands from the
+branch seed. With shuffling disabled, the initial engine state is identical;
+subsequent collector randomness still uses the supplied seed. Repeated forks
+with the same seed are reproducible. The parent collector is unchanged.
+These continuations condition on the captured hidden hands rather than drawing
+an information-set posterior. Python collection emits only suffix decisions.
+Hand counters count completed hands, including the initial partial hand of a
+fork. Riichi turn totals include declarations before the root in that hand,
+matching the retained riichi flags and completed-hand denominators. Fork
+statistics describe root-conditioned continuations, not ordinary match rates.
 
 Action heads and dimensions are defined in
 [model/actions.py](../../model/actions.py). A running [API](../../service/README.md)
@@ -66,7 +85,8 @@ reports its loaded export's input and output schemas at `GET /`.
 ```sh
 python -m pytest integration/big/test_native_collection.py \
   integration/big/test_feature_generation.py \
-  integration/big/test_self_play.py
+  integration/big/test_self_play.py \
+  integration/big/test_selected_roots.py
 ```
 
 Python reference calculations under `integration/` check native parity.

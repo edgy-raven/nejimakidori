@@ -1,5 +1,8 @@
 # Play through the local client
 
+For a Windows recommendation overlay with local game tracking and remote
+inference, see the [desktop overlay](overlay/README.md).
+
 The client opens Chromium and connects to the [model API](../service/README.md).
 You log in and join a game manually, then enable autoplay for the verified
 account. It does not queue the next game automatically.

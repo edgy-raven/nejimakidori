@@ -2,11 +2,11 @@
 
 Nejimakidori predicts a move and the likely consequences of the current hand.
 A shared encoder reads the visible board, rivers and candidate hands.
-Four residual board blocks feed the action policy, opponent beliefs and
-settlement predictions.
+Four residual board blocks feed the action policy, opponent beliefs,
+state value and settlement predictions.
 The joint network is assembled in [network.py](network.py).
 
-For commands, see [training and evaluation](README.md). For tensor names,
+For commands, see [training and evaluation](../training/README.md). For tensor names,
 shapes and encoding, see the [native interface](../log_dataset/native_collection/README.md).
 
 ## From a game state to an action
@@ -22,7 +22,7 @@ The policy has discard, riichi/discard, response, kan and win/pass heads. A resp
 includes its follow-up discard. Physical copies of the same tile share an
 ordinary discard action; red fives remain distinct. Optional ron and tsumo
 are learned choices; nine-terminals aborts remain automatic. Win/pass learns
-from recorded choices and PPO hand returns, using the current-hand critic
+from recorded choices and observed hand returns, using the fitted state-value
 baseline rather than an action-conditioned win forecast.
 
 The win head adds trainable weights. Earlier checkpoints lack those weights,
@@ -43,6 +43,7 @@ that training loss. Exact rules live alongside their implementation.
 | Route affinity | How much of a candidate's visible shortest-route support belongs to tanyao, flush or outside-hand families. |
 | Immediate outcomes | Ron claims and payments, exhaustive draws and aborts at the current action boundary. |
 | Future settlement | A probability distribution over ways the hand can end and the resulting transfers. |
+| State value (training) | Expected observed hand return with fixed continuation, in ST3 / 100 units; conditioned on the pre-action state. |
 | Final placement | Settlement outcomes integrated through a fixed continuation model for the rest of the match. |
 
 Structural waits can be blocked by furiten or lack of yaku. Completion potential
@@ -51,9 +52,15 @@ The candidate value-range inputs are also conditional completion bounds: they
 search available finishes from zero/one-shanten hands, without predicting how
 likely those finishes are.
 
-Call forecasts are conditional on the call taking effect. A competing ron or
-another accepted call can preempt it. The API preserves that distinction when
-interpreting recorded response decisions; see [the service guide](../service/README.md#decision-semantics).
+Call forecasts condition on attempting the call, including preemption by
+competing claims. Accepted-call features describe the hypothetical candidate;
+hard scoring constraints use guaranteed pre-call facts. The planned discard
+is contingent, so its outcomes belong to the joint hand forecast rather than
+a guaranteed immediate transition. Training retains preempted attempts.
+Response passes also await priority resolution: neither last-wall exhaustion
+nor acceptance of a pending riichi declaration is assumed at that boundary.
+For recorded response decisions, see
+[the service guide](../service/README.md#decision-semantics).
 
 ## Scoring and match value
 
@@ -75,18 +82,26 @@ are separate from the learned current-hand critic.
 
 ## What training optimizes
 
-Offline training combines expert-action imitation with settlement, belief and
-auxiliary supervision. Advantage-weighted regression (AWR) gives expert actions
-more weight when their projected ST3 exceeds the policy baseline. The weights
-are detached from the critic. Conditional call forecasts cannot compare
-submitted responses fairly, so response decisions receive neutral AWR weights.
+Supervised foundation training combines action imitation with settlement,
+belief and auxiliary supervision. A state-only head learns observed hand returns
+by squared error. Recorded and generated replay share one AWR update and
+optimizer, training the actor, state value and chosen-action settlement critic.
+AWR excludes hindsight belief/completion losses and separate auxiliary replay.
+Advantage-weighted regression (AWR) gives sampled actions more weight
+when those returns exceed the fitted state value. The exponential weights are
+detached, capped and batch-normalized. Responses and win/pass use the same
+return-based weighting; conditional settlement forecasts do not supply weights.
 
 Self-play uses proximal policy optimization (PPO) on sampled actions and their
-observed returns. It also trains beliefs and the settlement critic on eligible
-fresh positions. Expert AWR records and PPO trajectories remain separate.
+observed returns. Its baseline comes from the same state-value head, fitted to
+fresh returns during PPO. Cohort advantages stay fixed during update epochs.
+It also trains beliefs and the settlement critic on eligible fresh positions.
+PPO has separate optimizer state; both AWR replay sources share optimizer state. Value MSE and signed
+bias track calibration; settlement-derived action utilities are not constrained
+to equal V. Both predictors can change through their shared encoder.
 
 The final optional AWR pass penalizes divergence from the actor saved at the end
-of PPO. [The training guide](README.md#phasic-training) explains phase budgets,
+of PPO. [The training guide](../training/README.md#phasic-training) explains phase budgets,
 optimizers and checkpoint recovery.
 
 ## Where to change things
@@ -99,12 +114,13 @@ optimizers and checkpoint recovery.
 | Opponent beliefs, count constraints and supervision | [beliefs.py](beliefs.py) |
 | Policy and candidate auxiliary heads, priors and losses | [actor.py](actor.py) |
 | Legal actions, model indexing and native selection | [actions.py](actions.py) |
-| Payment critic, immediate outcomes and AWR values | [critic.py](critic.py) |
+| Payment critic, immediate outcomes and detached AWR advantages | [critic.py](critic.py) |
+| State-value head and regression | [network.py](network.py), [trainer.py](../training/trainer.py) |
 | Score support and settlement | [payment_scoring.py](payment_scoring.py), [joint_settlement.py](joint_settlement.py) |
 | Component losses and gradient boundaries | [actor.py](actor.py), [beliefs.py](beliefs.py), [critic.py](critic.py) |
-| Shared loss reductions and optimizer updates | [losses.py](losses.py), [optimization.py](optimization.py) |
-| Self-play and phase scheduling | [self_play.py](self_play.py), [training.py](training.py) |
-| Frozen sources and isolated opponents | [frozen_policy.py](frozen_policy.py) |
+| Shared loss reductions and optimizer updates | [losses.py](losses.py), [optimization.py](../training/optimization.py) |
+| Self-play and phase scheduling | [self_play.py](../training/self_play.py), [trainer.py](../training/trainer.py) |
+| Frozen sources and isolated opponents | [frozen_policy.py](../training/frozen_policy.py) |
 | Recorded labels and sampling | [dataset guide](../log_dataset/README.md) |
 
 Feature layouts, label IDs and score vocabularies must agree across datasets,
@@ -113,7 +129,36 @@ When these definitions change, regenerate records and supply compatible weights.
 Retained exports include their matching source for evaluation.
 
 Each component defines its differentiable objectives alongside its forward
-model. `training.py` combines them under one gradient tape per update, so the
+model. `training/trainer.py` combines them under one gradient tape per update, so the
 shared encoder receives their combined gradient. Actor AWR weights and anchor
 targets remain detached; the critic owns its chunked custom backward pass.
+Exact masks and projections also supply detached targets for explicit
+constraint losses on the raw predictions. Categorical heads use forward KL;
+yaku/route marginals use Bernoulli KL. This trains the head and shared encoder
+to satisfy yaku exclusions, score bounds, tile-count conservation, and
+settlement/deposit constraints rather than hiding errors behind masks.
+Unknown feasible yaku are not assigned positive labels. Sparse action heads
+only compute selected candidates; uncomputed slots are constant padding. They
+have hard legality masks but no raw-to-masked constraint loss: padding must
+not push the arbitrary common offset of learned action scores. The win head
+predicts accept versus decline conditional on a legal win opportunity. A
+non-winning position is not a decline label: win availability is hard-masked
+without a raw-to-masked policy penalty. Otherwise records without win decisions
+can train the model to refuse wins without any opposing policy supervision.
+Padded training rows do not contribute. Heuristic policy priors remain separate.
+
+Shared-head constraint loss has weight 0.01. Critic constraint loss joins the
+critic objective at its existing weight 0.1. Offline and AWR training both
+include these terms; the retained PPO path is consistent with them. Initial
+policy distillation remains teacher-KL-only. Existing weights remain loadable;
+learning these corrections requires subsequent updates.
+
 Validation and phase scheduling use the same training coordinator.
+
+The [candidate replay schedule](../training/README.md#candidate-replay-schedule) adds frozen
+production-policy distillation followed by six shared AWR passes. Mixed recorded
+and generated strata enter the same minibatch, so advantage weights share one
+normalization and one optimizer. Target selection uses observed state only;
+shanten features store actual distance plus one. Production-only input fields
+are reconstructed by its frozen producer in aligned companion shards, then
+transported only for distillation. They are not added to the student schema.

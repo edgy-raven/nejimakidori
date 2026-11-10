@@ -15,7 +15,7 @@ from log_dataset import (
     scoring,
     training_data,
 )
-from model import actions, critic, frozen_policy, joint_settlement
+from model import actions, critic, joint_settlement
 from model import network as joint_network
 from model import outcomes
 
@@ -35,6 +35,25 @@ class ServingModel(tf.Module):
 
     @tf.function
     def serve(self, **features):
+        outputs = self._serve(features)
+        outputs.pop("state_value")
+        return outputs
+
+    @tf.function
+    def root_evaluation(self, **features):
+        """Training-only action utility and V from one actor evaluation."""
+        outputs = self._serve(features, chunk_size=32, root_only=True)
+        return {
+            name: outputs[name]
+            for name in (
+                "critic_action_indices",
+                "critic_projected_st3",
+                "discard_policy_logits",
+                "state_value",
+            )
+        }
+
+    def _serve(self, features, chunk_size=4, root_only=False):
         outputs = self.actor(features, training=False)
         encoded, state = self.network.candidate_context(features, outputs)
         active = critic.active_candidates(features, encoded["selected"])
@@ -81,15 +100,15 @@ class ServingModel(tf.Module):
         immediate = tf.TensorArray(
             tf.float32, size=0, dynamic_size=True, element_shape=[None, 3]
         )
-        for begin in tf.range(0, tf.shape(selected)[0], 4):
-            rows = selected[begin : begin + 4, 0]
+        for begin in tf.range(0, tf.shape(selected)[0], chunk_size):
+            rows = selected[begin : begin + chunk_size, 0]
             inputs = {
-                "state": state[begin : begin + 4],
-                "immediate_safe": safe[begin : begin + 4],
+                "state": state[begin : begin + chunk_size],
+                "immediate_safe": safe[begin : begin + chunk_size],
                 "immediate_wait": tf.boolean_mask(
                     encoded["immediate_wait"], active
-                )[begin : begin + 4],
-                "immediate_allowed": allowed[begin : begin + 4],
+                )[begin : begin + chunk_size],
+                "immediate_allowed": allowed[begin : begin + chunk_size],
                 **{
                     name: tf.gather(value, rows)
                     for name, value in public.items()
@@ -97,11 +116,38 @@ class ServingModel(tf.Module):
             }
             inputs.update(
                 {
-                    name: value[begin : begin + 4]
+                    name: value[begin : begin + chunk_size]
                     for name, value in candidate_public.items()
                 }
             )
+            if root_only:
+                # Keep the compiled critic shape fixed, including the tail.
+                inputs = {
+                    name: tf.gather(
+                        value,
+                        tf.minimum(
+                            tf.range(chunk_size), tf.shape(value)[0] - 1
+                        ),
+                    )
+                    for name, value in inputs.items()
+                }
             forecast = self.network.critic.joint_distributions(inputs)
+            payoff, final_probability = joint_settlement.continuation_forecast(
+                scores=forecast["joint_scores"],
+                ranks=forecast["joint_ranks"],
+                support=forecast["joint_support"],
+                dealer=inputs["dealer"],
+                hand_number=inputs["hand_number"],
+                pot=inputs["pot"],
+            )
+            utility = utility.write(
+                begin // chunk_size,
+                joint_settlement.expectation(
+                    forecast["joint_probability"], payoff
+                )[: tf.minimum(chunk_size, tf.shape(selected)[0] - begin)],
+            )
+            if root_only:
+                continue
             # Mutually exclusive endings from the actor's perspective.
             categories = tf.constant(
                 [
@@ -130,7 +176,7 @@ class ServingModel(tf.Module):
                 ]
             )
             review_outcomes = review_outcomes.write(
-                begin // 4,
+                begin // chunk_size,
                 tf.einsum(
                     "ns,nsc->nc",
                     tf.reduce_sum(forecast["joint_probability"], axis=-1),
@@ -143,55 +189,50 @@ class ServingModel(tf.Module):
                 ),
             )
             probability = probability.write(
-                begin // 4, forecast["payment_probability"]
+                begin // chunk_size, forecast["payment_probability"]
             )
             ranks = ranks.write(
-                begin // 4, tf.exp(forecast["round_placement_logits"])
-            )
-            payoff, final_probability = joint_settlement.continuation_forecast(
-                scores=forecast["joint_scores"],
-                ranks=forecast["joint_ranks"],
-                support=forecast["joint_support"],
-                dealer=inputs["dealer"],
-                hand_number=inputs["hand_number"],
-                pot=inputs["pot"],
-            )
-            utility = utility.write(
-                begin // 4,
-                joint_settlement.expectation(
-                    forecast["joint_probability"], payoff
-                ),
+                begin // chunk_size, tf.exp(forecast["round_placement_logits"])
             )
             final_ranks = final_ranks.write(
-                begin // 4,
+                begin // chunk_size,
                 joint_settlement.expectation(
                     forecast["joint_probability"], final_probability
                 ),
             )
             points = points.write(
-                begin // 4,
+                begin // chunk_size,
                 joint_settlement.expectation(
                     forecast["joint_probability"],
                     forecast["joint_scores"] - inputs["scores"][:, None, None],
                 ),
             )
             settlement = settlement.write(
-                begin // 4,
+                begin // chunk_size,
                 tf.stack(joint_settlement.settlement_moments(forecast), axis=1),
             )
             eligibility = eligibility.write(
-                begin // 4, forecast["conditional_ron_eligibility"]
+                begin // chunk_size, forecast["conditional_ron_eligibility"]
             )
             legal_ron = legal_ron.write(
-                begin // 4,
+                begin // chunk_size,
                 tf.sigmoid(forecast["immediate_logits"])
-                * tf.cast(allowed[begin : begin + 4, None], tf.float32),
+                * tf.cast(
+                    allowed[begin : begin + chunk_size, None], tf.float32
+                ),
             )
             immediate = immediate.write(
-                begin // 4,
+                begin // chunk_size,
                 forecast["immediate_ron_probability"]
                 - forecast["immediate_probability"][:, 21, None],
             )
+        if root_only:
+            return {
+                "critic_action_indices": selected,
+                "critic_projected_st3": utility.concat(),
+                "discard_policy_logits": outputs["discard_policy_logits"],
+                "state_value": outputs["state_value"],
+            }
         probability = probability.concat()
         weights = tf.gather_nd(
             critic.candidate_probabilities(features, outputs), selected
@@ -210,6 +251,7 @@ class ServingModel(tf.Module):
         )
         return {
             **{name: outputs[name] for name in actions.ACTOR_OUTPUTS},
+            "state_value": outputs["state_value"],
             "round_placement_logits": tf.math.log(
                 tf.maximum(
                     tf.math.unsorted_segment_sum(
@@ -261,22 +303,7 @@ class ServingModel(tf.Module):
         }
 
 
-def run(args):
-    for device in tf.config.list_physical_devices("GPU"):
-        tf.config.experimental.set_memory_growth(device, True)
-    inputs = training_data.parse_batch(
-        next(
-            iter(
-                training_data.dataset(
-                    root=args.data,
-                    sampling=focus_sampling.Sampling.NATURAL,
-                    partition="train",
-                    batch_size=8,
-                    repeat=False,
-                )
-            )
-        )
-    )[0]
+def load_network(weights, inputs):
     network = joint_network.JointPolicyPayment()
     outputs = network.actor(inputs, training=False)
     encoded, state = network.candidate_context(inputs, outputs)
@@ -298,8 +325,33 @@ def run(args):
         }
     )
     network.built = True
-    network.load_weights(args.weights)
+    network.load_weights(weights)
     network.compile_training()
+    return network
+
+
+def run(args):
+    from training import frozen_policy, self_play
+
+    for device in tf.config.list_physical_devices("GPU"):
+        tf.config.experimental.set_memory_growth(device, True)
+    if args.data is None:
+        inputs = self_play.initial_features(args.self_play_seed)
+    else:
+        inputs = training_data.parse_batch(
+            next(
+                iter(
+                    training_data.dataset(
+                        root=args.data,
+                        sampling=focus_sampling.Sampling.NATURAL,
+                        partition="train",
+                        batch_size=8,
+                        repeat=False,
+                    )
+                )
+            )
+        )[0]
+    network = load_network(args.weights, inputs)
     module = ServingModel(network)
     signature = module.serve.get_concrete_function(
         **{
@@ -370,7 +422,7 @@ def run(args):
         + "\n"
     )
 
-    for name in ("model", "log_dataset"):
+    for name in ("model", "training", "log_dataset"):
         frozen_policy.freeze_source(
             pathlib.Path(__file__).parents[1] / name,
             pending / "source" / name,
@@ -382,7 +434,9 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", required=True)
-    parser.add_argument("--data", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--data")
+    source.add_argument("--self-play-seed", type=int)
     parser.add_argument("--output", required=True)
     run(parser.parse_args())
 

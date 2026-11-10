@@ -31,8 +31,8 @@ and its [additional dependencies](controller/README.md#install-and-configure).
 | --- | --- |
 | Understand the model | [Architecture](model/ARCHITECTURE.md) |
 | Prepare game records | [Datasets](log_dataset/README.md) |
-| Train or restart a run | [Training and recovery](model/README.md) |
-| Export and compare models | [Evaluation](model/README.md#export-and-evaluate) |
+| Train or restart a run | [Training and recovery](training/README.md) |
+| Export and compare models | [Evaluation](training/README.md#export-and-evaluate) |
 | Run the HTTP API | [Serving](service/README.md) |
 | Play through Chromium | [Local client](controller/README.md) |
 | Change native features | [Native interface](log_dataset/native_collection/README.md) |

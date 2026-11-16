@@ -266,6 +266,9 @@ def run(args):
         raise ValueError(f"Dataset count mismatch: {seen} != {positions}")
     finish(stage)
     pools[1].reservoir = False
+    pools[0] = replay.RecordedStream(
+        args, trainer, pools[1], evaluate_roots, generator
+    )
     with collection.BackgroundCollector(
         weights=args.initial,
         device=f"/GPU:{collection_device_ix}",
@@ -276,12 +279,6 @@ def run(args):
     ) as collector:
         for phase, fraction in enumerate(fractions, 1):
             stage = f"mixed-policy-{phase}"
-            if fraction == 0:
-                pools[0] = None
-            elif pools[0] is None:
-                pools[0] = replay.RecordedStream(
-                    args, trainer, pools[1], evaluate_roots, generator
-                )
             used = 0
             report(stage, {})
             while used < positions:

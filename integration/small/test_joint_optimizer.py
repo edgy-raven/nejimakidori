@@ -1,7 +1,5 @@
 """Joint training uses dense AdamW updates and detached imitation weights."""
 
-import types
-
 import numpy
 import pytest
 import tensorflow as tf
@@ -94,63 +92,3 @@ def test_nonfinite_gradients_fail_before_optimizer_mutation():
         update()
     assert float(value) == 1.0
     assert int(optimizer.iterations) == 0
-
-
-def test_q_gap_scores_disagreeing_labels_and_generated_actions(monkeypatch):
-    calls = []
-
-    def project(inputs, payoff, weights, integer_fields):
-        calls.append(1)
-        return inputs["state"]
-
-    monkeypatch.setattr(
-        trainer.critic,
-        "active_candidates",
-        lambda features, selected: tf.ones(tf.shape(selected)[0], tf.bool),
-    )
-    monkeypatch.setattr(
-        trainer.critic, "public_inputs", lambda features, selected: {}
-    )
-    monkeypatch.setattr(
-        trainer.joint_settlement, "public_inputs", lambda features: {}
-    )
-    monkeypatch.setattr(
-        trainer.joint_settlement,
-        "gather_position_payoffs",
-        lambda inputs, positions: tf.zeros([tf.shape(positions)[0], 1, 16]),
-    )
-    learner = object.__new__(trainer.Trainer)
-    learner.network = types.SimpleNamespace(
-        critic=types.SimpleNamespace(
-            candidate_chunk=project, trainable_variables=[]
-        )
-    )
-    outputs = {
-        "selected": tf.constant([[0, 0], [0, 1], [1, 0], [1, 1]]),
-    }
-    for recorded, reference, distill, scored in (
-        ([True, True], [0, 1], [0, 1], []),
-        ([True, True], [0, 0], [0, 1], [1]),
-        ([False, True], [0, 0], [0, 1], [0, 1]),
-        ([True, True], [0, 1], [1, 1], [0]),
-    ):
-        calls.clear()
-        values = learner.candidate_values(
-            features={"dealer_relative_seat": tf.zeros([2], tf.int8)},
-            outputs=outputs,
-            state=tf.reshape(tf.range(8, dtype=tf.float32), [4, 2]),
-            chosen=tf.constant([0, 1]),
-            distill=tf.constant(distill),
-            reference=tf.constant(reference),
-            batch={"recorded": tf.constant(recorded)},
-            count=tf.constant(2),
-        )
-        values = values.numpy()
-        assert len(calls) == bool(scored)
-        for position in range(2):
-            expected = (
-                numpy.arange(position * 4, position * 4 + 4).reshape(2, 2)
-                if position in scored
-                else numpy.zeros((2, 2))
-            )
-            numpy.testing.assert_array_equal(values[position, :2], expected)

@@ -205,7 +205,7 @@ def test_late_noten_ramp_equal_safe_override_and_exceptions():
     assert not tf.nn.softmax(riichi)[3, 37:].numpy().any()
 
 
-def test_recorded_win_head_learns_both_choices_and_uses_state_baseline():
+def test_recorded_win_head_learns_both_choices():
     events = json.loads(
         pathlib.Path(
             "integration/fixtures/model/payment_dealer_90fu.json"

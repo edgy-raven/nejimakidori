@@ -14,6 +14,7 @@ from model import beliefs
 from model import network as joint_network
 from training import self_play
 from training import trainer as training
+from training.candidate import replay as candidate_replay
 
 
 @pytest.mark.parametrize(
@@ -317,16 +318,15 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
             afk.retained_hands(events)[0],
         ).observations()
     )[:2]
-    inputs = training_data.parse_batch(
-        tf.constant(
-            [
-                training_data.serialize(row, targets[row.kyoku_id])
-                for row in observations
-            ]
-        )
+    raw = tf.constant(
+        [
+            training_data.serialize(row, targets[row.kyoku_id])
+            for row in observations
+        ]
     )
+    inputs = training_data.parse_batch(raw)
     network = joint_network.JointPolicyPayment()
-    outputs = network(inputs)
+    network(inputs)
     network.compile_training()
     reference = joint_network.JointPolicyPayment()
     reference(inputs)
@@ -346,11 +346,6 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
             risk_coefficient=0.1,
         ),
     )
-    heads = tf.stack(
-        [inputs[1][name] >= 0 for name in actions.TRAIN_POLICY_HEADS],
-        axis=1,
-    )
-    head = tf.argmax(tf.cast(heads, tf.int32), axis=1, output_type=tf.int32)
     chosen = tf.reduce_max(
         tf.stack(
             [
@@ -361,47 +356,15 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
         ),
         axis=1,
     )
-    legal = tf.gather(
-        tf.stack(
-            [
-                tf.pad(
-                    outputs[name] > -1e3,
-                    [[0, 0], [0, 150 - outputs[name].shape[-1]]],
-                )
-                for name in actions.TRAIN_POLICY_HEADS
-            ],
-            axis=1,
+    batch = candidate_replay.decode_records(raw, chosen)
+    batch["features"] = trainer.feature_packing.pack(batch["features"])
+    batch["recorded"] = tf.constant([True, False])
+    batch["distill"] = tf.where(
+        batch["recorded"],
+        tf.argmax(
+            tf.cast(batch["legal"], tf.int32), axis=1, output_type=tf.int32
         ),
-        head,
-        batch_dims=1,
-    )
-    batch = dict(
-        features=trainer.feature_packing.pack(inputs[0]),
-        head=head,
-        legal=legal,
-        chosen=chosen,
-        distill=tf.where(
-            tf.constant([True, False]),
-            tf.argmax(tf.cast(legal, tf.int32), axis=1, output_type=tf.int32),
-            -1,
-        ),
-        payment_points=tf.gather(
-            training.joint_settlement.payment_values(inputs[2]),
-            inputs[2]["payment"],
-            axis=1,
-            batch_dims=1,
-        ),
-        recorded=tf.constant([True, False]),
-        ron_legal=inputs[1]["ron_legal"],
-        ron_payments=inputs[1]["ron_payments"],
-        beliefs={
-            name: inputs[1][name]
-            for name in (
-                "opponent_shanten",
-                "opponent_ukeire",
-                "opponent_hand_counts",
-            )
-        },
+        -1,
     )
     # Both actor objectives must leave critic forecasts detached; the
     # observed-outcome loss still trains the critic through its shared inputs.
@@ -415,21 +378,15 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
             inputs[0], inputs[1], network.actor(inputs[0], training=False)
         )
     assert (
-        float(
-            tf.linalg.global_norm(
-                tape.gradient(
-                    metrics["policy"], network.critic.trainable_variables
-                )
-            )
+        tf.linalg.global_norm(
+            tape.gradient(metrics["policy"], network.critic.trainable_variables)
         )
         == 0
     )
     assert (
-        float(
-            tf.linalg.global_norm(
-                tape.gradient(
-                    metrics["payment_nll"], network.critic.trainable_variables
-                )
+        tf.linalg.global_norm(
+            tape.gradient(
+                metrics["payment_nll"], network.critic.trainable_variables
             )
         )
         > 0
@@ -442,22 +399,16 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
     )
     for head in network.beliefs.heads.values():
         assert (
-            float(
-                tf.linalg.global_norm(
-                    tape.gradient(
-                        metrics["belief_loss"], head.trainable_variables
-                    )
-                )
+            tf.linalg.global_norm(
+                tape.gradient(metrics["belief_loss"], head.trainable_variables)
             )
             > 0
         )
     assert (
-        float(
-            tf.linalg.global_norm(
-                tape.gradient(
-                    metrics["belief_loss"],
-                    [network.actor.get_layer("board_block_3_contract").kernel],
-                )
+        tf.linalg.global_norm(
+            tape.gradient(
+                metrics["belief_loss"],
+                [network.actor.get_layer("board_block_3_contract").kernel],
             )
         )
         > 0

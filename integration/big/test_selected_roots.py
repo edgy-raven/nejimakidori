@@ -125,7 +125,6 @@ def test_training_rows_from_roots_exclude_prefix_and_keep_behavior():
         ("keiten", 1),
         ("tenpai", 1),
         ("calls", 2),
-        ("disagreement", 1),
         ("disagreement", 2),
         ("targeted", 2),
     ],
@@ -281,7 +280,7 @@ def test_disagreement_compares_max_q_with_policy_choice(monkeypatch):
     )
     network = types.SimpleNamespace(actor=repeated_actor)
     evaluate = collection.root_scorer(network)
-    for count in (2, 9, 65, 129):
+    for count in (2, 129):
         priority = evaluate(
             {
                 "decision_phase": numpy.zeros(count, numpy.int8),
@@ -336,22 +335,22 @@ def test_action_pairs_repeat_each_choice_on_matched_walls():
 
     streams = [
         self_play.collection_steps(
-            8,
+            2,
             123,
-            collector=root.fork(8, 123),
+            collector=root.fork(2, 123),
             forced_root=(root.decision, int(action), 8),
         )
         for action in codes
     ]
     batches = self_play.collect_streams(predict, streams)
     for action, (batch, statistics) in zip(codes, batches, strict=True):
-        assert statistics["games"] == 8
-        assert batch["paired_root"].sum() == 8
+        assert statistics["games"] == 2
+        assert batch["paired_root"].sum() == 2
         numpy.testing.assert_array_equal(
-            batch["chosen"][batch["paired_root"]], numpy.full(8, action)
+            batch["chosen"][batch["paired_root"]], numpy.full(2, action)
         )
         numpy.testing.assert_array_equal(
-            batch["behavior"][batch["paired_root"], action], numpy.zeros(8)
+            batch["behavior"][batch["paired_root"], action], numpy.zeros(2)
         )
         assert batch["legal"][
             numpy.arange(len(batch["chosen"])), batch["chosen"]

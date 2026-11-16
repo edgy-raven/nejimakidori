@@ -25,3 +25,15 @@ Tests cover the model and selected candidate on `main`. Experimental objectives
 and their tests stay on their experiment branches. Each workflow test should
 show the supported behavior and preserve regressions that affect correctness.
 The big suite includes the small suite and CPU performance gate.
+
+## Test organization
+
+Keep tests around complete workflows: build records, sample replay, update the
+model, save/export weights, and play a match. Use the real producer and consumer
+when checking a data contract. Distributed parity runs in one isolated process
+with two logical CPUs.
+
+Retain regressions for corrupted labels, illegal actions, settlement arithmetic,
+gradient boundaries, exhausted storage and worker cleanup. Avoid tests that copy
+an implementation, restate configuration defaults, or count mocked helper calls.
+Performance is checked by running the measured workflows in the full suite.

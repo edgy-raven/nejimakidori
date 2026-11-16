@@ -973,12 +973,6 @@ def settlement_objective(metrics):
     return metrics["payment_nll"] + metrics["critic_constraint_loss"]
 
 
-def objective_metrics(outputs, mean=losses.mean_valid):
-    metrics = settlement_metrics(outputs["critic_statistics"], mean)
-    loss = settlement_objective(metrics)
-    return loss, metrics
-
-
 def chosen_actions(features, labels):
     return tf.where(
         features["decision_phase"] == 4,

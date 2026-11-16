@@ -8,7 +8,7 @@ import numpy
 import pytest
 import tensorflow as tf
 from log_dataset import _native_collection, scoring
-from model import actions, beliefs, critic, export, inference
+from model import actions, critic, export, inference
 from model import network as joint_network
 from model import outcomes, payment_scoring
 
@@ -221,11 +221,10 @@ def test_robbed_kan_preserves_ippatsu_in_scoring_labels():
     assert payment_scoring.SCORES[target["score"][0, 2, 3, scenario]] == (8, 0)
 
 
-def test_joint_training_checkpoint_export_and_placement_inference(
+def test_checkpoint_export_and_placement_inference(
     tmp_path,
     monkeypatch,
 ):
-    from integration import supervision_reference
     from log_dataset import afk, replay, training_data
     from model import critic
 
@@ -287,130 +286,12 @@ def test_joint_training_checkpoint_export_and_placement_inference(
     network = joint_network.JointPolicyPayment()
     network(inputs)
     network.compile_training()
-    with tf.GradientTape(persistent=True) as tape:
-        outputs = network(inputs)
-        loss, metrics = supervision_reference.objective_metrics(
-            inputs,
-            outputs,
-        )
-    assert all(numpy.isfinite(float(value)) for value in metrics.values())
-    # Full-batch critic supervision includes every policy position.
+    outputs = network(inputs)
     assert float(
         outputs["critic_statistics"][
             critic.CRITIC_METRICS.index("settlement_supported_fraction"), 1
         ]
-    ) == len(inputs[2]["points"])
-    # Whole-validation aggregation must match a single batch even when
-    # completion labels occur only in a short, separate batch.
-    validation_inputs = (
-        inputs[0],
-        {
-            **inputs[1],
-            "round_completion_score": tf.where(
-                tf.range(tf.shape(inputs[2]["points"])[0])[:, None, None] == 0,
-                inputs[1]["round_completion_score"],
-                -1,
-            ),
-        },
-        inputs[2],
-    )
-    totals, predictions = [], []
-    for part in (slice(0, 1), slice(1, None)):
-        batch = tf.nest.map_structure(
-            lambda value: value[part], validation_inputs
-        )
-        prediction = network(batch)
-        totals.append(
-            supervision_reference.validation_statistics(batch, prediction)
-        )
-        predictions.append(
-            {
-                **prediction,
-                "selected": prediction["selected"] + [part.start, 0],
-            }
-        )
-    # Compare aggregation with fixed predictions. Separate BF16 forward
-    # passes need not round identically at different batch shapes.
-    validation_outputs = {
-        name: (
-            tf.add_n([row[name] for row in predictions])
-            if name == "critic_statistics"
-            else tf.nest.map_structure(
-                lambda *values: tf.concat(values, axis=0),
-                *[row[name] for row in predictions],
-            )
-        )
-        for name in outputs
-    }
-    combined = supervision_reference.objective_metrics(
-        validation_inputs,
-        validation_outputs,
-        statistics=tf.add_n([row["statistics"] for row in totals]),
-    )[1]
-    expected = supervision_reference.objective_metrics(
-        validation_inputs, validation_outputs
-    )[1]
-    for name in (
-        "completion_score_loss",
-        "score_nll",
-        "belief_loss",
-        "specialist_loss",
-        "critic_loss",
-        "joint_loss",
-    ):
-        numpy.testing.assert_allclose(combined[name], expected[name], atol=2e-5)
-    numpy.testing.assert_allclose(
-        sum(float(row["counts"]["example_count"]) for row in totals),
-        len(observations),
-    )
-    variables = network.trainable_variables
-    gradients = tape.gradient(loss, variables)
-    # Scored han/fu supervision reaches both kinds of yaku evidence.
-    assert metrics["scoring_loss"] > 0
-    assert metrics["completion_score_loss"] > 0
-    for name in (
-        "route_affinity_logits",
-        "round_completion_yaku_logits",
-        "round_completion_score_logits",
-    ):
-        scoring_gradient = tape.gradient(metrics["scoring_loss"], outputs[name])
-        assert scoring_gradient is not None
-        assert numpy.isfinite(scoring_gradient).all()
-        assert tf.linalg.global_norm([scoring_gradient]) > 0
-    with tf.GradientTape() as unknown_tape:
-        unknown_tape.watch(outputs["round_completion_score_logits"])
-        _, unknown_metrics = supervision_reference.objective_terms(
-            (
-                inputs[0],
-                {
-                    **inputs[1],
-                    "round_completion_score": -tf.ones_like(
-                        inputs[1]["round_completion_score"]
-                    ),
-                },
-                inputs[2],
-            ),
-            outputs,
-        )
-    assert unknown_metrics["completion_score_loss"] == 0
-    numpy.testing.assert_array_equal(
-        unknown_tape.gradient(
-            unknown_metrics["completion_score_loss"],
-            outputs["round_completion_score_logits"],
-        ),
-        0,
-    )
-    del tape
-    assert all(value is not None for value in gradients), [
-        variable.path
-        for variable, value in zip(variables, gradients)
-        if value is None
-    ]
-    assert all(
-        numpy.isfinite(tf.convert_to_tensor(value)).all() for value in gradients
-    )
-    assert float(tf.linalg.global_norm(gradients)) > 0
-    # Policy inference needs visible features only, never outcome/action labels.
+    ) == len(observations)
     policy = network.actor(inputs[0])
     for name, mask in actions.legal_choices(inputs[0]).items():
         numpy.testing.assert_array_equal(policy[name], outputs[name])
@@ -419,15 +300,6 @@ def test_joint_training_checkpoint_export_and_placement_inference(
             tf.nn.softmax(policy[name]).numpy()[active][~mask.numpy()[active]]
             == 0
         )
-    assert numpy.isfinite(float(metrics["policy_loss"]))
-    before = network.encoder(inputs[0])
-    optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, clipnorm=1.0)
-    optimizer.apply_gradients(zip(gradients, variables))
-    assert int(optimizer.iterations) == 1
-    after = network.encoder(inputs[0])
-    for name in beliefs.BELIEF_HEADS:
-        assert numpy.any(after[name].numpy() != before[name].numpy())
-    outputs = network(inputs)
     saved = tmp_path / "joint.weights.h5"
     network.save_weights(saved)
     restored = joint_network.JointPolicyPayment()

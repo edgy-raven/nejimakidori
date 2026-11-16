@@ -11,7 +11,7 @@ from training.candidate import monitor
 
 
 def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
-    clock = iter([1.0, 2.0, 4.0, 10.0, 12.0, 14.0, 16.0, 18.0])
+    clock = iter([1.0, 2.0, 4.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0])
     monkeypatch.setattr(monitor.time, "monotonic", lambda: next(clock))
     progress = monitor.Monitor(
         tmp_path,
@@ -21,6 +21,9 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
     progress.report(
         stage="record-imitation", metrics={}, exposures=0, cohort=0, games=0
     )
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["phase_index"] == 1
+    assert status["phase_exposures"] == status["total_exposures"] == 0
     progress.report(
         stage="record-imitation",
         metrics={"policy": 0.2},
@@ -64,7 +67,6 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
             cohort=1,
             games=2,
         )
-    progress.close()
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["phase_index"] == 2
     assert status["phase_fraction"] == 0.5
@@ -91,6 +93,15 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
         100,
         200,
     ]
+
+    progress.report(
+        stage="complete", metrics={}, exposures=600, cohort=5, games=10
+    )
+    assert (
+        json.loads((tmp_path / "status.json").read_text())["total_fraction"]
+        == 1
+    )
+    progress.close()
 
 
 def test_phase_evaluation_passes_loadable_export_to_matches(
@@ -150,20 +161,3 @@ def test_phase_evaluation_passes_loadable_export_to_matches(
     with pytest.raises(ValueError, match="different weights"):
         evaluation.run(args)
     assert len(calls) == 3
-
-
-def test_restart_monitor_starts_at_zero(tmp_path):
-    progress = monitor.Monitor(tmp_path, 100, {})
-    progress.report(
-        stage="record-imitation", metrics={}, exposures=0, cohort=0, games=0
-    )
-    status = json.loads((tmp_path / "status.json").read_text())
-    assert status["phase_index"] == 1
-    assert status["phase_exposures"] == status["total_exposures"] == 0
-    assert status["budget_exposures"] == 600
-    progress.report(
-        stage="complete", metrics={}, exposures=600, cohort=5, games=10
-    )
-    status = json.loads((tmp_path / "status.json").read_text())
-    assert status["total_fraction"] == status["phase_fraction"] == 1
-    progress.close()

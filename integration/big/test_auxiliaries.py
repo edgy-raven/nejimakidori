@@ -4,13 +4,13 @@ import json
 import pathlib
 
 import numpy
-import riichienv
 import tensorflow as tf
-
 from log_dataset import records, replay, scoring
 from model import actor as actor_layers
 from model import losses
 from model import network as joint_network
+
+import riichienv
 
 
 def test_specialist_targets_drive_tanyao_and_early_liability_gradients():
@@ -124,7 +124,7 @@ def test_specialist_targets_drive_tanyao_and_early_liability_gradients():
         assert all(value is not None for value in gradient)
         assert numpy.isfinite(tf.linalg.global_norm(gradient))
         assert tf.linalg.global_norm(gradient) > 0
-    # AWR/final-policy gradients can alter count estimates through projection.
+    # Policy gradients can alter count estimates through projection.
     gradient = tape.gradient(
         policy_loss,
         network.beliefs.heads["opponent_hand_count_logits"].trainable_variables,

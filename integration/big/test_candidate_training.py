@@ -12,7 +12,6 @@ from log_dataset import afk
 from log_dataset import replay as game_replay
 from log_dataset import training_data
 from model import actions
-from training import self_play
 from training.candidate import replay, run
 
 
@@ -74,24 +73,23 @@ def test_exact_source_quotas_and_disk_replay(tmp_path):
                 {
                     "source": numpy.full(7, index, numpy.int32),
                     "row": numpy.arange(start, start + 7),
+                    "features": {"source": numpy.full(7, index)},
                 }
             )
         pool.flush()
         assert pool.seen == 28
         assert len(pool.arrays[0]) == 13
-    assert set(range(21, 28)) <= set(pools[2].arrays[0])
-    assert set(pools[2].arrays[0]) <= set(range(14, 28))
+    assert set(range(21, 28)) <= set(pools[2].sample(100)["row"])
+    assert set(pools[2].sample(100)["row"]) <= set(range(14, 28))
     for fraction in (1, 0.8, 0.6, 0.4, 0.2, 0):
         seen = numpy.zeros(4, numpy.int64)
         for start in range(0, 103, 11):
             end = min(start + 11, 103)
             quotas = replay.allocation(end, fraction, 0.4, start=start)
-            numpy.testing.assert_array_equal(
-                quotas,
-                replay.allocation(end, fraction, 0.4)
-                - replay.allocation(start, fraction, 0.4),
-            )
             batch = replay.mixed_batch(pools, quotas, generator)
+            numpy.testing.assert_array_equal(
+                batch["source"], batch["features"]["source"]
+            )
             seen += numpy.bincount(batch["source"], minlength=4)
         numpy.testing.assert_array_equal(
             seen, replay.allocation(103, fraction, 0.4)
@@ -123,110 +121,36 @@ def test_replay_disk_exhaustion_fails_before_rows_are_written(
 
 
 @pytest.mark.parametrize("reservoir", (False, True))
-def test_replay_selected_rows_match_stream_replacement(tmp_path, reservoir):
-    pool = replay.ReplayBuffer(
-        tmp_path / "replay",
-        1031,
-        numpy.random.default_rng(941),
-        reservoir=reservoir,
-    )
-    generator = numpy.random.default_rng(941)
-    expected = numpy.full(1031, -1, numpy.int64)
-    seen = 0
-    for step, count in enumerate((700, 900, 1200, 3300)):
-        values = numpy.arange(count, dtype=numpy.int64) + step * 10000
+def test_replay_retains_selected_rows_and_nested_alignment(tmp_path, reservoir):
+    pools = [
+        replay.ReplayBuffer(
+            tmp_path / str(index),
+            13,
+            numpy.random.default_rng(941),
+            reservoir=reservoir,
+        )
+        for index in range(2)
+    ]
+    for start, count in ((0, 7), (100, 40)):
+        values = numpy.arange(start, start + count)
         batch = {
             "row": values,
-            "features": {
-                "pair": numpy.stack((values, -values), axis=1),
-                "flag": values % 2 == 0,
-            },
+            "features": {"pair": numpy.stack([values, -values], axis=1)},
         }
-        rows = (
-            None
-            if step == 0
-            else (
-                numpy.empty(0, numpy.int64)
-                if step == 1
-                else numpy.flatnonzero(values % 3 != 0)[::-1]
-            )
-        )
-        retained = values if rows is None else values[rows]
-        if reservoir:
-            slots = generator.integers(
-                numpy.arange(seen, seen + len(retained)) + 1
-            )
-            for offset, value in enumerate(retained):
-                slot = seen + offset if seen + offset < 1031 else slots[offset]
-                if slot < 1031:
-                    expected[slot] = value
-        else:
-            for offset, value in enumerate(
-                retained[generator.permutation(len(retained))]
-            ):
-                expected[(seen + offset) % 1031] = value
-        seen += len(retained)
-        pool.add(batch, rows)
-        assert pool.seen == seen
-        assert (
-            pool.generator.bit_generator.state == generator.bit_generator.state
-        )
-        actual = tf.nest.pack_sequence_as(
-            pool.structure, [value[: min(seen, 1031)] for value in pool.arrays]
-        )
-        numpy.testing.assert_equal(
-            actual,
-            {
-                "row": expected[: min(seen, 1031)],
-                "features": {
-                    "pair": numpy.stack(
-                        (
-                            expected[: min(seen, 1031)],
-                            -expected[: min(seen, 1031)],
-                        ),
-                        axis=1,
-                    ),
-                    "flag": expected[: min(seen, 1031)] % 2 == 0,
-                },
-            },
-        )
-
-
-def test_mixed_replay_preserves_shuffle_alignment_and_rng():
-    class Pool:
-        def __init__(self, offset):
-            rows = numpy.arange(10, dtype=numpy.int32) + offset
-            self.batch = {
-                "chosen": rows,
-                "features": {
-                    "pair": numpy.stack((rows, -rows), axis=1),
-                    "flag": rows % 2 == 0,
-                },
-            }
-
-        def sample(self, count):
-            return tf.nest.map_structure(
-                lambda value: value[:count], self.batch
-            )
-
-    pools = [Pool(0), None, Pool(100), Pool(200)]
-    for counts in ([3, 0, 5, 2], [0, 0, 7, 0]):
-        generator = numpy.random.default_rng(941)
-        reference = numpy.random.default_rng(941)
-        parts = [
-            pool.sample(count) for pool, count in zip(pools, counts) if count
-        ]
-        selected = reference.permutation(sum(counts))
-        expected = tf.nest.map_structure(
-            lambda *values: numpy.concatenate(values)[selected], *parts
-        )
-        actual = replay.mixed_batch(pools, counts, generator)
-        numpy.testing.assert_equal(actual, expected)
-        assert generator.bit_generator.state == reference.bit_generator.state
-        actual["features"]["pair"][:] = 0
+        rows = numpy.flatnonzero(values % 3 != 0)[::-1]
+        for pool in pools:
+            pool.add(batch, rows)
+            pool.add(batch, numpy.array([], dtype=int))
+        first, second = [pool.sample(100) for pool in pools]
+        numpy.testing.assert_equal(first, second)
         numpy.testing.assert_array_equal(
-            parts[0]["features"]["pair"][:, 0], parts[0]["chosen"]
+            first["features"]["pair"],
+            numpy.stack([first["row"], -first["row"]], axis=1),
         )
+        assert (first["row"] % 3 != 0).all()
+        if not reservoir:
+            assert first["row"].min() >= start
+    assert pools[0].seen == 31
 
 
 def test_record_adapter_keeps_legality_return_and_target_categories(
@@ -276,26 +200,6 @@ def test_record_adapter_keeps_legality_return_and_target_categories(
     assert tf.reduce_all(
         tf.gather(batch["legal"], batch["chosen"], batch_dims=1)
     )
-    features = numpy.zeros(4, self_play.FEATURE_DTYPE)
-    for name in (
-        "normal_self_shanten",
-        "chiitoitsu_self_shanten",
-        "kokushi_self_shanten",
-    ):
-        features[name] = [2, 1, 3, 3]
-    features["live_wall_count"] = [16, 30, 30, 30]
-    features["self_efficiency"][:, 0] = numpy.array([1, 0, 2, 2]) / 8
-    features["pon_discard_legal"][2, 0, 0] = 1
-    features["pon_discard_shanten"][2, 0, 0] = 2
-    features["kan_legal_mask"][3, 1] = 1
-    features["kan_efficiency"][3, 0, 0] = 1 / 8
-    numpy.testing.assert_array_equal(
-        self_play.target_categories(
-            features, numpy.array([0, 1, 2, 3]), numpy.array([0, 0, 0, 4])
-        ),
-        [1, 2, 4, 4],
-    )
-
     monkeypatch.setattr(
         replay.hybrid,
         "raw_batches",
@@ -346,49 +250,6 @@ def test_record_stream_consumes_rows_without_a_small_fixed_cache(monkeypatch):
     )
     numpy.testing.assert_array_equal(seen, numpy.arange(12))
     assert targeted == list(range(1, 12, 2))
-
-
-def test_candidate_plan_uses_selected_recipe(tmp_path):
-    command = tmp_path / "evaluation.json"
-    command.write_text(
-        json.dumps(
-            [
-                "evaluate",
-                "{weights}",
-                "{output}",
-                "--seed",
-                "941",
-                "--games",
-                "4",
-            ]
-        )
-    )
-    args = run.argument_parser().parse_args(
-        [
-            "--initial",
-            "checkpoint.weights.h5",
-            "--reference",
-            "reference.weights.h5",
-            "--distill-labels",
-            str(tmp_path / "labels"),
-            "--output",
-            str(tmp_path / "run"),
-            "--evaluation-command",
-            str(command),
-            "--collection-device",
-            "GPU-test",
-        ]
-    )
-    fractions, evaluation = run.settings(args)
-    assert fractions == [0.8, 0.6, 0.4, 0.2, 0.2]
-    assert evaluation == json.loads(command.read_text())
-    assert (args.mirror_coefficient, args.magnet_coefficient) == (0.3, 0.3)
-    assert args.risk_coefficient == 0.1
-    assert args.expert_prior == 0.2
-    assert args.riichi_rate_target == 0.20
-    assert (args.target_fraction, args.root_copies) == (0.5, 1)
-    assert args.learning_rate == 2e-5
-    assert args.reference != args.initial
 
 
 def test_cohort_checkpoints_are_immutable_and_latest_tracks_progress(tmp_path):

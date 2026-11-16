@@ -46,6 +46,9 @@ pub struct Ranges {
     // Open completions lacking yaku, separately for ron and tsumo.
     pub restricted: [u8; 2],
     pub eligible: bool,
+    pub dama_points: i32,
+    pub extra_han: u8,
+    pub riichi_points: i32,
 }
 pub fn ready_ranges(
     tiles: Vec<u8>,
@@ -67,9 +70,77 @@ pub fn ready_ranges(
     };
     // calc adds the winning tile to a thirteen-tile hand, including its red
     // bonus. Normalize the hand and fixed melds once for all winning tiles.
+    let closed = (availability.prior != 0 && open).then(|| {
+        let mut concealed = tiles.clone();
+        let mut kans = vec![];
+        for meld in &melds {
+            if meld.tiles.len() == 3 {
+                concealed.extend(&meld.tiles);
+            } else {
+                kans.push(Meld::new(
+                    riichienv_core::types::MeldType::Ankan,
+                    meld.tiles.clone(),
+                    false,
+                    0,
+                    None,
+                ));
+            }
+        }
+        HandEvaluator::new(concealed, kans)
+    });
     let evaluator = HandEvaluator::new(tiles, melds);
+    let mut prior_seen = false;
     for base in (0u8..34).filter(|base| waits & (1u64 << base) != 0) {
         for (winning_tile, _) in availability.available_tiles(base) {
+            if availability.prior != 0 {
+                let conditions = Conditions {
+                    player_wind: Wind::from(ctx.player_wind),
+                    round_wind: Wind::from(ctx.round_wind),
+                    ..Conditions::default()
+                };
+                let dama = normalize_score(
+                    evaluator.calc_with_indicators(
+                        winning_tile,
+                        &ctx.dora,
+                        &[],
+                        Some(conditions.clone()),
+                    ),
+                    false,
+                    false,
+                );
+                let declared = normalize_score(
+                    closed.as_ref().unwrap_or(&evaluator).calc_with_indicators(
+                        winning_tile,
+                        &ctx.dora,
+                        &[],
+                        Some(Conditions {
+                            riichi: true,
+                            ..conditions
+                        }),
+                    ),
+                    false,
+                    false,
+                );
+                let points = [&dama, &declared].map(|value| {
+                    if value.is_win {
+                        score::calculate_score(value.han as u8, value.fu as u8, false, false, 0, 4)
+                            .pay_ron as i32
+                    } else {
+                        0
+                    }
+                });
+                let extra = declared.han.saturating_sub(1).min(127) as u8;
+                if prior_seen {
+                    result.dama_points = result.dama_points.min(points[0]);
+                    result.riichi_points = result.riichi_points.min(points[1]);
+                    result.extra_han = result.extra_han.min(extra);
+                } else {
+                    result.dama_points = points[0];
+                    result.riichi_points = points[1];
+                    result.extra_han = extra;
+                    prior_seen = true;
+                }
+            }
             for (win_kind, is_tsumo) in [false, true].into_iter().enumerate() {
                 if !open && !is_tsumo && furiten {
                     continue;
@@ -122,6 +193,55 @@ pub fn ready_ranges(
         }
     }
     result
+}
+
+#[pyo3::pyfunction]
+pub fn policy_prior_values(
+    tiles: Vec<u8>,
+    melds: Vec<(u8, Vec<u8>)>,
+    dora: Vec<u8>,
+    unavailable: [u8; 34],
+    unavailable_red: [i32; 3],
+    player_wind: u8,
+    round_wind: u8,
+) -> (i32, u8, i32) {
+    use riichienv_core::types::MeldType;
+    let melds: Vec<_> = melds
+        .into_iter()
+        .map(|(kind, tiles)| {
+            Meld::new(
+                match kind {
+                    0 => MeldType::Chi,
+                    1 => MeldType::Pon,
+                    2 => MeldType::Daiminkan,
+                    3 => MeldType::Ankan,
+                    4 => MeldType::Kakan,
+                    _ => unreachable!(),
+                },
+                tiles,
+                kind != 3,
+                0,
+                None,
+            )
+        })
+        .collect();
+    let waits = HandEvaluator::new(tiles.clone(), melds.clone())
+        .get_waits_u8()
+        .iter()
+        .fold(0u64, |mask, &tile| mask | (1u64 << tile));
+    let ctx = Context {
+        own_discards: vec![],
+        missed_agari: false,
+        unavailable,
+        unavailable_red,
+        dora,
+        player_wind,
+        round_wind,
+    };
+    let mut availability = crate::features::RangeContext::new(&ctx);
+    availability.prior = 1;
+    let result = ready_ranges(tiles, melds, &ctx, &availability, None, waits);
+    (result.dama_points, result.extra_han, result.riichi_points)
 }
 
 // The label pipeline supplies complete concealed hands, with melds separate.
@@ -227,7 +347,7 @@ pub fn score_hand(
     })
 }
 
-fn normalize_score(
+pub(crate) fn normalize_score(
     mut scored: riichienv_core::types::WinResult,
     dealer: bool,
     tsumo: bool,

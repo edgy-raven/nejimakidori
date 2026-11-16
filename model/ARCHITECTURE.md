@@ -2,8 +2,8 @@
 
 Nejimakidori predicts a move and the likely consequences of the current hand.
 A shared encoder reads the visible board, rivers and candidate hands.
-Four residual board blocks feed the action policy, opponent beliefs,
-state value and settlement predictions.
+Four residual board blocks feed the action policy, opponent beliefs
+and settlement predictions.
 The joint network is assembled in [network.py](network.py).
 
 For commands, see [training and evaluation](../training/README.md). For tensor names,
@@ -15,31 +15,30 @@ shapes and encoding, see the [native interface](../log_dataset/native_collection
 2. Feature extraction builds the current hand and legal post-action hands,
    including call/discard combinations. Opponents' concealed tiles are excluded.
 3. The shared encoder produces board, river and candidate representations.
-4. Belief and value predictions feed the final policy. Legal masks remove
+4. Belief and completion predictions feed the final policy. Legal masks remove
    unavailable choices before selection.
 
 The policy has discard, riichi/discard, response, kan and win/pass heads. A response
 includes its follow-up discard. Physical copies of the same tile share an
 ordinary discard action; red fives remain distinct. Optional ron and tsumo
 are learned choices; nine-terminals aborts remain automatic. Win/pass learns
-from recorded choices and observed hand returns, using the fitted state-value
-baseline rather than an action-conditioned win forecast.
+from recorded choices and action-conditioned current-hand forecasts.
 
-[actor.py](actor.py) applies opening symmetry and final-wall
-safety rules. During training, a detached policy target also guides early-hand
-efficiency and late-hand safe discards. The `--prior-weight` option controls
-that training loss. Exact rules live alongside their implementation.
+[actor.py](actor.py) applies opening symmetry and final-wall safety rules.
+Its other heuristic prior outputs are training diagnostics.
+Positive-only first-riichi and call priors add an expert cross-entropy term
+under the [candidate objective](../training/OBJECTIVE.md#fixed-policy-pull).
+Their threat and post-action scoring facts bypass learned encoder projections;
+they neither change inference logits nor introduce new trained parameters.
 
 ## What the predictions mean
 
 | Prediction | Meaning |
 | --- | --- |
-| Opponent beliefs | Shanten, structural waits and concealed tile-count marginals. Counts are constrained by public hand sizes and available copies. |
+| Opponent beliefs | Shanten, structural waits and held tile-count marginals, including known melds. Concealed counts respect hand sizes and available copies; riichi and four fixed melds fix shanten to tenpai. |
 | Completion yaku and score | The highest-scoring legal completion of the next observed tenpai shape, separately for ron and tsumo. Unknown targets are masked. |
 | Route affinity | How much of a candidate's visible shortest-route support belongs to tanyao, flush or outside-hand families. |
-| Immediate outcomes | Ron claims and payments, exhaustive draws and aborts at the current action boundary. |
-| Future settlement | A probability distribution over ways the hand can end and the resulting transfers. |
-| State value (training) | Expected observed hand return with fixed continuation, in ST3 / 100 units; conditioned on the pre-action state. |
+| Hand settlement | A probability distribution over ways the hand can end and the resulting transfers. |
 | Final placement | Settlement outcomes integrated through a fixed continuation model for the rest of the match. |
 
 Structural waits can be blocked by furiten or lack of yaku. Completion potential
@@ -74,11 +73,56 @@ matches use exact final scores and ranks. Earlier hands use a fixed continuation
 model based on scores, remaining hands and scheduled dealerships. Its parameters
 are separate from the learned current-hand critic.
 
+Root scoring computes settlement payoffs once per public position and reuses
+them across candidate actions. Only the settlement probabilities depend on the
+action. Payoff construction and action forecasts use bounded GPU chunks; the
+shared payoff tensor exists only for the current root batch.
+
+## Tile interactions in opponent beliefs
+
+Initial count and structural-wait predictions feed 34 tile tokens per opponent.
+Each token includes tile identity, ordinary/red count probabilities, conditional
+ukeire probabilities, public availability and meld counts, shanten probabilities
+and board context. Two attention blocks share weights across opponents. Each
+block uses four attention heads at width 64, pre-normalization and a residual
+128-wide GELU feed-forward layer. Every tile can attend to every other tile,
+including across suits; there are no fixed suji connections or recurrent state.
+
+A zero-initialized residual output refines ordinary/red count logits and all
+four shanten-conditioned ukeire slices. The normal runtime compiles tile
+attention as one XLA function, alongside the existing hand and river blocks.
+Shanten logits retain their existing head. Existing count masks, projection and constraint supervision apply after
+refinement. Losses, labels and exported tensor shapes are unchanged. This
+learns interactions in marginal predictions; it does not define a joint
+probability distribution over hands or wait sets.
+
+The new architecture adds weights. Old checkpoints require an explicit weight
+transfer before use; normal loading remains strict. Frozen training runs and
+released serving models do not acquire these layers automatically.
+
 ## Training
 
 The [candidate objective](../training/OBJECTIVE.md) defines actor weighting,
-V targets, fixed-policy KL and gradient boundaries. The critic and V predict
-current-hand outcomes projected through the same fixed continuation model.
+policy anchors and gradient boundaries. The critic predicts current-hand
+outcomes projected through the fixed continuation model. There is no separate
+state-value head.
+
+Recorded and generated decisions directly supervise all three belief heads.
+Hidden-state labels stay outside inference inputs. The same constrained
+beliefs feed the policy and Q. Directional training penalties encourage higher
+opponent tenpai to increase that opponent's win probability and conditional
+exhaustive-draw readiness, and higher wait probability on the candidate tile
+to increase that opponent's ron against the actor, with other inputs fixed.
+These are soft penalties, not global monotonicity guarantees.
+
+One settlement head handles immediate and later endings. Unplayed terminal
+targets assume every legal opponent ron is claimed; see
+the [target assumptions and phase coverage](../training/OBJECTIVE.md). Under
+that approximation, actions receive settlement supervision without rollouts:
+ron takes priority over aborts, including triple-ron abort; exhaustive draws
+use known hidden readiness when visible discards rule out nagashi. Unknown
+winning amounts are marginalized.
+Automatic aborts without a policy action have no Q slot.
 
 ## Where to change things
 
@@ -90,11 +134,10 @@ current-hand outcomes projected through the same fixed continuation model.
 | Opponent beliefs, count constraints and supervision | [beliefs.py](beliefs.py) |
 | Policy and candidate auxiliary heads, priors and losses | [actor.py](actor.py) |
 | Legal actions, model indexing and native selection | [actions.py](actions.py) |
-| Payment critic, immediate outcomes and action forecasts | [critic.py](critic.py) |
-| State-value head and regression | [network.py](network.py), [trainer.py](../training/trainer.py) |
+| Payment critic and action forecasts | [critic.py](critic.py) |
 | Score support and settlement | [payment_scoring.py](payment_scoring.py), [joint_settlement.py](joint_settlement.py) |
 | Component losses and gradient boundaries | [actor.py](actor.py), [beliefs.py](beliefs.py), [critic.py](critic.py) |
-| Shared loss reductions and optimizer updates | [losses.py](losses.py), [optimization.py](../training/optimization.py) |
+| Shared loss reductions and optimizer updates | [losses.py](losses.py), [trainer.py](../training/trainer.py) |
 | Self-play and candidate updates | [self_play.py](../training/self_play.py), [trainer.py](../training/trainer.py) |
 | Frozen sources and isolated opponents | [frozen_policy.py](../training/frozen_policy.py) |
 | Recorded labels and sampling | [dataset guide](../log_dataset/README.md) |

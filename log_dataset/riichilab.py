@@ -68,11 +68,7 @@ def enrich(game, events, teachers):
     events[0].update(
         {
             "names": [player["bot_name"] for player in players],
-            "player_ranks": {
-                "dan": ranks,
-                "rating": [],
-                "retained_seats": [],
-            },
+            "player_ranks": {"dan": ranks, "rating": [], "retained_seats": []},
             "riichilab": {
                 "game_id": game["id"],
                 "bot_ids": [player["bot_id"] for player in players],

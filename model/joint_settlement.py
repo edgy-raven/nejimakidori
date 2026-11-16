@@ -8,7 +8,6 @@ import itertools
 
 import numpy
 import tensorflow as tf
-
 from log_dataset import scoring
 from model import losses, outcomes, payment_scoring
 
@@ -146,19 +145,6 @@ COEFFICIENTS = numpy.array(
     ],
     numpy.float32,
 )
-# Existing immediate columns: survive, singles, exhaustive masks, abort,
-# triple abort, then pairs (1+2, 1+3, 2+3).
-IMMEDIATE_EVENTS = numpy.array(
-    [
-        (
-            {2: 1, 4: 2, 8: 3, 6: 22, 10: 23, 12: 24, 14: 21}[mask]
-            if kind == 0 and payer == 0
-            else 4 + draw if kind == 2 else 20 if kind == 3 else -1
-        )
-        for kind, payer, mask, draw in EVENTS
-    ]
-)
-
 # Tsumo shares one score across three payers; ron has one head per claim.
 TSUMO_CELLS = tuple(
     tuple(
@@ -217,26 +203,6 @@ def score_likelihood(score_probability, heads, values):
     return tf.reduce_prod(tf.where(heads >= 0, likelihood, 1.0), -1)
 
 
-def immediate_deposits(inputs, events):
-    """Draws accept the declaration; ron and triple abort precede its deposit."""
-    before = tf.reduce_sum(
-        tf.cast(inputs["immediate_deposit_required"], tf.int32)
-        * tf.constant([1, 2, 4, 8]),
-        -1,
-    )
-    after = tf.reduce_sum(
-        tf.cast(inputs["deposit_required"], tf.int32)
-        * tf.constant([1, 2, 4, 8]),
-        -1,
-    )
-    return tf.one_hot(
-        tf.where(
-            (events >= 4) & (events <= 20), after[:, None], before[:, None]
-        ),
-        16,
-    )
-
-
 def public_inputs(features):
     return {
         "scores": tf.round(
@@ -258,13 +224,13 @@ def settlement_states(inputs):
     """Rule-derived outcomes depend only on the position, not its actions."""
     indices = dealer_indices(inputs["dealer"])
     classes = tf.gather(tf.constant(CLASSES, tf.int64), indices)
-    transfers = tf.gather(tf.constant(TRANSFERS, tf.float32), indices)
     support = tf.gather(tf.constant(SUPPORT, tf.int64), indices)
     bank = bank_transfers(support[:, :, 2], inputs["pot"])
-    delta = tf.linalg.matmul(transfers, tf.constant(COEFFICIENTS))
-    delta += inputs["honba"][:, None, None] * tf.linalg.matmul(
-        tf.gather(tf.constant(HONBA, tf.float32), indices),
-        tf.constant(COEFFICIENTS),
+    # Physical point transfers must not pass through reduced-precision GEMM.
+    delta = tf.gather(
+        tf.constant(TRANSFERS @ COEFFICIENTS, tf.float32), indices
+    ) + inputs["honba"][:, None, None] * tf.gather(
+        tf.constant(HONBA @ COEFFICIENTS, tf.float32), indices
     )
     scores = inputs["scores"][:, None, None] + delta[:, :, None] + bank
     priority = (tf.range(4)[None] - inputs["first_dealer"][:, None]) % 4
@@ -291,35 +257,69 @@ def settlement_states(inputs):
     }
 
 
-def event_probabilities(inputs):
-    legal = tf.reduce_all(
-        (
-            ~tf.constant(DEPOSITS, tf.bool)[None]
-            | inputs["deposit_allowed"][:, None]
-        )
-        & (
-            tf.constant(DEPOSITS, tf.bool)[None]
-            | ~inputs["deposit_required"][:, None]
-        ),
-        -1,
-    )
-    # An accepted riichi guarantees tenpai on an exhaustive draw. This
-    # includes both prior declarations and deposits predicted in this hand.
+def event_legal(inputs):
+    """Shared event/bank support, including deterministic last-discard facts."""
+    kind = tf.constant([event[0] for event in EVENTS])
+    payer = tf.constant([event[1] for event in EVENTS])
     ready = tf.constant(
         [
             [bool(mask & (1 << seat)) for seat in range(4)]
             for _, _, _, mask in EVENTS
         ]
     )
-    legal = legal[:, None] & tf.reduce_all(
-        (tf.constant([event[0] for event in EVENTS]) != 2)[None, :, None, None]
-        | ready[None, :, None]
-        | ~(
-            inputs["riichi_required"][:, None, None]
-            | tf.constant(DEPOSITS, tf.bool)[None, None]
+    claims = tf.constant(
+        [
+            [bool(mask & (1 << seat)) for seat in range(4)]
+            for _, _, mask, _ in EVENTS
+        ]
+    )
+    deposits = tf.constant(DEPOSITS, tf.bool)
+    # A pending declarer's deal-in may precede acceptance or occur later.
+    # Other endings require acceptance. Already paid sticks are in scores/pot.
+    preempted = (kind[:, None] == 0) & (payer[:, None] == tf.range(4)[None])
+    legal = tf.reduce_all(
+        (~deposits[None, None] | inputs["deposit_allowed"][:, None, None])
+        & (
+            deposits[None, None]
+            | ~inputs["deposit_required"][:, None, None]
+            | preempted[None, :, None]
         ),
         -1,
     )
+    legal &= tf.reduce_all(
+        (kind != 2)[None, :, None, None]
+        | ready[None, :, None]
+        | ~(inputs["tenpai_required"][:, None, None] | deposits[None, None]),
+        -1,
+    )
+    boundary = inputs["ending_draw_kind"] > 0
+    ron = (kind == 0) & (payer == 0)
+    allowed = ron[None] | tf.where(
+        inputs["ending_draw_kind"][:, None] == 1,
+        kind[None] == 2,
+        kind[None] == 3,
+    )
+    allowed &= ~ron[None] | ~tf.reduce_any(
+        claims[None, :, 1:] & inputs["ending_safe"][:, None], -1
+    )
+    allowed &= (kind != 2)[None] | tf.reduce_all(
+        (inputs["ending_tenpai"][:, None] < 0)
+        | (tf.cast(ready, tf.int32)[None] == inputs["ending_tenpai"][:, None]),
+        -1,
+    )
+    # No further declarations can occur once this discard ends the hand.
+    boundary_deposits = inputs["deposit_required"][:, None] & ~preempted[None]
+    legal &= ~boundary[:, None, None] | (
+        allowed[..., None]
+        & tf.reduce_all(
+            deposits[None, None] == boundary_deposits[:, :, None], -1
+        )
+    )
+    return legal
+
+
+def event_probabilities(inputs):
+    legal = event_legal(inputs)
     deposit = tf.nn.softmax(
         tf.where(legal, inputs["deposit_logits"], -1e9)
     ) * tf.cast(legal, tf.float32)
@@ -339,31 +339,9 @@ def probabilities(inputs):
     )
     event, deposit, legal = event_probabilities(inputs)
     probability = (
-        tf.gather(event, support[:, :, 5], axis=1, batch_dims=1)
-        * amount
-        * inputs["immediate_probability"][:, :1]
+        tf.gather(event, support[:, :, 5], axis=1, batch_dims=1) * amount
     )[..., None] * tf.gather(deposit, support[:, :, 5], axis=1, batch_dims=1)
-
-    immediate_event = tf.gather(tf.constant(IMMEDIATE_EVENTS), support[:, :, 5])
-    immediate = tf.gather(
-        inputs["immediate_probability"],
-        tf.maximum(immediate_event, 0),
-        axis=1,
-        batch_dims=1,
-    )
-    immediate = tf.where(immediate_event >= 0, immediate, 0.0)
-    # For actor-payer ron, the canonical ron cell IDs 0..2 are opponent slots.
-    amount = score_likelihood(
-        inputs["immediate_score_probability"],
-        tf.minimum(selectors[..., 0], 2),
-        selectors[..., 1],
-    )
-    immediate_probability = (immediate * amount)[..., None] * (
-        immediate_deposits(inputs, immediate_event)
-    )
-    probability += immediate_probability
     legal = tf.gather(legal, support[:, :, 5], axis=1, batch_dims=1)
-    legal |= immediate_probability > 0
     return probability, legal
 
 
@@ -374,7 +352,6 @@ def decode(inputs):
         probability > 0, tf.math.log(tf.maximum(probability, 1e-30)), -1e30
     )
     indices = dealer_indices(inputs["dealer"])
-    transfers = tf.gather(tf.constant(TRANSFERS, tf.float32), indices)
     states = settlement_states(inputs)
     rank_probability = tf.reduce_sum(
         tf.reduce_sum(
@@ -394,7 +371,9 @@ def decode(inputs):
         ),
         "expected_points": expectation(
             probability,
-            tf.linalg.matmul(transfers, tf.constant(COEFFICIENTS))[:, :, None]
+            tf.gather(
+                tf.constant(TRANSFERS @ COEFFICIENTS, tf.float32), indices
+            )[:, :, None]
             + states["joint_bank"],
         )
         / 10000,
@@ -421,9 +400,10 @@ def observed_terms(
         )
         == tf.gather(
             tf.constant(outcomes.PAYMENT_VALUES, tf.int32),
-            labels["payment"][:, :24],
+            tf.maximum(labels["payment"][:, :24], 0),
         )[..., None]
     )
+    same_score |= labels["payment"][:, :24, None] < 0
     score_match = tf.concat(
         [
             same_score[:, :12],
@@ -455,6 +435,8 @@ def observed_terms(
         ~tf.constant(selected)[None] | tf.reduce_any(score_match, -1)[:, None],
         -1,
     )
+    if "event" in labels:
+        compatible &= tf.range(len(EVENTS))[None] == labels["event"][:, None]
     bank = bank_transfers(
         tf.constant(SUPPORT[EVENT_ROWS, 2])[None], inputs["pot"]
     )
@@ -462,34 +444,10 @@ def observed_terms(
         payment_values(labels), labels["payment"][:, 36:], axis=1, batch_dims=1
     )
     bank_match = tf.reduce_all(bank == actual_bank[:, None, None], -1)
-    future = (
-        event * event_score_likelihood * inputs["immediate_probability"][:, :1]
-    )[..., None] * deposit
-    immediate = tf.gather(
-        inputs["immediate_probability"],
-        tf.maximum(tf.constant(IMMEDIATE_EVENTS), 0),
-        axis=1,
-    )
-    immediate *= tf.cast(tf.constant(IMMEDIATE_EVENTS >= 0), tf.float32)
-    immediate_score = tf.reduce_sum(
-        inputs["immediate_score_probability"]
-        * tf.cast(score_match[:, :3], tf.float32),
-        -1,
-    )
-    immediate *= tf.reduce_prod(
-        tf.where(
-            tf.constant(selected[:, :3])[None], immediate_score[:, None], 1.0
-        ),
-        -1,
-    )
-    immediate = immediate[..., None] * immediate_deposits(
-        inputs, tf.constant(IMMEDIATE_EVENTS)[None]
-    )
-    matches = compatible[..., None] & bank_match & (legal | (immediate > 0))
+    probability = (event * event_score_likelihood)[..., None] * deposit
+    matches = compatible[..., None] & bank_match & legal
     supported = tf.reduce_any(matches, axis=(1, 2))
-    likelihood = tf.reduce_sum(
-        tf.where(matches, future + immediate, 0.0), (1, 2)
-    )
+    likelihood = tf.reduce_sum(tf.where(matches, probability, 0.0), (1, 2))
     return {
         "payment_nll": mean(
             -tf.math.log(tf.maximum(likelihood, 1e-30)), supported
@@ -526,6 +484,43 @@ def expectation(probability, values):
     if values.shape.rank == 4:
         probability = probability[..., None]
     return tf.reduce_sum(tf.reduce_sum(probability * values, axis=2), axis=1)
+
+
+@tf.function(jit_compile=True)
+def position_payoffs(inputs):
+    """Project public settlement states once for all actions in a position."""
+    states = settlement_states(inputs)
+    return continuation_payoffs(
+        scores=states["joint_scores"],
+        ranks=states["joint_ranks"],
+        support=states["joint_support"],
+        dealer=inputs["dealer"],
+        hand_number=inputs["hand_number"],
+        pot=inputs["pot"],
+    )
+
+
+def gather_position_payoffs(inputs, positions):
+    """Project each requested position once in bounded, fixed-size chunks."""
+    payoffs = tf.TensorArray(
+        tf.float32,
+        size=(tf.shape(positions)[0] + 31) // 32,
+        element_shape=[32, len(SUPPORT) // 4, 16],
+    )
+    for begin in tf.range(0, tf.shape(positions)[0], 32):
+        rows = tf.gather(
+            positions,
+            tf.minimum(tf.range(begin, begin + 32), tf.shape(positions)[0] - 1),
+        )
+        payoffs = payoffs.write(
+            begin // 32,
+            position_payoffs(
+                {name: tf.gather(value, rows) for name, value in inputs.items()}
+            ),
+        )
+    return tf.reshape(payoffs.stack(), [-1, len(SUPPORT) // 4, 16])[
+        : tf.shape(positions)[0]
+    ]
 
 
 @tf.function(jit_compile=True)
@@ -591,7 +586,7 @@ def continuation_forecast(scores, ranks, support, dealer, hand_number, pot):
 
 
 def observed_payoffs(settlements):
-    """Score the recorded hand endings used by expert AWR and fresh PPO."""
+    """Project observed current-hand settlements into match utility."""
     return post_hand_forecast(
         scores=tf.cast(settlements[:, :4], tf.float32),
         ranks=tf.cast(settlements[:, 4:8], tf.int64),
@@ -745,13 +740,13 @@ def payment_values(inputs):
 
 
 def payment_labels(points, public):
-    """Map raw remaining transfers onto the shared public-pot alphabet."""
+    """Map transfers; -1 denotes a known win with unknown payment amount."""
     matches = (
         tf.cast(points[..., None], tf.float32)
         == payment_values(public)[:, None]
     )
     tf.debugging.Assert(
-        tf.reduce_all(tf.reduce_any(matches, -1)),
+        tf.reduce_all(tf.reduce_any(matches, -1) | (points == -1)),
         [
             "Unsupported payment targets (row, cell), points, public pots:",
             tf.where(~tf.reduce_any(matches, -1)),
@@ -761,9 +756,12 @@ def payment_labels(points, public):
             ),
         ],
     )
+    # Exact 0/1 floats keep ArgMax on the GPU instead of copying matches.
     return {
-        "payment": tf.argmax(
-            tf.cast(matches, tf.int32), -1, output_type=tf.int32
+        "payment": tf.where(
+            points == -1,
+            -1,
+            tf.argmax(tf.cast(matches, tf.float32), -1, output_type=tf.int32),
         ),
         "pot": public["pot"],
     }

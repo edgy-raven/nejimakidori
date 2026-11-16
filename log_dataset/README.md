@@ -64,3 +64,8 @@ prevents two builds from using the same directory.
 | Sampling, labels and compatibility | [Record contract](RECORDS.md) |
 | Feature tensors and simulator interface | [Native engine](native_collection/README.md) |
 | Model prediction meanings | [Architecture](../model/ARCHITECTURE.md) |
+
+## Greedy distill policy teacher labels
+
+[Fixed hybrid imitation](../training/HYBRID.md) adds reusable greedy distill policy
+actions alongside existing expert records without rewriting the corpus.

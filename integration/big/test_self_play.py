@@ -7,7 +7,6 @@ import types
 import numpy
 import pytest
 import tensorflow as tf
-
 from log_dataset import _native_collection
 from model import actions, joint_settlement, outcomes
 from training import self_play
@@ -48,6 +47,11 @@ def test_native_nagashi_targets_charge_deposits_once(monkeypatch):
                 "hand": [0] * 4,
                 "seat": list(range(4)),
                 "event": [starts[0] + 1] * 4,
+                "opponent_shanten": numpy.zeros((4, 3), numpy.int8),
+                "opponent_ukeire": numpy.zeros((4, 3, 34), numpy.int8),
+                "opponent_hand_counts": numpy.zeros((4, 3, 37), numpy.int8),
+                "ron_legal": numpy.full((4, 3, 37), -1, numpy.int8),
+                "ron_payments": numpy.full((4, 3, 37), -1, numpy.int32),
             },
             None,
         ]
@@ -104,6 +108,8 @@ def test_parallel_complete_games_are_repeatable_and_workers_are_reaped():
             name: collector.metrics[name]
             for name in self_play.collection_counts()
         }
+        for name in ("ron_legal", "ron_payments"):
+            assert first[name].shape == (len(first["chosen"]), 3, 37)
         assert first_counts["games"] == 2
         assert first_counts["hands"] >= 2
         assert collector.metrics["inference_rows"] == len(first["chosen"])

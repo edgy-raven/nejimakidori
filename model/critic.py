@@ -1,8 +1,7 @@
-"""Action-conditioned settlements, immediate outcomes and policy values."""
+"""Action-conditioned settlements and policy values."""
 
 import numpy
 import tensorflow as tf
-
 from log_dataset import scoring
 from model import actions, joint_settlement, losses, outcomes, payment_scoring
 
@@ -20,14 +19,20 @@ def public_inputs(features, selected=None):
     )
     public = {
         "opened": opened,
-        "has_meld": tf.reduce_any(features["meld_valid"] > 0, axis=-1),
         "deposit_allowed": ~opened
         & (features["riichi_state"] != 2)
         & (features["seat_context"][:, :, 0] >= 0.01),
         "deposit_required": features["riichi_state"] == 1,
         "riichi_required": features["riichi_state"] > 0,
-        "ippatsu_allowed": (features["riichi_state"] == 0)
-        | (features["ippatsu_alive"] > 0),
+        "tenpai_required": (features["riichi_state"] > 0)
+        | (
+            tf.reduce_sum(tf.cast(features["meld_valid"] > 0, tf.int32), -1)
+            == 4
+        ),
+        "action_tile": tf.fill(tf.shape(features["dealer_relative_seat"]), 37),
+        "ending_draw_kind": tf.zeros_like(features["dealer_relative_seat"]),
+        "ending_tenpai": tf.fill(tf.shape(features["riichi_state"]), -1),
+        "ending_safe": tf.zeros_like(features["riichi_state"][:, 1:], tf.bool),
         "dealer": features["dealer_relative_seat"],
         "public_fu": tf.cast(features["public_fu"], tf.int32),
         "public_bonus": tf.cast(features["public_bonus"], tf.int32),
@@ -110,45 +115,47 @@ def public_inputs(features, selected=None):
             response[:, None]
             & (tf.gather(features["riichi_state"], selected[:, 0]) == 1)
         )
-    public["immediate_ankan"] = (selected[:, 1] >= 261) & (
-        tf.reduce_sum(melds[:, :, 3], axis=-1)
-        > tf.reduce_sum(
-            tf.cast(
-                tf.gather(
-                    (features["meld_type"][:, 0] == 4)
-                    & (features["meld_valid"][:, 0] > 0),
-                    selected[:, 0],
-                ),
-                tf.float32,
-            ),
-            axis=-1,
-        )
-    )
-    # Immediate endings precede any new deposit. Already accepted deposits
-    # are included in the input scores/pot, never charged a second time.
-    public["immediate_deposit_required"] = tf.zeros_like(
-        public["deposit_required"]
-    )
-    public["immediate_ippatsu"] = public["ippatsu_allowed"]
     # Only an unconditional own discard can force a draw at this boundary.
     # Response passes still await opponents' claims, including last-tile ron.
     discard = actions.discard_decisions(features, selected) & ~response
+    public["tenpai_required"] |= public["riichi_required"]
+    public["tenpai_required"] = tf.tensor_scatter_nd_update(
+        public["tenpai_required"],
+        own,
+        public["tenpai_required"][:, 0]
+        | (~response & (tf.reduce_sum(melds[:, :, :5], (1, 2)) == 4)),
+    )
+    public["action_tile"] = tf.where(
+        selected[:, 1] < 111,
+        selected[:, 1] % 37,
+        tf.where(
+            (selected[:, 1] >= 112) & (selected[:, 1] < 260),
+            (selected[:, 1] - 112) % 37,
+            tf.where(selected[:, 1] >= 261, selected[:, 1] - 261, 37),
+        ),
+    )
     tile = tf.where(selected[:, 1] < 111, selected[:, 1] % 37, 0)
     abort = (
         tf.gather_nd(
             features["discard_abort"],
             tf.stack(
-                [
-                    selected[:, 0],
-                    tf.cast(declaration, tf.int32),
-                    tile,
-                ],
+                [selected[:, 0], tf.cast(declaration, tf.int32), tile],
                 axis=1,
             ),
         )
         > 0
     )
-    public["immediate_draw_kind"] = tf.where(
+    public["ending_safe"] = tf.gather_nd(
+        tf.transpose(actions.guaranteed_safe_tiles(features), [0, 2, 1]),
+        tf.stack(
+            [
+                selected[:, 0],
+                tf.where(tile < 34, tile, 4 + 9 * (tile - 34)),
+            ],
+            axis=1,
+        ),
+    )
+    public["ending_draw_kind"] = tf.where(
         discard & abort,
         2,
         tf.where(
@@ -158,7 +165,7 @@ def public_inputs(features, selected=None):
             0,
         ),
     )
-    public["immediate_tenpai"] = tf.concat(
+    public["ending_tenpai"] = tf.concat(
         [
             tf.cast(
                 tf.gather_nd(
@@ -168,7 +175,7 @@ def public_inputs(features, selected=None):
                 == 1,
                 tf.int32,
             )[:, None],
-            tf.where(public["riichi_required"][:, 1:], 1, -1),
+            tf.where(public["tenpai_required"][:, 1:], 1, -1),
         ],
         axis=1,
     )
@@ -388,194 +395,6 @@ class HandContext(tf.keras.layers.Layer):
         )
 
 
-class ImmediateOutcome(tf.keras.layers.Layer):
-    def __init__(self):
-        super().__init__(dtype="float32")
-        self.state = tf.keras.layers.Dense(128, activation="gelu")
-        self.eligibility = tf.keras.layers.Dense(3)
-        self.score = tf.keras.layers.Dense(3 * len(payment_scoring.SCORES))
-        self.draw = tf.keras.layers.Dense(16)
-
-    def call(self, inputs):
-        hidden = self.state(inputs["state"])
-        probability = tf.minimum(
-            inputs["immediate_wait"] * tf.sigmoid(self.eligibility(hidden)),
-            1 - 1e-7,
-        )
-        raw_logits = tf.math.log(
-            tf.maximum(probability, 1e-30)
-        ) - tf.math.log1p(-probability)
-        logits = tf.where(
-            inputs["immediate_safe"]
-            | (inputs["immediate_wait"] <= 0)
-            | (inputs["immediate_ankan"][:, None] & inputs["has_meld"][:, 1:]),
-            -1e9,
-            raw_logits,
-        )
-        ron = tf.sigmoid(logits) * tf.cast(
-            inputs["immediate_allowed"][:, None], tf.float32
-        )
-        # Separate opponent events coexist. Their conditional Bernoulli
-        # product preserves all three marginals; no winner competes away
-        # another claim. Three claims settle as a native triple-ron abort.
-        masks = tf.constant(
-            [
-                [bool(mask & (1 << seat)) for seat in range(3)]
-                for mask in range(8)
-            ]
-        )
-        claims = tf.reduce_prod(
-            tf.where(masks[None], ron[:, None], 1 - ron[:, None]), -1
-        )
-        branches = tf.gather(claims, [0, 1, 2, 4], axis=1)
-        triple = claims[:, 7]
-        score_logits = tf.reshape(
-            self.score(hidden), (-1, 3, len(payment_scoring.SCORES))
-        )
-        environment = (
-            tf.gather(
-                tf.constant(
-                    payment_scoring.PAYMENT_ENVIRONMENTS[:, :3], tf.int32
-                ),
-                tf.cast(inputs["dealer"], tf.int32),
-            )
-            * 129
-            + inputs["public_fu"][:, 1:]
-        )
-        score_allowed = tf.gather(
-            tf.gather(
-                tf.constant(payment_scoring.LEGAL_SCORE_STATES), environment
-            ),
-            tf.cast(~inputs["opened"][:, 1:], tf.int32),
-            axis=2,
-            batch_dims=2,
-        )
-        minimum_han = tf.cast(inputs["riichi_required"][:, 1:], tf.int32) + (
-            tf.cast(
-                inputs["riichi_required"][:, 1:]
-                & inputs["immediate_ippatsu"][:, 1:],
-                tf.int32,
-            )
-        )
-        score_allowed &= payment_scoring.minimum_han_mask(
-            minimum_han, bonus=inputs["public_bonus"][:, 1:]
-        )
-        score_allowed &= (tf.constant(payment_scoring.SCORE_HAN) != 0) | inputs[
-            "yakuman_allowed"
-        ][:, 1:, None]
-        # Only kokushi can rob a concealed kan under the native rules.
-        score_allowed &= ~inputs["immediate_ankan"][:, None, None] | (
-            (tf.constant(payment_scoring.SCORE_HAN, tf.int32) == 0)[None, None]
-            & (tf.constant(payment_scoring.SCORE_FU, tf.int32)[None, None] == 1)
-        )
-        raw_score = score_logits
-        score_logits = tf.where(score_allowed, score_logits, -1e9)
-        amount_probability = payment_scoring.score_payments(
-            tf.nn.softmax(score_logits)[:, :, None], inputs["dealer"]
-        )[:, :, 0]
-        draw_allowed = tf.reduce_all(
-            (inputs["immediate_tenpai"][:, None] < 0)
-            | (
-                inputs["immediate_tenpai"][:, None]
-                == tf.constant(joint_settlement.DEPOSITS, tf.int32)[None]
-            ),
-            axis=-1,
-        )
-        raw_draw = self.draw(hidden)
-        draw_logits = tf.where(draw_allowed, raw_draw, -1e9)
-        draw_probability = tf.nn.softmax(draw_logits)
-        exhaustive = inputs["immediate_draw_kind"] == 1
-        abort = inputs["immediate_draw_kind"] == 2
-        return {
-            "immediate_constraint_loss": (
-                tf.cast(inputs["immediate_allowed"], tf.float32)
-                * (
-                    losses.constraint_divergence(
-                        raw_logits, logits, binary=True
-                    )
-                    + tf.reduce_mean(
-                        losses.constraint_divergence(raw_score, score_logits),
-                        -1,
-                    )
-                )
-                + tf.cast(exhaustive, tf.float32)
-                * losses.constraint_divergence(raw_draw, draw_logits)
-            ),
-            "immediate_logits": logits,
-            "conditional_ron_eligibility": tf.math.divide_no_nan(
-                tf.sigmoid(logits), inputs["immediate_wait"]
-            ),
-            "immediate_amount_probability": amount_probability,
-            "immediate_score_probability": tf.nn.softmax(score_logits),
-            "immediate_ron_probability": ron,
-            "immediate_claim_probability": claims,
-            "immediate_draw_logits": draw_logits,
-            # Continue, three actor-payer ron outcomes, sixteen exhaustive
-            # tenpai masks, ordinary abort, triple-ron abort. Ordinary draws
-            # occur only if the discard survives.
-            "immediate_probability": tf.concat(
-                [
-                    branches[:, :1]
-                    * tf.cast(~(exhaustive | abort), tf.float32)[:, None],
-                    branches[:, 1:],
-                    branches[:, :1]
-                    * tf.cast(exhaustive, tf.float32)[:, None]
-                    * draw_probability,
-                    (branches[:, 0] * tf.cast(abort, tf.float32))[:, None],
-                    triple[:, None],
-                    tf.gather(claims, [3, 5, 6], axis=1),
-                ],
-                axis=-1,
-            ),
-        }
-
-
-def immediate_loss_terms(labels, selected, structure, public, outputs):
-    tiles = tf.minimum(tf.cast(structure[:, -1], tf.int32), 36)
-    indices = tf.stack([selected[:, 0], tiles], axis=1)
-    legal = tf.gather_nd(tf.transpose(labels["ron_legal"], [0, 2, 1]), indices)
-    payments = tf.gather_nd(
-        tf.transpose(labels["ron_payments"], [0, 2, 1]), indices
-    )
-    amount = tf.reduce_sum(
-        outputs["immediate_amount_probability"]
-        * tf.cast(
-            tf.constant(outcomes.PAYMENT_VALUES, tf.int32)[None, None]
-            == (payments - 300 * public["honba"][:, None])[..., None],
-            tf.float32,
-        ),
-        axis=-1,
-    )
-    ready = tf.gather(labels["opponent_shanten"], selected[:, 0])
-    draw = public["immediate_tenpai"][:, 0] + tf.reduce_sum(
-        tf.cast(ready == 0, tf.int32) * tf.constant([2, 4, 8]), axis=-1
-    )
-    return {
-        "risk_terms": (
-            tf.nn.sigmoid_cross_entropy_with_logits(
-                labels=tf.cast(tf.maximum(legal, 0), tf.float32),
-                logits=outputs["immediate_logits"],
-            ),
-            public["immediate_allowed"][:, None] & (legal >= 0),
-        ),
-        "immediate_amount_terms": (
-            -tf.math.log(tf.maximum(amount, 1e-30)),
-            public["immediate_allowed"][:, None]
-            & (legal == 1)
-            & (payments > 0),
-        ),
-        "immediate_draw_terms": (
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=draw, logits=outputs["immediate_draw_logits"]
-            )[:, None],
-            (
-                (public["immediate_draw_kind"] == 1)
-                & tf.reduce_all(ready >= 0, axis=-1)
-            )[:, None],
-        ),
-    }
-
-
 class PaymentCritic(tf.keras.Model):
     """Sparse action states in; payment distributions and derived values out.
 
@@ -583,8 +402,9 @@ class PaymentCritic(tf.keras.Model):
     learned scalar value or state-payment predictor in this model.
     """
 
-    def __init__(self):
+    def __init__(self, belief_offset):
         super().__init__(autocast=False)
+        self.belief_offset = belief_offset
         self.state = tf.keras.layers.Dense(128, activation="gelu")
         self.cell_state = tf.keras.layers.Dense(16 * 64, activation="gelu")
         self.deposit = tf.keras.layers.Dense(
@@ -604,7 +424,6 @@ class PaymentCritic(tf.keras.Model):
         self.hand_score = tf.keras.layers.Dense(
             len(payment_scoring.SCORES), dtype="float32"
         )
-        self.immediate = ImmediateOutcome()
 
     def distributions(self, inputs):
         """Scored ron/tsumo events, exhaustive masks, abort and bank deposits.
@@ -687,14 +506,12 @@ class PaymentCritic(tf.keras.Model):
             "deposit_logits": tf.reshape(
                 self.deposit(hidden), (-1, len(joint_settlement.EVENTS), 16)
             ),
-            **self.immediate(inputs),
         }
 
         _, _, legal = joint_settlement.event_probabilities({**inputs, **result})
         possible = tf.reduce_any(legal, -1)
         result["critic_constraint_loss"] = (
-            result["immediate_constraint_loss"]
-            + tf.reduce_mean(
+            tf.reduce_mean(
                 losses.constraint_divergence(
                     raw_bonus, tf.where(allowed, raw_bonus, -1e9)
                 ),
@@ -733,45 +550,207 @@ class PaymentCritic(tf.keras.Model):
         result["payment_probability"] = joint_settlement.marginals(result)
         return result
 
-    def projected_mean_std(self, inputs):
-        """ST3 moments of the action's projected current-hand settlement."""
-        forecast = joint_settlement.decode(
-            {**inputs, **PaymentCritic.distributions(self, inputs)}
-        )
-        payoff = joint_settlement.continuation_payoffs(
-            scores=forecast["joint_scores"],
-            ranks=forecast["joint_ranks"],
-            support=forecast["joint_support"],
-            dealer=inputs["dealer"],
-            hand_number=inputs["hand_number"],
-            pot=inputs["pot"],
-        )
-        mean = joint_settlement.expectation(
-            forecast["joint_probability"], payoff
+    def projected_mean_downside(self, inputs, payoff=None, outputs=None):
+        """Mean ST3 and below-mean shortfall on net losing-hand outcomes."""
+        if payoff is None:
+            payoff = joint_settlement.position_payoffs(inputs)
+        if outputs is None:
+            outputs = PaymentCritic.distributions(self, inputs)
+        probability, _ = joint_settlement.probabilities({**inputs, **outputs})
+        mean = joint_settlement.expectation(probability, payoff)
+        losing = (
+            joint_settlement.settlement_states(inputs)["joint_scores"][..., 0]
+            < inputs["scores"][:, None, None, 0]
         )
         return tf.stack(
             [
                 mean,
                 tf.sqrt(
                     joint_settlement.expectation(
-                        forecast["joint_probability"],
-                        tf.square(payoff - mean[:, None, None]),
+                        probability,
+                        tf.where(
+                            losing,
+                            tf.square(
+                                tf.minimum(payoff - mean[:, None, None], 0.0)
+                            ),
+                            0.0,
+                        ),
                     )
                 ),
             ],
             axis=1,
         )
 
+    def candidate_chunk(self, inputs, payoff, weights, integer_fields):
+        """Bounded, detached forecasts for actor objectives."""
+        inputs = {
+            name: (
+                tf.bitcast(value, tf.int32) if name in integer_fields else value
+            )
+            for name, value in inputs.items()
+        }
+        with tf.keras.StatelessScope(
+            state_mapping=zip(self.trainable_variables, weights)
+        ):
+            outputs = PaymentCritic.distributions(self, inputs)
+        return tf.stop_gradient(
+            self.projected_mean_downside(inputs, payoff, outputs)
+        )
+
+    def direction_losses(self, inputs):
+        """Train monotone response to belief odds, holding other inputs fixed."""
+        state = tf.stop_gradient(inputs["state"])
+        shanten = tf.reshape(
+            state[:, self.belief_offset : self.belief_offset + 12], [-1, 3, 4]
+        )
+        waits = tf.reshape(
+            state[:, self.belief_offset + 12 : self.belief_offset + 420],
+            [-1, 3, 4, 34],
+        )
+        odds = tf.constant([0.5, 2.0])[None, None, :, None, None]
+        perturbed_shanten = shanten[:, None, None] * tf.where(
+            tf.eye(3, dtype=tf.bool)[None, :, None, :, None]
+            & (tf.range(4)[None, None, None, None] == 0),
+            odds,
+            1.0,
+        )
+        perturbed_shanten /= tf.reduce_sum(perturbed_shanten, -1, keepdims=True)
+        tile = tf.where(
+            inputs["action_tile"] < 34,
+            inputs["action_tile"],
+            4 + 9 * (inputs["action_tile"] - 34),
+        )
+        perturbed_waits = tf.where(
+            tf.eye(3, dtype=tf.bool)[None, :, None, :, None, None]
+            & (inputs["action_tile"] < 37)[:, None, None, None, None, None]
+            & (tf.range(4)[None, None, None, None, :, None] == 0)
+            & (
+                tf.range(34)[None, None, None, None, None]
+                == tile[:, None, None, None, None, None]
+            ),
+            waits[:, None, None]
+            * odds[..., None]
+            / (
+                1
+                - waits[:, None, None]
+                + waits[:, None, None] * odds[..., None]
+            ),
+            waits[:, None, None],
+        )
+        wins = tf.constant(
+            [
+                [
+                    bool(mask & (1 << seat))
+                    and (kind == 1 or (kind == 0 and mask.bit_count() < 3))
+                    for kind, _, mask, _ in joint_settlement.EVENTS
+                ]
+                for seat in range(1, 4)
+            ],
+            tf.float32,
+        )
+        ron = wins * tf.constant(
+            [
+                kind == 0 and payer == 0
+                for kind, payer, _, _ in joint_settlement.EVENTS
+            ],
+            tf.float32,
+        )
+        ready = tf.constant(
+            [
+                [
+                    kind == 2 and bool(mask & (1 << seat))
+                    for kind, _, _, mask in joint_settlement.EVENTS
+                ]
+                for seat in range(1, 4)
+            ],
+            tf.float32,
+        )
+        losses_per_row = []
+        for offset, width, perturbed in (
+            (self.belief_offset, 12, perturbed_shanten),
+            (self.belief_offset + 12, 408, perturbed_waits),
+        ):
+            probe = tf.concat(
+                [
+                    tf.repeat(state[:, :offset], 6, axis=0),
+                    tf.reshape(perturbed, [-1, width]),
+                    tf.repeat(state[:, offset + width :], 6, axis=0),
+                ],
+                axis=1,
+            )
+            logits = tf.reshape(
+                self.event(self.state(probe)),
+                [-1, 3, 2, len(joint_settlement.EVENTS)],
+            )
+            probability = tf.nn.softmax(
+                tf.where(
+                    tf.reduce_any(joint_settlement.event_legal(inputs), -1)[
+                        :, None, None
+                    ],
+                    logits,
+                    -1e9,
+                )
+            )
+            if width == 12:
+                draw = tf.reduce_sum(
+                    probability
+                    * tf.constant(
+                        [
+                            kind == 2
+                            for kind, _, _, _ in joint_settlement.EVENTS
+                        ],
+                        tf.float32,
+                    ),
+                    -1,
+                )
+                predictions = tf.stack(
+                    [
+                        tf.einsum("nose,oe->nos", probability, wins),
+                        tf.math.divide_no_nan(
+                            tf.einsum("nose,oe->nos", probability, ready), draw
+                        ),
+                    ],
+                    axis=-1,
+                )
+            else:
+                predictions = tf.einsum("nose,oe->nos", probability, ron)[
+                    ..., None
+                ]
+            target = tf.where(
+                (predictions[:, :, 0] > predictions[:, :, 1])[:, :, None],
+                tf.reduce_mean(predictions, axis=2, keepdims=True),
+                predictions,
+            )
+            predictions = tf.clip_by_value(predictions, 1e-7, 1 - 1e-7)
+            target = tf.clip_by_value(target, 1e-7, 1 - 1e-7)
+            losses_per_row.append(
+                tf.reduce_mean(
+                    tf.maximum(
+                        0.0,
+                        losses.constraint_divergence(
+                            tf.math.log(predictions)
+                            - tf.math.log1p(-predictions),
+                            tf.math.log(target) - tf.math.log1p(-target),
+                            binary=True,
+                        ),
+                    ),
+                    axis=(1, 2),
+                )
+            )
+        return tf.stack(losses_per_row, axis=1)
+
     def chunk_statistics(self, inputs, labels, weights=None):
         # Inline the differentiable body into the chunk compilation. Nested
         # compiled gradients can specialize on forward tensor values.
         if weights is None:
             outputs = PaymentCritic.distributions(self, inputs)
+            direction = self.direction_losses(inputs)
         else:
             with tf.keras.StatelessScope(
                 state_mapping=zip(self.trainable_variables, weights)
             ):
                 outputs = PaymentCritic.distributions(self, inputs)
+                direction = self.direction_losses(inputs)
 
         def mean(values, mask):
             return losses.masked_totals(
@@ -810,27 +789,32 @@ class PaymentCritic(tf.keras.Model):
             metrics["score_nll"] = tf.zeros(2)
             metrics["bonus_han_nll"] = tf.zeros(2)
         metrics["critic_constraint_loss"] = mean(
-            outputs["critic_constraint_loss"],
+            outputs["critic_constraint_loss"] + tf.reduce_sum(direction, -1),
             tf.ones_like(outputs["critic_constraint_loss"]),
+        )
+        metrics["tenpai_direction_loss"] = mean(
+            direction[:, 0], tf.ones_like(direction[:, 0])
+        )
+        metrics["wait_direction_loss"] = mean(
+            direction[:, 1], tf.ones_like(direction[:, 1])
         )
         return tf.stack([metrics[name] for name in CRITIC_METRICS])
 
     def chunk_gradients(self, inputs, labels, weights, upstream, gradients):
         """Keep recomputation, differentiation and accumulation together."""
         with tf.GradientTape() as tape:
-            tape.watch([inputs["state"], inputs["immediate_wait"], *weights])
+            tape.watch([inputs["state"], *weights])
             statistics = PaymentCritic.chunk_statistics(
                 self, inputs, labels, weights
             )
         values = tape.gradient(
             statistics,
-            [inputs["state"], inputs["immediate_wait"], *weights],
+            [inputs["state"], *weights],
             output_gradients=upstream,
         )
         return (
             values[0],
-            values[1],
-            [total + value for total, value in zip(gradients, values[2:])],
+            [total + value for total, value in zip(gradients, values[1:])],
         )
 
     def supervised_statistics(self, inputs, labels, valid=None):
@@ -843,12 +827,29 @@ class PaymentCritic(tf.keras.Model):
             ),
         }
 
+        rows = tf.shape(inputs["state"])[0]
+        indices = tf.range(
+            (rows + STATISTICS_CHUNK - 1) // STATISTICS_CHUNK * STATISTICS_CHUNK
+        )
+        inputs = {
+            name: tf.gather(value, tf.minimum(indices, rows - 1))
+            for name, value in inputs.items()
+        }
+        labels = {
+            **{
+                name: tf.gather(value, tf.minimum(indices, rows - 1))
+                for name, value in labels.items()
+            },
+            "valid": tf.gather(labels["valid"], tf.minimum(indices, rows - 1))
+            * tf.cast(indices < rows, tf.float32),
+        }
+
         # Retain only loss sufficient statistics. Recompute one chunk at a
         # time in the backward pass instead of retaining every settlement.
         # Explicit weight tensors preserve the local replica's dependency;
         # implicit custom-gradient variable capture can select replica zero.
         @tf.custom_gradient
-        def summarize(state, wait, *weights):
+        def summarize(state, *weights):
             statistics = tf.zeros((len(CRITIC_METRICS), 2))
             for begin in tf.range(0, tf.shape(state)[0], STATISTICS_CHUNK):
                 statistics += self.chunk_statistics(
@@ -858,9 +859,6 @@ class PaymentCritic(tf.keras.Model):
                             for name, value in inputs.items()
                         },
                         "state": state[begin : begin + STATISTICS_CHUNK],
-                        "immediate_wait": wait[
-                            begin : begin + STATISTICS_CHUNK
-                        ],
                     },
                     {
                         name: value[begin : begin + STATISTICS_CHUNK]
@@ -874,9 +872,6 @@ class PaymentCritic(tf.keras.Model):
                 state_gradients = tf.TensorArray(
                     tf.float32, size=0, dynamic_size=True
                 )
-                wait_gradients = tf.TensorArray(
-                    tf.float32, size=0, dynamic_size=True
-                )
                 gradients = [tf.zeros_like(value) for value in weights]
                 for begin in tf.range(0, tf.shape(state)[0], STATISTICS_CHUNK):
                     values = self.chunk_gradients(
@@ -886,9 +881,6 @@ class PaymentCritic(tf.keras.Model):
                                 for name, value in inputs.items()
                             },
                             "state": state[begin : begin + STATISTICS_CHUNK],
-                            "immediate_wait": wait[
-                                begin : begin + STATISTICS_CHUNK
-                            ],
                         },
                         labels={
                             name: value[begin : begin + STATISTICS_CHUNK]
@@ -901,13 +893,9 @@ class PaymentCritic(tf.keras.Model):
                     state_gradients = state_gradients.write(
                         begin // STATISTICS_CHUNK, values[0]
                     )
-                    wait_gradients = wait_gradients.write(
-                        begin // STATISTICS_CHUNK, values[1]
-                    )
-                    gradients = values[2]
+                    gradients = values[1]
                 return (
                     state_gradients.concat(),
-                    wait_gradients.concat(),
                     *gradients,
                 )
 
@@ -915,8 +903,7 @@ class PaymentCritic(tf.keras.Model):
 
         return summarize(
             inputs["state"],
-            inputs["immediate_wait"],
-            *[tf.convert_to_tensor(v) for v in self.trainable_variables],
+            *[value.value.read_value() for value in self.trainable_variables],
         )
 
     def call(self, inputs):
@@ -965,16 +952,15 @@ CRITIC_METRICS = (
     "settlement_multi_ron_fraction",
     "settlement_supported_fraction",
     "critic_constraint_loss",
+    "tenpai_direction_loss",
+    "wait_direction_loss",
 )
 
 
 def settlement_metrics(statistics, mean=losses.mean_valid):
     return {
         name: mean(
-            tf.math.divide_no_nan(
-                statistics[index, 0],
-                statistics[index, 1],
-            ),
+            tf.math.divide_no_nan(statistics[index, 0], statistics[index, 1]),
             statistics[index, 1] > 0,
             statistics[index, 1],
         )
@@ -982,23 +968,14 @@ def settlement_metrics(statistics, mean=losses.mean_valid):
     }
 
 
+def settlement_objective(metrics):
+    """Observed settlement likelihood and structural constraints."""
+    return metrics["payment_nll"] + metrics["critic_constraint_loss"]
+
+
 def objective_metrics(outputs, mean=losses.mean_valid):
     metrics = settlement_metrics(outputs["critic_statistics"], mean)
-    for name, terms in (
-        ("risk_loss", "risk_terms"),
-        ("immediate_amount_nll", "immediate_amount_terms"),
-        ("immediate_draw_nll", "immediate_draw_terms"),
-    ):
-        metrics[name] = losses.candidate_mean(
-            *outputs[terms], outputs["immediate_rows"], mean=mean
-        )
-    loss = (
-        metrics["payment_nll"]
-        + metrics["critic_constraint_loss"]
-        + metrics["risk_loss"]
-        + metrics["immediate_amount_nll"]
-        + metrics["immediate_draw_nll"]
-    )
+    loss = settlement_objective(metrics)
     return loss, metrics
 
 

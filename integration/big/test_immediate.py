@@ -1,12 +1,10 @@
-"""Candidate transitions and immediate endings share one serving contract."""
+"""Candidate transitions and terminal boundaries constrain settlement."""
 
 import json
 import pathlib
 
 import numpy
-import riichienv
 import tensorflow as tf
-
 from integration import feature_reference
 from log_dataset import (
     _native_collection,
@@ -16,6 +14,8 @@ from log_dataset import (
     training_targets,
 )
 from model import actions, critic
+
+import riichienv
 
 
 def test_attempted_calls_preserve_possible_preemption_outcomes():
@@ -49,21 +49,11 @@ def test_attempted_calls_preserve_possible_preemption_outcomes():
     numpy.testing.assert_array_equal(
         public["deposit_required"][:, 0], [0, 0, 0, 1]
     )
-    # Robbing a kan precedes its successful resolution and preserves ippatsu.
-    numpy.testing.assert_array_equal(
-        public["immediate_ippatsu"][:, 1], [1, 1, 1, 1]
-    )
-    numpy.testing.assert_array_equal(
-        actions.immediate_decisions(packed, selected), [0, 0, 1, 1]
-    )
-    model = critic.PaymentCritic()
+    model = critic.PaymentCritic(belief_offset=0)
     result = model.distributions(
         {
             **public,
             "state": tf.zeros((4, 64)),
-            "immediate_allowed": actions.immediate_decisions(packed, selected),
-            "immediate_safe": tf.zeros((4, 3), tf.bool),
-            "immediate_wait": tf.zeros((4, 3)),
         }
     )
     own_wins = [i for i, cell in enumerate(scoring.CELLS[:24]) if cell[2] == 0]
@@ -88,10 +78,8 @@ def test_response_pass_and_calls_wait_for_priority_on_last_discard():
     # Pass, chii, pon and open kan all await simultaneous opponent claims.
     selected = tf.constant([[0, 111], [0, 112], [0, 223], [0, 261]])
     public = critic.public_inputs(packed, selected)
-    numpy.testing.assert_array_equal(public["immediate_draw_kind"], [0] * 4)
-    assert not numpy.any(actions.immediate_decisions(packed, selected))
+    numpy.testing.assert_array_equal(public["ending_draw_kind"], [0] * 4)
     assert not numpy.any(public["deposit_required"])
-    assert not numpy.any(public["immediate_deposit_required"])
     numpy.testing.assert_array_equal(
         public["riichi_required"], [[False, False, True, False]] * 4
     )
@@ -144,72 +132,6 @@ def test_post_call_ron_labels_match_native_post_call_discard_state():
             )
             checked += 1
     assert checked > 0
-
-
-def test_immediate_draws_respect_known_readiness():
-    model = critic.ImmediateOutcome()
-    public = {
-        "state": tf.zeros((3, 64)),
-        "dealer": tf.constant([0, 0, 0]),
-        "opened": tf.zeros((3, 4), tf.bool),
-        "has_meld": tf.zeros((3, 4), tf.bool),
-        "riichi_required": tf.zeros((3, 4), tf.bool),
-        "immediate_ippatsu": tf.zeros((3, 4), tf.bool),
-        "immediate_ankan": tf.zeros(3, tf.bool),
-        "public_fu": tf.zeros((3, 4), tf.int32),
-        "public_bonus": tf.zeros((3, 4), tf.int32),
-        "yakuman_allowed": tf.ones((3, 4), tf.bool),
-        "immediate_safe": tf.ones((3, 3), tf.bool),
-        "immediate_wait": tf.ones((3, 3)),
-        "immediate_allowed": tf.constant([True] * 3),
-        "immediate_draw_kind": tf.constant([0, 1, 2]),
-        "immediate_tenpai": tf.constant([[1, 1, -1, -1]] * 3),
-    }
-    result = model(public)
-    # Three separate ron events preserve their marginals, including pairs.
-    claims = model(
-        {
-            **public,
-            "immediate_safe": tf.zeros((3, 3), tf.bool),
-            "immediate_draw_kind": tf.zeros(3, tf.int32),
-        }
-    )
-    masks = numpy.array(
-        [[bool(mask & (1 << seat)) for seat in range(3)] for mask in range(8)],
-        numpy.float32,
-    )
-    numpy.testing.assert_allclose(
-        claims["immediate_claim_probability"] @ masks,
-        claims["immediate_ron_probability"],
-        atol=1e-6,
-    )
-    assert numpy.all(claims["immediate_probability"][:, 22:] > 0)
-    kan = model(
-        {
-            **public,
-            "immediate_safe": tf.zeros((3, 3), tf.bool),
-            "immediate_ankan": tf.ones(3, tf.bool),
-            "has_meld": tf.constant([[False, True, False, True]] * 3),
-        }
-    )
-    numpy.testing.assert_array_equal(
-        tf.gather(kan["immediate_ron_probability"], [0, 2], axis=1), 0
-    )
-    assert numpy.all(kan["immediate_ron_probability"][:, 1] > 0)
-    probability = result["immediate_probability"].numpy()
-    numpy.testing.assert_allclose(probability.sum(-1), 1, atol=1e-6)
-    assert probability[0, 0] == 1
-    assert probability[2, 20] == 1
-    assert not probability[1, :4].any()
-    masks = numpy.arange(16)
-    assert not probability[1, 4:20][(masks & 3) != 3].any()
-    with tf.GradientTape() as tape:
-        result = model(public)
-        loss = -tf.math.log(result["immediate_probability"][1, 19])
-    assert (
-        tf.linalg.global_norm(tape.gradient(loss, model.trainable_variables))
-        > 0
-    )
 
 
 def test_irreversible_melds_remove_impossible_yaku_and_attack_routes():
@@ -349,20 +271,6 @@ def test_flush_threat_constraints_and_exclusive_yaku_have_gradients():
     assert not scores[0, 2, :, payment_scoring.SCORE_HAN < 4].any()
     assert scores[0, 2, :, payment_scoring.SCORES.index((8, 0))].min() > 0
 
-    immediate_scores = critic.ImmediateOutcome()(
-        {
-            **critic.public_inputs(public),
-            "state": tf.zeros((1, 64)),
-            "immediate_wait": tf.ones((1, 3)),
-            "immediate_safe": tf.zeros((1, 3), tf.bool),
-            "immediate_allowed": tf.ones(1, tf.bool),
-            "immediate_ankan": tf.zeros(1, tf.bool),
-            "immediate_ippatsu": tf.zeros((1, 4), tf.bool),
-            "immediate_draw_kind": tf.zeros(1, tf.int32),
-            "immediate_tenpai": tf.fill((1, 4), -1),
-        }
-    )["immediate_score_probability"].numpy()
-    assert not immediate_scores[0, 1, payment_scoring.SCORE_HAN < 4].any()
     continuation = tf.nn.softmax(
         payment_scoring.masked_score_logits(
             logits=tf.zeros((1, 24, 1, len(payment_scoring.SCORES))),

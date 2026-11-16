@@ -1,7 +1,6 @@
 """Combined head supervision for model gradient and export checks."""
 
 import tensorflow as tf
-
 from model import actor as actor_layers
 from model import beliefs, critic, losses
 
@@ -24,15 +23,6 @@ def objective_terms(inputs, outputs, mean=losses.mean_valid):
     loss, metrics = critic.objective_metrics(outputs, mean=mean)
     metrics["critic_loss"] = loss
     loss *= 0.1
-    metrics["value_loss"] = mean(
-        tf.square(outputs["state_value"] - inputs[2]["returns"]),
-        tf.ones_like(inputs[2]["returns"]),
-    )
-    metrics["value_bias"] = mean(
-        outputs["state_value"] - inputs[2]["returns"],
-        tf.ones_like(inputs[2]["returns"]),
-    )
-    loss += metrics["value_loss"]
     metrics.update(actor_layers.offline_loss_terms(inputs, outputs, mean=mean))
     belief_terms, belief_metrics = beliefs.belief_loss_terms(
         inputs[0], inputs[1], outputs, mean=mean

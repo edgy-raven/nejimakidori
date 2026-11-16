@@ -3,8 +3,6 @@
 import types
 
 import numpy
-import riichienv
-
 from log_dataset import (
     _native_collection,
     features,
@@ -13,6 +11,8 @@ from log_dataset import (
     shanten,
 )
 from model import outcomes, payment_scoring
+
+import riichienv
 
 
 def ron_labels(state, actor, phase):
@@ -169,10 +169,7 @@ def ron_labels(state, actor, phase):
                         else score.ron_agari + 300 * state.start["honba"]
                     )
         payments[:, (payments > 0).sum(axis=0) == 3] = -1
-    return {
-        "ron_payments": payments,
-        "ron_legal": legal_ron,
-    }
+    return {"ron_payments": payments, "ron_legal": legal_ron}
 
 
 def round_targets(state, events):
@@ -340,19 +337,14 @@ def candidate_yaku_affinity(packed):
     return result
 
 
-def attach(observation, state, index, action_index):
-    actor = observation.actor
-    order = [(actor + offset) % 4 for offset in range(4)]
-    observation.candidate_yaku_affinity = candidate_yaku_affinity(
-        observation.features
-    )
-    observation.terminal_payment = outcomes.relative_payments(
-        state.targets["payments"], actor, state.accepted
-    )
+def attach_beliefs(observation, state):
+    """Decision-time hidden hands are labels, never public model features."""
     observation.opponent_shanten = numpy.full(3, -1, numpy.int8)
     observation.opponent_ukeire = numpy.full((3, 34), -1, numpy.int8)
     observation.opponent_hand_counts = numpy.zeros((3, 37), numpy.int8)
-    for relative, seat in enumerate(order[1:]):
+    for relative, seat in enumerate(
+        (observation.actor + offset) % 4 for offset in range(1, 4)
+    ):
         hand = state.legal_observation(seat).hand
         for tile in hand + [
             tile for meld in state.melds[seat] for tile in meld.tiles
@@ -367,6 +359,18 @@ def attach(observation, state, index, action_index):
             observation.opponent_shanten[relative] = min(3, distance)
             observation.opponent_ukeire[relative] = 0
             observation.opponent_ukeire[relative, improving] = 1
+
+
+def attach(observation, state, index, action_index):
+    actor = observation.actor
+    order = [(actor + offset) % 4 for offset in range(4)]
+    observation.candidate_yaku_affinity = candidate_yaku_affinity(
+        observation.features
+    )
+    observation.terminal_payment = outcomes.relative_payments(
+        state.targets["payments"], actor, state.accepted
+    )
+    attach_beliefs(observation, state)
     observation.round_completion_yaku = state.targets["completion"][
         index, order
     ]

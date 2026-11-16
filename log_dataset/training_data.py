@@ -13,7 +13,6 @@ import time
 
 import numpy
 import tensorflow as tf
-
 from log_dataset import (
     _native_collection,
     afk,
@@ -85,16 +84,21 @@ def serialize(observation, target):
 
 
 def parse_batch(raw):
-    features, labels, _ = records.parse_batch(raw)
     parsed = tf.io.parse_example(
         raw,
         {
+            **{
+                name: tf.io.FixedLenFeature([], tf.string)
+                for name in records.FIELDS
+            },
+            "meta/sample_weight": tf.io.FixedLenFeature([], tf.float32),
             "critic/score": tf.io.FixedLenFeature([], tf.string),
             "critic/bonus": tf.io.FixedLenFeature([], tf.string),
             "critic/settlement": tf.io.FixedLenFeature([], tf.string),
             "meta/focused": tf.io.FixedLenFeature([], tf.int64),
         },
     )
+    features, labels, _ = records.decode_batch(parsed)
     auxiliary = {
         name: tf.cast(
             tf.reshape(
@@ -108,8 +112,8 @@ def parse_batch(raw):
         )
         for name, shape in AUXILIARY.items()
     }
-    auxiliary["returns"] = (
-        joint_settlement.observed_payoffs(auxiliary.pop("settlement")) / 100.0
+    auxiliary["projected_st3"] = joint_settlement.observed_payoffs(
+        auxiliary.pop("settlement")
     )
     cells = numpy.asarray(scoring.CELLS)
     payments = tf.gather(
@@ -121,7 +125,7 @@ def parse_batch(raw):
     auxiliary.update(
         {
             **critic.public_inputs(features),
-            **joint_settlement.public_inputs(features),
+            **public,
             "focused": tf.cast(
                 (parsed["meta/focused"] > 0)
                 | (features["decision_phase"] == 1)
@@ -455,11 +459,7 @@ def dataset(
             )
             return tf.repeat(
                 raw,
-                tf.where(
-                    selected,
-                    priorities,
-                    0,
-                ),
+                tf.where(selected, priorities, 0),
             )
         return tf.nest.map_structure(
             lambda value: tf.boolean_mask(value, selected), raw

@@ -195,5 +195,10 @@ fields! {
     public_bonus: INT8 [4],
     candidate_public_fu: INT16 [96],
     candidate_public_bonus: INT8 [96],
+    policy_prior_no_threat: INT8 [],
+    riichi_dama_points: FLOAT32 [37],
+    riichi_extra_han: INT8 [37],
+    call_open_points: FLOAT32 [4, 37],
+    call_riichi_points: FLOAT32 [4, 37],
 }
 pub const ROW_BYTES: usize = FIELDS[FIELDS.len() - 1].offset + FIELDS[FIELDS.len() - 1].size;

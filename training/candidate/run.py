@@ -1,4 +1,4 @@
-"""Recorded AWR, then five mixed replay AWR passes from released weights."""
+"""Hybrid expert/distill policy imitation, then five magnetic self-play mixed passes."""
 
 import argparse
 import functools
@@ -11,321 +11,13 @@ import time
 
 import numpy
 import tensorflow as tf
-
-from log_dataset import focus_sampling, scoring, training_data
-from model import actions, export, joint_settlement
+from model import export, joint_settlement
 from training import self_play
-from training import trainer as training
-from training.candidate import collection, monitor, state
-
-
-def allocation(total, record_fraction, target_fraction, *, start=0):
-    """Allocate [start, total) using cumulative rounding at both boundaries."""
-    if start:
-        return allocation(total, record_fraction, target_fraction) - allocation(
-            start, record_fraction, target_fraction
-        )
-    records = round(total * record_fraction)
-    generated = total - records
-    record_targets = round(records * target_fraction)
-    generated_targets = round(generated * target_fraction)
-    return numpy.array(
-        [
-            records - record_targets,
-            record_targets,
-            generated - generated_targets,
-            generated_targets,
-        ],
-        numpy.int64,
-    )
-
-
-class Replay:
-    """Bounded disk-backed reservoir (records) or recent ring (self play)."""
-
-    def __init__(self, path, capacity, generator, reservoir):
-        self.path = pathlib.Path(path)
-        self.path.mkdir(parents=True, exist_ok=False)
-        self.capacity = capacity
-        self.generator = generator
-        self.reservoir = reservoir
-        self.seen = 0
-        self.arrays = None
-        self.structure = None
-
-    def add(self, batch, rows=None):
-        """Append all rows, or the supplied ordered integer row indices."""
-        values = tf.nest.flatten(batch)
-        count = len(values[0]) if rows is None else len(rows)
-        if not count:
-            return
-        if self.arrays is None:
-            self.structure = tf.nest.map_structure(lambda value: None, batch)
-            self.arrays = [
-                numpy.lib.format.open_memmap(
-                    self.path / f"{index}.npy",
-                    mode="w+",
-                    dtype=value.dtype,
-                    shape=(self.capacity, *value.shape[1:]),
-                )
-                for index, value in enumerate(values)
-            ]
-        positions = numpy.arange(self.seen, self.seen + count)
-        slots = (
-            numpy.where(
-                positions < self.capacity,
-                positions,
-                self.generator.integers(positions + 1),
-            )
-            if self.reservoir
-            else positions % self.capacity
-        )
-        selected = numpy.flatnonzero(slots < self.capacity)
-        # Repeated slots must keep the last replacement in stream order.
-        _, last = numpy.unique(slots[selected][::-1], return_index=True)
-        selected = selected[::-1][last]
-        source = (
-            selected
-            if self.reservoir
-            else self.generator.permutation(count)[selected]
-        )
-        if rows is not None:
-            source = rows[source]
-        if self.reservoir:
-            for destination, value in zip(self.arrays, values, strict=True):
-                destination[slots[selected]] = value[source]
-        else:
-            destinations = slots[selected]
-            boundaries = numpy.r_[
-                0,
-                numpy.flatnonzero(numpy.diff(destinations) != 1) + 1,
-                len(destinations),
-            ]
-            for destination, value in zip(self.arrays, values, strict=True):
-                for start, stop in zip(boundaries[:-1], boundaries[1:]):
-                    for begin in range(start, stop, 512):
-                        end = min(begin + 512, stop)
-                        destination[
-                            destinations[begin] : destinations[end - 1] + 1
-                        ] = value[source[begin:end]]
-        self.seen += count
-
-    def sample(self, count):
-        if not self.seen:
-            raise ValueError(f"Empty replay stratum: {self.path}")
-        selected = self.generator.integers(
-            min(self.seen, self.capacity), size=count
-        )
-        return tf.nest.pack_sequence_as(
-            self.structure, [value[selected] for value in self.arrays]
-        )
-
-    def flush(self):
-        if self.arrays is not None:
-            for value in self.arrays:
-                value.flush()
-            state.save(
-                self.path / "manifest.json",
-                {
-                    "seen": self.seen,
-                    "capacity": self.capacity,
-                    "reservoir": self.reservoir,
-                    "fields": tf.nest.pack_sequence_as(
-                        self.structure,
-                        [
-                            {
-                                "file": f"{index}.npy",
-                                "shape": list(value.shape),
-                                "dtype": value.dtype.name,
-                            }
-                            for index, value in enumerate(self.arrays)
-                        ],
-                    ),
-                },
-            )
-
-
-@tf.function(reduce_retracing=True)
-def record_batch(raw):
-    features, labels, auxiliary = training_data.parse_batch(raw)
-    selected = tf.stack(
-        [
-            tf.cast(labels[name], tf.int32)
-            for name in actions.TRAIN_POLICY_HEADS
-        ],
-        axis=1,
-    )
-    tf.debugging.assert_equal(
-        tf.reduce_sum(tf.cast(selected >= 0, tf.int32), axis=1), 1
-    )
-    heads = tf.argmax(
-        tf.cast(selected >= 0, tf.int32), axis=1, output_type=tf.int32
-    )
-    masks = actions.legal_choices(features)
-    legal = tf.gather(
-        tf.stack(
-            [
-                tf.pad(masks[name], [[0, 0], [0, 150 - masks[name].shape[-1]]])
-                for name in actions.TRAIN_POLICY_HEADS
-            ],
-            axis=1,
-        ),
-        heads,
-        batch_dims=1,
-    )
-    chosen = tf.cast(tf.gather(selected, heads, batch_dims=1), tf.int32)
-    tf.debugging.assert_equal(tf.gather(legal, chosen, batch_dims=1), True)
-    return {
-        "features": features,
-        "head": heads,
-        "chosen": chosen,
-        "legal": legal,
-        "returns": auxiliary["returns"],
-        "payment_points": tf.gather(
-            tf.reshape(labels["terminal_payment"], [-1, 64]),
-            numpy.ravel_multi_index(numpy.asarray(scoring.CELLS).T, (4, 4, 4)),
-            axis=1,
-        ),
-    }
-
-
-def record_stream(args, repeat=False):
-    # Finite natural traversal: preserve the tail, do not repeat or oversample.
-    return (
-        training_data.dataset(
-            root=args.data,
-            sampling=focus_sampling.Sampling.NATURAL,
-            partition="train",
-            batch_size=args.batch_size,
-            repeat=repeat,
-            seed=args.seed,
-            drop_remainder=False,
-        )
-        .map(record_batch, num_parallel_calls=2)
-        .prefetch(2)
-    )
-
-
-def prepare(batch, packing):
-    """One compact replay contract, with returns in ST3 / 100."""
-    return {
-        **{
-            name: numpy.asarray(batch[name], dtype=dtype)
-            for name, dtype in (
-                ("head", "int32"),
-                ("chosen", "int32"),
-                ("legal", "bool"),
-                ("returns", "float32"),
-                ("payment_points", "int32"),
-            )
-        },
-        "features": packing.pack_numpy(batch["features"]),
-    }
-
-
-def full_batch(batch, batch_size):
-    """Keep full batches intact; repeat the final valid row for a short tail."""
-    count = len(batch["chosen"])
-    if count == batch_size:
-        return batch
-    indices = numpy.pad(
-        numpy.arange(count), (0, batch_size - count), mode="edge"
-    )
-    return tf.nest.map_structure(lambda value: value[indices], batch)
-
-
-def add_replay(pools, batch, targets):
-    pools[0].add(batch)
-    pools[1].add(batch, numpy.flatnonzero(targets > 0))
-
-
-def classify_records(batch, evaluate, generator):
-    count = len(batch["chosen"])
-    priorities = numpy.zeros(count, numpy.float32)
-    selected = numpy.flatnonzero(
-        (batch["head"] == 0) & (generator.random(count) < 1 / 64)
-    )
-    if len(selected):
-        priorities[selected] = evaluate(
-            {name: value[selected] for name, value in batch["features"].items()}
-        )["priority"]
-    return self_play.target_categories(
-        batch["features"], batch["head"], priorities
-    )
-
-
-class RecordStream:
-    """Consume ordinary records once in stream order; refresh target replay."""
-
-    def __init__(self, args, trainer, targets, evaluate, generator):
-        self.stream = iter(record_stream(args, repeat=True).as_numpy_iterator())
-        self.trainer = trainer
-        self.targets = targets
-        self.evaluate = evaluate
-        self.generator = generator
-        self.pending = None
-        self.offset = 0
-
-    def sample(self, count):
-        parts = []
-        while count:
-            if self.pending is None:
-                batch = next(self.stream)
-                targets = classify_records(batch, self.evaluate, self.generator)
-                self.pending = prepare(batch, self.trainer.feature_packing)
-                self.targets.add(self.pending, numpy.flatnonzero(targets > 0))
-                self.offset = 0
-            size = min(count, len(self.pending["chosen"]) - self.offset)
-            parts.append(
-                tf.nest.map_structure(
-                    lambda value: value[self.offset : self.offset + size],
-                    self.pending,
-                )
-            )
-            self.offset += size
-            count -= size
-            if self.offset == len(self.pending["chosen"]):
-                self.pending = None
-        return (
-            parts[0]
-            if len(parts) == 1
-            else tf.nest.map_structure(
-                lambda *values: numpy.concatenate(values), *parts
-            )
-        )
-
-
-def mixed_batch(pools, counts, generator):
-    parts = [
-        pool.sample(int(count)) for pool, count in zip(pools, counts) if count
-    ]
-    destinations = numpy.argsort(generator.permutation(sum(counts)))
-
-    def combine(*values):
-        result = numpy.empty(
-            (len(destinations), *values[0].shape[1:]), dtype=values[0].dtype
-        )
-        offset = 0
-        for value in values:
-            result[destinations[offset : offset + len(value)]] = value
-            offset += len(value)
-        return result
-
-    return tf.nest.map_structure(combine, *parts)
+from training import trainer as trainers
+from training.candidate import collection, monitor, q_fit, replay
 
 
 def settings(args):
-    fractions = [float(value) for value in args.record_fractions.split(",")]
-    if (
-        len(fractions) != 5
-        or any(not 0 <= value <= 1 for value in fractions)
-        or any(a < b for a, b in zip(fractions, fractions[1:]))
-    ):
-        raise ValueError("Five nonincreasing record shares in [0, 1] required")
-    if not 0 < args.target_fraction < 1:
-        raise ValueError(
-            "Target sampling fraction must be between zero and one"
-        )
     for name in (
         "batch_size",
         "replay_positions",
@@ -333,27 +25,9 @@ def settings(args):
         "fresh_positions",
         "games",
         "collection_workers",
-        "root_copies",
     ):
         if getattr(args, name) < 1:
             raise ValueError(f"{name} must be positive")
-    for name in (
-        "awr_learning_rate",
-        "awr_final_learning_rate",
-        "awr_temperature",
-    ):
-        if not numpy.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-            raise ValueError(f"{name} must be finite and positive")
-    if not numpy.isfinite(args.awr_pull) or args.awr_pull < 0:
-        raise ValueError("AWR pull must be finite and nonnegative")
-    if args.awr_pull and not args.awr_reference:
-        raise ValueError("AWR pull requires fixed --awr-reference weights")
-    if args.awr_q_std is not None and (
-        not numpy.isfinite(args.awr_q_std) or args.awr_q_std < 0
-    ):
-        raise ValueError("AWR Q standard-deviation penalty must be nonnegative")
-    if not numpy.isfinite(args.awr_entropy) or args.awr_entropy < 0:
-        raise ValueError("AWR entropy must be finite and nonnegative")
     command = json.loads(pathlib.Path(args.evaluation_command).read_text())
     if (
         not isinstance(command, list)
@@ -363,11 +37,15 @@ def settings(args):
         or not any("{output}" in value for value in command)
     ):
         raise ValueError("Evaluation argv must contain {weights} and {output}")
-    return fractions, command
+    int(command[command.index("--seed") + 1])
+    games = int(command[command.index("--games") + 1])
+    if games <= 0 or games % 4:
+        raise ValueError("Evaluation needs complete four-game seed groups")
+    return args.record_fractions, command
 
 
 def save_cohort(network, root, exposures):
-    """Keep each cohort immutable; latest is an atomic pointer to its weights."""
+    """Keep cohorts immutable; latest atomically points to their weights."""
     checkpoint = root / "checkpoints" / f"{exposures:012d}.weights.h5"
     checkpoint.parent.mkdir(exist_ok=True)
     if checkpoint.exists():
@@ -379,60 +57,65 @@ def save_cohort(network, root, exposures):
 
 
 def finish_checkpoint(
-    stage, *, root, network, pools, report, evaluation_command
+    stage, *, root, network, pools, report, evaluation_command, fit_critic
 ):
     weights = root / f"{stage}.weights.h5"
     network.save_weights(weights)
     for pool in pools[1:]:
         pool.flush()
     report(stage + "_evaluation", {})
+    command = evaluation_command.copy()
+    phase = 0 if stage == "record-imitation" else int(stage.rsplit("-", 1)[1])
+    seed_argument = command.index("--seed") + 1
+    command[seed_argument] = str(
+        int(command[seed_argument])
+        + phase * (int(command[command.index("--games") + 1]) // 4)
+    )
     subprocess.run(
         [
             value.format(
                 weights=str(weights.resolve()),
                 output=str((root / (stage + "-evaluation")).resolve()),
             )
-            for value in evaluation_command
+            for value in command
         ],
         check=True,
     )
+    if stage != "mixed-policy-5":
+        fit_critic(stage)
     report(stage + "_complete", {})
-
-
-def set_awr_learning_rate(trainer, args, exposures, positions):
-    """Keep each pass constant; interpolate rates by its self-play share."""
-    fractions = ([1.0] if not args.mixed_only else []) + [
-        float(value) for value in args.record_fractions.split(",")
-    ]
-    phase = exposures // positions
-    fraction = (
-        (fractions[0] - fractions[phase]) / (fractions[0] - fractions[-1])
-        if fractions[0] != fractions[-1]
-        else 0.0
-    )
-    trainer.awr_optimizer.learning_rate.assign(
-        args.awr_learning_rate
-        + fraction * (args.awr_final_learning_rate - args.awr_learning_rate)
-    )
 
 
 def run(args):
     fractions, evaluation_command = settings(args)
+    label_plan = json.loads(
+        (pathlib.Path(args.distill_labels) / "plan.json").read_text()
+    )
     summary = json.loads(
-        (pathlib.Path(args.data) / "dataset_summary.json").read_text()
+        (pathlib.Path(label_plan["data"]) / "dataset_summary.json").read_text()
     )
     positions = sum(row[0] for row in summary["partition_counts"][:7])
     assert positions > 0, "Training partition is empty"
     devices = tf.config.list_physical_devices("GPU")
     if len(devices) < 2:
         raise ValueError("Separate training and collection GPUs required")
-    for device in devices:
-        tf.config.experimental.set_memory_growth(device, True)
     collection_device_ix = (
         os.environ["CUDA_VISIBLE_DEVICES"]
         .split(",")
         .index(args.collection_device)
     )
+    for device_ix, device in enumerate(devices):
+        # Leave room for checkpoint evaluation workers on every device.
+        tf.config.set_logical_device_configuration(
+            device,
+            [
+                tf.config.LogicalDeviceConfiguration(
+                    memory_limit=(
+                        8192 if device_ix == collection_device_ix else 18432
+                    )
+                )
+            ],
+        )
     strategy = tf.distribute.MirroredStrategy(
         devices=[
             f"/GPU:{device_ix}"
@@ -449,46 +132,51 @@ def run(args):
     features = self_play.initial_features(args.seed)
     with strategy.scope():
         network = export.load_network(args.initial, features)
-        trainer = training.DistributedTrainer(
-            training.Trainer(
+        reference = export.load_network(args.reference, features)
+        network.save_weights(root / "initial.weights.h5")
+        previous = export.load_network(args.initial, features)
+        trainer = trainers.DistributedTrainer(
+            trainers.Trainer(
                 network=network,
                 args=args,
                 features=features,
-                mirror=(
-                    export.load_network(args.awr_reference, features).actor
-                    if args.awr_pull
-                    else None
-                ),
-                mirror_coefficient=args.awr_pull,
-                awr_q_std=args.awr_q_std,
+                mirror=previous.actor,
+                magnet=reference.actor,
             ),
             strategy,
         )
-    state.save(
+    monitor.write_json(
         root / "plan.json",
         {
             **vars(args),
             "positions_per_pass": positions,
             "record_fractions": fractions,
+            "expert_weight": 0.5,
+            "distill_weight": 0.5,
+            "imitation_weighting": "q_gap_to_fixed_reference",
+            "beta_mode": "rolling_ess",
+            "ess_target": 0.7,
             "evaluation_argv": evaluation_command,
             "initial_sha256": hashlib.sha256(
                 pathlib.Path(args.initial).read_bytes()
             ).hexdigest(),
-            "awr_reference_sha256": (
-                hashlib.sha256(
-                    pathlib.Path(args.awr_reference).read_bytes()
-                ).hexdigest()
-                if args.awr_pull
-                else None
-            ),
+            "reference_sha256": hashlib.sha256(
+                pathlib.Path(args.reference).read_bytes()
+            ).hexdigest(),
             "root_source": "generated_games",
             "optimizer_restart": True,
+            "reset_policy_weights": [],
+            "preserve_shared_state": True,
+            "preserve_policy_state": True,
+            "q_passes_per_checkpoint": 2,
+            "q_updates_encoder": True,
+            "final_q_fit": False,
             "collection_policy_lag_cohorts": 1,
             "target_bits": ["keiten", "tenpai", "calls", "disagreement"],
         },
     )
     pools = [None] + [
-        Replay(
+        replay.ReplayBuffer(
             root / "replay" / name,
             args.replay_positions,
             generator,
@@ -499,9 +187,9 @@ def run(args):
         )
     ]
     with tf.device(strategy.extended.worker_devices[0]):
-        evaluate_roots = collection.disagreement_evaluator(network)
+        evaluate_roots = collection.root_scorer(network)
     progress = monitor.Monitor(root, positions, vars(args))
-    exposures = cohort = games = 0
+    exposures = cohort = games = q_exposures = 0
 
     def report(stage, metrics):
         progress.report(
@@ -512,6 +200,19 @@ def run(args):
             games=games,
         )
 
+    def fit_critic(stage):
+        nonlocal q_exposures
+        q_exposures = q_fit.run(
+            stage=stage,
+            root=root,
+            network=network,
+            strategy=strategy,
+            args=args,
+            report=report,
+            total_exposures=q_exposures,
+        )
+        previous.actor.set_weights(network.actor.get_weights())
+
     finish = functools.partial(
         finish_checkpoint,
         root=root,
@@ -519,36 +220,53 @@ def run(args):
         pools=pools,
         report=report,
         evaluation_command=evaluation_command,
+        fit_critic=fit_critic,
     )
 
-    if not args.mixed_only:
-        stage = "record-awr"
-        report(stage, {})
-        seen = 0
-        for tensors in record_stream(args):
-            batch = tf.nest.map_structure(lambda value: value.numpy(), tensors)
-            count = len(batch["chosen"])
-            targets = classify_records(batch, evaluate_roots, generator)
-            packed = prepare(batch, trainer.feature_packing)
-            pools[1].add(packed, numpy.flatnonzero(targets > 0))
-            padded = full_batch(packed, args.batch_size)
-            set_awr_learning_rate(trainer, args, exposures, positions)
-            metrics = trainer.policy_update(
+    stage = "record-imitation"
+    report(stage, {})
+    seen = 0
+    input_started = time.monotonic()
+    for tensors in replay.recorded_batches(args):
+        batch = tf.nest.map_structure(lambda value: value.numpy(), tensors)
+        count = len(batch["chosen"])
+        root_started = time.monotonic()
+        targets = replay.classify_records(batch, evaluate_roots, generator)
+        root_seconds = time.monotonic() - root_started
+        packed = replay.pack_batch(batch, trainer.feature_packing)
+        pools[1].add(packed, numpy.flatnonzero(targets > 0))
+        padded = replay.pad_batch(packed, args.batch_size)
+        update_started = time.monotonic()
+        metrics = {
+            name: float(value)
+            for name, value in trainer.policy_update(
                 padded, tf.constant(count, tf.int32)
-            )
-            exposures += count
-            seen += count
-            if (
-                seen // args.cohort_exposures
-                != (seen - count) // args.cohort_exposures
-            ):
-                save_cohort(network, root, exposures)
-            report(stage, metrics)
-        if seen != positions:
-            raise ValueError(f"Dataset count mismatch: {seen} != {positions}")
-        finish(stage)
+            ).items()
+        }
+        metrics.update(
+            {
+                "runtime/input_seconds": (
+                    update_started - input_started - root_seconds
+                ),
+                "runtime/root_seconds": root_seconds,
+                "runtime/update_seconds": time.monotonic() - update_started,
+            }
+        )
+        exposures += count
+        seen += count
+        if (
+            seen // args.cohort_exposures
+            != (seen - count) // args.cohort_exposures
+        ):
+            save_cohort(network, root, exposures)
+            previous.actor.set_weights(network.actor.get_weights())
+        report(stage, metrics)
+        input_started = time.monotonic()
+    if seen != positions:
+        raise ValueError(f"Dataset count mismatch: {seen} != {positions}")
+    finish(stage)
     pools[1].reservoir = False
-    with collection.Prefetch(
+    with collection.BackgroundCollector(
         weights=args.initial,
         device=f"/GPU:{collection_device_ix}",
         games=args.games,
@@ -557,20 +275,21 @@ def run(args):
         seed=args.seed,
     ) as collector:
         for phase, fraction in enumerate(fractions, 1):
-            stage = f"mixed-awr-{phase}"
+            stage = f"mixed-policy-{phase}"
             if fraction == 0:
                 pools[0] = None
             elif pools[0] is None:
-                pools[0] = RecordStream(
+                pools[0] = replay.RecordedStream(
                     args, trainer, pools[1], evaluate_roots, generator
                 )
             used = 0
             report(stage, {})
             while used < positions:
                 count = min(args.cohort_exposures, positions - used)
-                quotas = allocation(
+                quotas = replay.allocation(
                     used + count, fraction, args.target_fraction, start=used
                 )
+                previous.actor.set_weights(network.actor.get_weights())
                 collection_started = time.monotonic()
                 collected = None
                 fresh = 0
@@ -594,7 +313,7 @@ def run(args):
                 next_count = min(
                     args.cohort_exposures, positions - used - count
                 )
-                if allocation(
+                if replay.allocation(
                     used + count + next_count,
                     fraction,
                     args.target_fraction,
@@ -612,36 +331,53 @@ def run(args):
                     )
                 if collected:
                     for batch in collected.pop("batches"):
-                        states, inverse = numpy.unique(
-                            batch.pop("settlement"), axis=0, return_inverse=True
+                        batch["distill"] = numpy.full(
+                            len(batch["chosen"]), -1, numpy.int32
                         )
-                        with tf.device("/CPU:0"):
-                            batch["returns"] = (
-                                joint_settlement.observed_payoffs(
-                                    tf.convert_to_tensor(states)
-                                ).numpy()[inverse]
-                                / 100
-                            )
-                        add_replay(
-                            pools[2:],
-                            prepare(batch, trainer.feature_packing),
-                            batch["targets"],
+                        batch["recorded"] = numpy.zeros(
+                            len(batch["chosen"]), numpy.bool_
+                        )
+                        batch["projected_st3"] = (
+                            joint_settlement.observed_payoffs(
+                                batch["settlement"]
+                            ).numpy()
+                        )
+                        packed = replay.pack_batch(
+                            batch, trainer.feature_packing
+                        )
+                        pools[2].add(packed)
+                        pools[3].add(
+                            packed, numpy.flatnonzero(batch["targets"] > 0)
                         )
                 collection_seconds = time.monotonic() - collection_started
                 report(stage + "_updating", {})
                 for begin in range(0, count, args.batch_size):
                     size = min(args.batch_size, count - begin)
-                    counts = allocation(
+                    counts = replay.allocation(
                         used + begin + size,
                         fraction,
                         args.target_fraction,
                         start=used + begin,
                     )
-                    batch = mixed_batch(pools, counts, generator)
-                    set_awr_learning_rate(trainer, args, exposures, positions)
-                    metrics = trainer.policy_update(
-                        full_batch(batch, args.batch_size),
-                        tf.constant(size, tf.int32),
+                    input_started = time.monotonic()
+                    batch = replay.mixed_batch(pools, counts, generator)
+                    batch = replay.pad_batch(batch, args.batch_size)
+                    update_started = time.monotonic()
+                    metrics = {
+                        name: float(value)
+                        for name, value in trainer.policy_update(
+                            batch, tf.constant(size, tf.int32)
+                        ).items()
+                    }
+                    metrics.update(
+                        {
+                            "runtime/input_seconds": (
+                                update_started - input_started
+                            ),
+                            "runtime/update_seconds": (
+                                time.monotonic() - update_started
+                            ),
+                        }
                     )
                     exposures += size
                     report(stage, metrics)
@@ -670,7 +406,9 @@ def run(args):
                         "positions_per_second": (
                             fresh / collected["seconds"] if collected else 0
                         ),
-                        "collection_wait_and_replay_seconds": collection_seconds,
+                        "collection_wait_and_replay_seconds": (
+                            collection_seconds
+                        ),
                         "fresh_positions": fresh,
                         "fresh_position_target": fresh_required,
                         "replay/record_fraction": quotas[:2].sum() / count,
@@ -706,35 +444,32 @@ def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in (
         "initial",
-        "data",
+        "reference",
+        "distill-labels",
         "output",
         "evaluation-command",
         "collection-device",
     ):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--mixed-only", action="store_true")
-    parser.add_argument("--record-fractions", default="0.8,0.6,0.4,0.2,0")
-    parser.add_argument("--target-fraction", type=float, default=0.4)
     parser.add_argument("--batch-size", type=int, default=9216)
     parser.add_argument("--replay-positions", type=int, default=524288)
     parser.add_argument("--cohort-exposures", type=int, default=995328)
     parser.add_argument("--fresh-positions", type=int, default=497664)
     parser.add_argument("--games", type=int, default=128)
     parser.add_argument("--collection-workers", type=int, default=24)
-    parser.add_argument("--root-copies", type=int, default=1)
-    parser.add_argument("--awr-learning-rate", type=float, default=1e-5)
-    parser.add_argument("--awr-final-learning-rate", type=float, default=1e-5)
-    parser.add_argument("--awr-temperature", type=float, default=3)
-    parser.add_argument("--awr-entropy", type=float, default=0.01)
-    parser.add_argument("--awr-pull", type=float, default=0.0)
-    parser.add_argument(
-        "--awr-q-std",
-        type=float,
-        help="Weight actions by predicted Q mean minus this many ST3 stds",
-    )
-    parser.add_argument(
-        "--awr-reference",
-        help="Fixed reference-policy weights for the AWR KL magnet",
+    # Save the selected recipe alongside capacity settings in plan.json.
+    # Alternative objectives and schedules belong on experiment branches.
+    parser.set_defaults(
+        record_fractions=[0.8, 0.6, 0.4, 0.2, 0.2],
+        target_fraction=0.5,
+        root_copies=1,
+        learning_rate=2e-5,
+        beta=16.0,
+        mirror_coefficient=0.3,
+        magnet_coefficient=0.3,
+        risk_coefficient=0.1,
+        expert_prior=0.2,
+        riichi_rate_target=0.20,
     )
     parser.add_argument("--seed", type=int, default=2042)
     return parser

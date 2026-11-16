@@ -10,7 +10,6 @@ import sys
 import time
 
 import numpy
-
 from log_dataset import _native_collection
 from model import actions, outcomes
 
@@ -33,7 +32,6 @@ def initial_features(seed):
 def predictor(actor):
     """Pack on the CPU and transfer a few lossless buffers per inference."""
     import tensorflow as tf
-
     from log_dataset import training_data
 
     strategy = tf.distribute.get_strategy()
@@ -90,19 +88,11 @@ def predictor(actor):
             outputs = strategy.gather(
                 strategy.run(infer, args=(distributed,)), axis=0
             )
-        return dict(
-            zip(
-                actions.TRAIN_POLICY_HEADS,
-                tf.split(
-                    outputs[:count],
-                    [
-                        actions.ACTOR_OUTPUTS[name][0]
-                        for name in actions.TRAIN_POLICY_HEADS
-                    ],
-                    axis=1,
-                ),
-            )
-        )
+        return outputs[:count]
+
+    boundaries = numpy.cumsum(
+        [actions.ACTOR_OUTPUTS[name][0] for name in actions.TRAIN_POLICY_HEADS]
+    )[:-1]
 
     def packed_predict(inputs):
         count = len(next(iter(inputs.values())))
@@ -117,7 +107,13 @@ def predictor(actor):
                 for name, value in packing.pack_numpy(inputs).items()
             }
             count = tf.constant(count, tf.int32)
-        return predict(packed, count)
+        # Transfer one contiguous buffer; simulation consumes NumPy logits.
+        return dict(
+            zip(
+                actions.TRAIN_POLICY_HEADS,
+                numpy.split(predict(packed, count).numpy(), boundaries, axis=1),
+            )
+        )
 
     return packed_predict
 
@@ -145,7 +141,36 @@ def collection_counts():
     )
 
 
-def target_categories(features, heads, priority):
+def improving_call_choices(features):
+    """Legal call/discard choices that strictly reduce actual shanten."""
+    # Family-category inputs clip high shanten; efficiency retains its value.
+    distance = features["self_efficiency"][..., 0] * 8
+    chi = features["chi_discard_legal"].astype(bool) & (
+        features["chi_discard_shanten"] < distance[..., None, None] + 1
+    )
+    pon = features["pon_discard_legal"].astype(bool) & (
+        features["pon_discard_shanten"] < distance[..., None, None] + 1
+    )
+    # Kan efficiency stores actual shanten / 8, before the replacement draw.
+    kan = features["kan_legal_mask"][..., 1:].astype(bool) & (
+        features["kan_efficiency"][..., 0] * 8 < distance[..., None]
+    )
+    decline = numpy.zeros((*distance.shape, 1), bool)
+    response = numpy.concatenate(
+        (
+            decline,
+            chi.reshape(*distance.shape, 111),
+            pon.reshape(*distance.shape, 37),
+            (kan.any(axis=-1) & (features["response_legal_mask"][..., 3] > 0))[
+                ..., None
+            ],
+        ),
+        axis=-1,
+    )
+    return response, numpy.concatenate((decline, kan), axis=-1)
+
+
+def target_categories(features, heads, priority, chosen=None):
     """Observable targets shared by recorded decisions and generated replay."""
     distance = numpy.minimum.reduce(
         [
@@ -157,14 +182,30 @@ def target_categories(features, heads, priority):
             )
         ]
     )
+    # Call states are targeted only when at least one call improves shanten.
+    response, kan = improving_call_choices(features)
+    hand = (heads != 2) & (heads != 3)
+    calls = ((heads == 2) & response.any(axis=-1)) | (
+        (heads == 3) & kan.any(axis=-1)
+    )
+    if chosen is not None:
+        selected_response = numpy.take_along_axis(
+            response, chosen[..., None], axis=-1
+        )[..., 0]
+        selected_kan = numpy.take_along_axis(
+            kan, numpy.where(heads == 3, chosen, 0)[..., None], axis=-1
+        )[..., 0]
+        calls &= (chosen == 0) | numpy.where(
+            heads == 2, selected_response, selected_kan
+        )
     # The feature stores actual shanten + 1: tenpai=1, one-away=2.
     return (
-        ((distance <= 2) & (features["live_wall_count"] <= 16)).astype(
+        (hand & (distance <= 2) & (features["live_wall_count"] <= 16)).astype(
             numpy.uint8
         )
-        | ((distance <= 1).astype(numpy.uint8) << 1)
-        | (((heads == 2) | (heads == 3)).astype(numpy.uint8) << 2)
-        | ((priority > 0).astype(numpy.uint8) << 3)
+        | ((hand & (distance <= 1)).astype(numpy.uint8) << 1)
+        | (calls.astype(numpy.uint8) << 2)
+        | ((hand & (priority > 0)).astype(numpy.uint8) << 3)
     )
 
 
@@ -237,6 +278,18 @@ def collection_steps(
         count = len(request["head"])
         batch = {
             "features": numpy.frombuffer(request["features"], FEATURE_DTYPE),
+            "ron_legal": numpy.asarray(request["ron_legal"], dtype=numpy.int8),
+            "ron_payments": numpy.asarray(
+                request["ron_payments"], dtype=numpy.int32
+            ),
+            "beliefs": {
+                name: numpy.asarray(request[name], dtype=numpy.int8)
+                for name in (
+                    "opponent_shanten",
+                    "opponent_ukeire",
+                    "opponent_hand_counts",
+                )
+            },
             "head": numpy.asarray(request["head"]),
             "legal": numpy.frombuffer(request["legal"], numpy.bool_).reshape(
                 count, 150
@@ -258,17 +311,17 @@ def collection_steps(
             numpy.exp(scores).sum(axis=1, keepdims=True)
         )
         batch["behavior"][~batch["legal"]] = -1e9
-        batch["targets"] = target_categories(
-            batch["features"],
-            batch["head"],
-            (
-                outputs["_root_priority"]
-                if "_root_priority" in outputs
-                else numpy.zeros(count, numpy.float32)
-            ),
+        priority = (
+            outputs["_root_priority"]
+            if "_root_priority" in outputs
+            else numpy.zeros(count, numpy.float32)
         )
         if root_callback is not None:
+            batch["targets"] = target_categories(
+                batch["features"], batch["head"], priority
+            )
             root_callback(collector, batch)
+            priority = batch["targets"] & 8
         cumulative = numpy.exp(batch["behavior"]).cumsum(
             axis=1, dtype=numpy.float64
         )
@@ -287,6 +340,12 @@ def collection_steps(
             batch["behavior"][rows, action] = 0
             batch["paired_root"][rows] = True
             batch["root_path"][rows] = path
+        batch["targets"] = target_categories(
+            batch["features"],
+            batch["head"],
+            priority,
+            chosen=batch["chosen"],
+        )
         first = False
         collector.submit(batch["chosen"].tolist())
         # Copy only this small target input before releasing a worker's rows.
@@ -321,6 +380,10 @@ def collection_steps(
         + indices[:, 1]
     )
     batch = {
+        "beliefs": {
+            name: numpy.concatenate([part["beliefs"][name] for part in batches])
+            for name in batches[0]["beliefs"]
+        },
         **{
             name: numpy.concatenate([batch[name] for batch in batches])
             for name in (
@@ -331,6 +394,8 @@ def collection_steps(
                 "targets",
                 "paired_root",
                 "root_path",
+                "ron_legal",
+                "ron_payments",
             )
         },
         "settlement": numpy.concatenate(settlements)[
@@ -370,7 +435,8 @@ def focused_action_pair(features, head, legal, policy):
     """Policy-preferred choices in distinct call or shanten groups."""
     codes = numpy.flatnonzero(legal)
     if head in (2, 3):
-        calls = codes[codes > 0]
+        improving = improving_call_choices(features)[head - 2]
+        calls = codes[improving[codes]]
         if not len(calls):
             return None
         assert legal[0], "Optional calls require the pass choice"
@@ -523,7 +589,7 @@ def collect_focused(
                 key: numpy.concatenate([part[name][key] for part in batches])
                 for key in batches[0][name]
             }
-            if name == "features"
+            if name in ("features", "beliefs")
             else numpy.concatenate([part[name] for part in batches])
         )
         for name in batches[0]
@@ -760,10 +826,22 @@ class Collector:
             "features": {name: ordered[name] for name in FEATURE_DTYPE.names},
             **{
                 name: (
-                    results[0][name]
-                    if count == 1
-                    else numpy.concatenate(
-                        [results[index][name] for index in range(count)]
+                    {
+                        key: numpy.concatenate(
+                            [
+                                results[index][name][key]
+                                for index in range(count)
+                            ]
+                        )
+                        for key in results[0][name]
+                    }
+                    if name == "beliefs"
+                    else (
+                        results[0][name]
+                        if count == 1
+                        else numpy.concatenate(
+                            [results[index][name] for index in range(count)]
+                        )
                     )
                 )
                 for name in results[0]

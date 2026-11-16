@@ -3,7 +3,6 @@
 import math
 
 import tensorflow as tf
-
 from model import actions, beliefs, encoder, losses, payment_scoring
 
 POLICY_ENTROPY_WEIGHT = 0.01
@@ -274,10 +273,7 @@ def build_board_heads(inputs, hidden, predictions):
     # Other heads retain their established representation.
     context = tf.keras.layers.Dense(128, activation="gelu")(
         tf.keras.layers.Concatenate()(
-            [
-                hidden,
-                encoder.numeric_features(auxiliary_logits),
-            ]
+            [hidden, encoder.numeric_features(auxiliary_logits)]
         )
     )
     context = tf.keras.layers.Concatenate()([hidden, context])
@@ -476,10 +472,7 @@ class FinalCandidates(tf.keras.layers.Layer):
     def call(self, values):
         candidates, context, selected = values
         return tf.concat(
-            [
-                candidates,
-                tf.gather(context, selected[:, 0]),
-            ],
+            [candidates, tf.gather(context, selected[:, 0])],
             axis=-1,
         )
 
@@ -523,31 +516,31 @@ def policy_loss(labels, logits, mean=losses.mean_valid):
     return mean(*policy_nll(labels, logits))
 
 
-def awr_policy_terms(nll, advantages, eligible, mean=losses.mean_valid):
-    """Detached, capped positive regression weights on recorded actions."""
+def weighted_imitation_terms(nll, advantages, eligible, mean=losses.mean_valid):
+    """Detached, capped positive regression weights on replayed actions."""
     log_weights = tf.minimum(tf.cast(advantages, tf.float32), tf.math.log(20.0))
-    offset = tf.reduce_max(tf.where(eligible, log_weights, -1e30))
+    log_weight_offset = tf.reduce_max(tf.where(eligible, log_weights, -1e30))
     replica = tf.distribute.get_replica_context()
     if replica is not None and replica.num_replicas_in_sync > 1:
-        offset = tf.reduce_max(replica.all_gather(offset[None], axis=0))
+        log_weight_offset = tf.reduce_max(
+            replica.all_gather(log_weight_offset[None], axis=0)
+        )
     # A shared scale cancels from weighted CE and ESS. It prevents tiny
     # negative-advantage weights from underflowing, including their squares.
     weights = tf.stop_gradient(
-        tf.exp(tf.where(eligible, log_weights - offset, -1e30))
+        tf.exp(tf.where(eligible, log_weights - log_weight_offset, -1e30))
     )
-    weight_mean = mean(weights, eligible)
+    mean_weight = mean(weights, eligible)
+    # ESS / N = E[w]^2 / E[w^2]; the common scale cancels.
     return {
         "loss": mean(nll, eligible, weights),
-        "weight_mean": weight_mean * tf.exp(offset),
+        "weight_mean": mean_weight * tf.exp(log_weight_offset),
         "weight_clipped_fraction": mean(
-            tf.cast(
-                advantages >= tf.math.log(20.0),
-                tf.float32,
-            ),
+            tf.cast(advantages >= tf.math.log(20.0), tf.float32),
             eligible,
         ),
         "effective_sample_fraction": tf.math.divide_no_nan(
-            tf.square(weight_mean), mean(tf.square(weights), eligible)
+            tf.square(mean_weight), mean(tf.square(weights), eligible)
         ),
     }
 
@@ -616,8 +609,108 @@ def distribution(outputs, heads, legal):
     return tf.nn.log_softmax(tf.where(legal, logits, -1e9), axis=-1)
 
 
+def greedy_choices(log_probability, heads):
+    """Marginal branch selection on device, with lowest-index tie breaks."""
+    chosen = tf.argmax(log_probability, axis=1, output_type=tf.int32)
+    for head, levels in (
+        (1, ((37, 37),)),
+        (2, ((1, 111, 37, 1), (1, 37, 37, 37, 37, 1))),
+    ):
+        scores = log_probability[:, : sum(levels[0])]
+        for sizes in levels:
+            branch = tf.argmax(
+                tf.stack(
+                    [
+                        tf.reduce_logsumexp(part, axis=1)
+                        for part in tf.split(scores, sizes, axis=1)
+                    ],
+                    axis=1,
+                ),
+                axis=1,
+                output_type=tf.int32,
+            )
+            scores = tf.where(
+                tf.repeat(tf.range(len(sizes)), sizes)[None] == branch[:, None],
+                scores,
+                -float("inf"),
+            )
+        chosen = tf.where(
+            heads == head,
+            tf.argmax(scores, axis=1, output_type=tf.int32),
+            chosen,
+        )
+    return chosen
+
+
+def riichi_prior(inputs):
+    """Soft first-riichi preference; accepted dama cases stay neutral."""
+    waits = inputs["discard_action_all_ukeire_count"]
+    points = inputs["riichi_dama_points"]
+    turns = inputs["opponent_discard_count"][:, :1]
+    good = waits >= 6
+    valuable_early = ((turns < 6) & good) | (
+        (turns >= 6) & (turns < 12) & (waits >= 10)
+    )
+    return (
+        tf.cast(inputs["riichi_discard_legal_mask"], tf.bool)
+        & tf.cast(inputs["policy_prior_no_threat"][:, None], tf.bool)
+        & ~tf.reduce_any(inputs["riichi_state"] > 0, axis=1)[:, None]
+        & (good | (inputs["riichi_extra_han"] >= 1))
+        & ~((points >= 5200) & ~good)
+        & ((points < 7700) | valuable_early)
+        & (points < 12000)
+    )
+
+
+def expert_prior(inputs, heads):
+    """Positive-only riichi and chi/pon preferences, never pass/dama labels."""
+    opened = tf.reduce_any(
+        (inputs["meld_valid"][:, 0] > 0) & (inputs["meld_type"][:, 0] != 3),
+        axis=1,
+    )
+    distance = tf.concat(
+        [inputs["chi_discard_shanten"], inputs["pon_discard_shanten"]], axis=1
+    )
+    legal = (
+        tf.concat(
+            [inputs["chi_discard_legal"], inputs["pon_discard_legal"]], axis=1
+        )
+        > 0
+    )
+    tenpai = (
+        (distance == 1)
+        & (inputs["call_open_points"] > 0)
+        & (
+            (inputs["call_open_points"] >= 3900)
+            | (inputs["call_riichi_points"] < 7700)
+        )
+    )
+    advance = distance < inputs["normal_self_shanten"][:, None, None]
+    calls = (
+        legal
+        & tf.where(opened[:, None, None], advance, tenpai)
+        & tf.cast(inputs["policy_prior_no_threat"][:, None, None], tf.bool)
+    )
+    return (
+        tf.pad(riichi_prior(inputs), [[0, 0], [37, 76]]) & (heads == 1)[:, None]
+    ) | (
+        tf.pad(tf.reshape(calls, [-1, 148]), [[0, 0], [1, 1]])
+        & (heads == 2)[:, None]
+    )
+
+
+def expert_prior_loss(current, preference, heads, mean=losses.mean_valid):
+    """Encourage eligible mass, with fivefold riichi pressure, over all rows."""
+    log_mass = tf.reduce_logsumexp(tf.where(preference, current, -1e9), axis=1)
+    return mean(
+        tf.where(tf.reduce_any(preference, axis=1), -log_mass, 0.0)
+        * tf.where(heads == 1, 5.0, 1.0),
+        tf.ones(tf.shape(current)[0]),
+    )
+
+
 def policy_kl(reference, current, mean=losses.mean_valid, *, reverse=False):
-    """KL over legal normalized actions; reference never receives gradients."""
+    """Unmodified fixed-reference KL; expert encouragement is separate."""
     reference = tf.stop_gradient(reference)
     first, second = (current, reference) if reverse else (reference, current)
     return mean(
@@ -682,10 +775,7 @@ def offline_loss_terms(inputs, outputs, mean=losses.mean_valid):
             tf.cast(valid & matches[:, 0], tf.float32)
         )
         metrics[prefix + "_top3_correct"] = tf.reduce_sum(
-            tf.cast(
-                valid & tf.reduce_any(matches, axis=-1),
-                tf.float32,
-            )
+            tf.cast(valid & tf.reduce_any(matches, axis=-1), tf.float32)
         )
         metrics[prefix + "_nll_sum"] = tf.reduce_sum(tf.where(valid, nll, 0.0))
         if name == "discard_policy_logits":

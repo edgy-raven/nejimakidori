@@ -170,6 +170,7 @@ class FrozenPolicy:
     def __init__(self, model_path, device="-1", memory_mb=2048):
         self.model_path = pathlib.Path(model_path).resolve()
         self.source = source_directory(self.model_path)
+        self.events = {}
         self.reset_pending = True
         self.process = subprocess.Popen(
             [
@@ -199,6 +200,7 @@ class FrozenPolicy:
         )
 
     def reset(self):
+        self.events = {}
         self.reset_pending = True
 
     def select_many(self, requests):
@@ -206,11 +208,11 @@ class FrozenPolicy:
         return self.receive_actions(requests)
 
     def send_requests(self, requests):
-        # RiichiEnv decodes its entire log on access; share it across seats.
-        events = {
-            key: env.mjai_log
-            for key, env in {id(env): env for _, env, _ in requests}.items()
-        }
+        # Decode only new events, retaining the frozen workers' full-history
+        # wire contract. Evaluation resets policies before each new cohort.
+        for env in dict.fromkeys(env for _, env, _ in requests):
+            history = self.events.setdefault(env, [])
+            history.extend(env.mjai_log_since(len(history)))
         self.process.stdin.write(
             json.dumps(
                 {
@@ -220,7 +222,7 @@ class FrozenPolicy:
                     "items": [
                         {
                             "stream": stream,
-                            "events": events[id(env)],
+                            "events": self.events[env],
                             "observation": observation.serialize_to_base64(),
                         }
                         for stream, env, observation in requests
@@ -236,12 +238,33 @@ class FrozenPolicy:
         response = self.process.stdout.readline()
         if not response:
             raise RuntimeError(f"frozen policy exited: {self.process.poll()}")
-        return [
-            observation.select_action_from_mjai(json.dumps(action))
-            for (_, _, observation), action in zip(
-                requests, json.loads(response), strict=True
-            )
-        ]
+        actions = []
+        for (stream, env, observation), event in zip(
+            requests, json.loads(response), strict=True
+        ):
+            action = observation.select_action_from_mjai(json.dumps(event))
+            if action is None:
+                failure_path = self.model_path.parent / (
+                    f"illegal-action-{stream}.json"
+                )
+                failure_path.write_text(
+                    json.dumps(
+                        {
+                            "stream": stream,
+                            "response": event,
+                            "observation": observation.serialize_to_base64(),
+                            "events": env.mjai_log,
+                        }
+                    )
+                    + "\n"
+                )
+                raise ValueError(
+                    f"Opponent returned an illegal action: {event}; "
+                    f"legal={[a.to_mjai() for a in observation.legal_actions()]}; "
+                    f"state={failure_path}"
+                )
+            actions.append(action)
+        return actions
 
     def close(self):
         self.process.stdin.close()

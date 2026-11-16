@@ -2,7 +2,6 @@
 
 import numpy
 import tensorflow as tf
-
 from integration import settlement_reference
 from log_dataset import scoring
 from model import joint_settlement, losses, outcomes, payment_scoring
@@ -15,8 +14,14 @@ def expanded_terms(labels, outputs, mean=losses.mean_valid):
     receive neither settlement nor rank supervision. Coverage is reported.
     """
     same_transfer = tf.reduce_all(
-        outputs["joint_classes"]
-        == tf.cast(labels["payment"][:, None, :36], tf.int64),
+        (
+            outputs["joint_classes"]
+            == tf.cast(labels["payment"][:, None, :36], tf.int64)
+        )
+        | (
+            (labels["payment"][:, None, :36] < 0)
+            & (outputs["joint_classes"] != 1)
+        ),
         -1,
     )
     actual_bank = tf.gather(
@@ -29,6 +34,11 @@ def expanded_terms(labels, outputs, mean=losses.mean_valid):
         outputs["joint_bank"] == actual_bank[:, None, None], -1
     )
     matches &= outputs["joint_legal_deposits"]
+    if "event" in labels:
+        matches &= (
+            outputs["joint_support"][:, :, 5]
+            == tf.cast(labels["event"][:, None], tf.int64)
+        )[..., None]
     supported = tf.reduce_any(matches, axis=(1, 2))
     log_likelihood = tf.reduce_logsumexp(
         tf.where(matches, outputs["joint_log_probability"], -1e30), axis=(1, 2)
@@ -74,17 +84,16 @@ def expanded_terms(labels, outputs, mean=losses.mean_valid):
 def inputs():
     return {
         "dealer": tf.constant([0]),
-        "immediate_probability": tf.constant([[1.0] + [0.0] * 24]),
-        "immediate_score_probability": tf.ones(
-            (1, 3, len(payment_scoring.SCORES))
-        )
-        / len(payment_scoring.SCORES),
         "score_probability": tf.ones((1, 24, len(payment_scoring.SCORES)))
         / len(payment_scoring.SCORES),
         "event_logits": tf.zeros((1, len(joint_settlement.EVENTS))),
-        "immediate_deposit_required": tf.zeros((1, 4), tf.bool),
+        "ending_draw_kind": tf.zeros(1, tf.int32),
+        "ending_tenpai": tf.fill((1, 4), -1),
+        "ending_safe": tf.zeros((1, 3), tf.bool),
         "deposit_required": tf.constant([[False] * 4]),
         "riichi_required": tf.zeros((1, 4), tf.bool),
+        "tenpai_required": tf.zeros((1, 4), tf.bool),
+        "action_tile": tf.fill((1,), 37),
         "pot": tf.constant([14000.0]),
         "honba": tf.constant([2.0]),
         "scores": tf.constant([[24000.0, 24000, 19000, 19000]]),
@@ -98,6 +107,20 @@ def inputs():
 def test_joint_law_conserves_points_and_reconstructs_tsumo_bank_and_tie_order():
     public = inputs()
     result = joint_settlement.decode(public)
+    # GPU execution must retain exact integer transfers, including 8,700.
+    compiled = tf.function(joint_settlement.settlement_states, jit_compile=True)
+    indices = joint_settlement.dealer_indices(public["dealer"]).numpy()
+    integer_delta = (
+        joint_settlement.TRANSFERS[indices].astype(numpy.int64)
+        + public["honba"].numpy().astype(numpy.int64)[:, None, None]
+        * joint_settlement.HONBA[indices].astype(numpy.int64)
+    ) @ joint_settlement.COEFFICIENTS.astype(numpy.int64)
+    numpy.testing.assert_array_equal(
+        compiled(public)["joint_scores"],
+        public["scores"].numpy()[:, None, None]
+        + integer_delta[:, :, None]
+        + result["joint_bank"].numpy(),
+    )
     probability = result["joint_probability"].numpy()[0]
     numpy.testing.assert_allclose(probability.sum(), 1, atol=1e-6)
     assert not probability[:, joint_settlement.DEPOSITS[:, 2] == 1].any()
@@ -166,9 +189,13 @@ def test_joint_law_conserves_points_and_reconstructs_tsumo_bank_and_tie_order():
     concentrated = {
         name: tf.repeat(value, 10, 0) for name, value in public.items()
     }
-    concentrated["immediate_probability"] = tf.one_hot([1] * 10, 25)
-    concentrated["immediate_score_probability"] = tf.nn.softmax(
-        tf.random.stateless_normal((10, 3, len(payment_scoring.SCORES)), [4, 6])
+    concentrated["event_logits"] = tf.one_hot(
+        [0] * 10, len(joint_settlement.EVENTS), 0.0, -1e9
+    )
+    concentrated["score_probability"] = tf.nn.softmax(
+        tf.random.stateless_normal(
+            (10, 24, len(payment_scoring.SCORES)), [4, 6]
+        )
         * 3
     )
     marginal = joint_settlement.marginals(joint_settlement.decode(concentrated))
@@ -296,65 +323,31 @@ def test_terminal_st3_is_exact_and_draw_pot_goes_to_leader():
         )
 
 
-def test_immediate_deal_in_ends_the_hand_before_future_deposits():
-    public = {
-        **inputs(),
-        "immediate_probability": tf.constant([[0.0, 1, 0, 0] + [0.0] * 21]),
-    }
-    result = joint_settlement.decode(public)
-    marginal = joint_settlement.marginals(result).numpy()[0]
-    values = joint_settlement.payment_values(public).numpy()[0]
-    outgoing = scoring.CELLS.index((0, 0, 1))
-    numpy.testing.assert_allclose(
-        marginal[outgoing, values > 0].sum(), 1, atol=1e-6
-    )
-    assert not result["joint_probability"].numpy()[..., 1:].any()
-    for cell in range(36):
-        if cell != outgoing:
-            numpy.testing.assert_allclose(marginal[cell, 1], 1, atol=1e-6)
-    # Only the existing bank is collected; nobody pays an extra deposit.
-    numpy.testing.assert_allclose(
-        marginal[36:] @ values, [0, 14000, 0, 0], atol=0.01
-    )
-    baseline = joint_settlement.decode(inputs())
-    mixture = joint_settlement.decode(
-        {
-            **inputs(),
-            "immediate_probability": tf.constant(
-                [[0.25, 0.75, 0, 0] + [0.0] * 21]
-            ),
-        },
-    )
-    numpy.testing.assert_allclose(
-        mixture["joint_probability"],
-        0.25 * baseline["joint_probability"]
-        + 0.75 * result["joint_probability"],
-        atol=1e-7,
-    )
-
-
-def test_terminal_draw_accepts_declaration_but_ron_and_triple_abort_do_not():
+def test_terminal_ron_draw_and_abort_obey_deposit_and_readiness_rules():
     public = {
         **inputs(),
         "deposit_required": tf.constant([[True, False, False, False]]),
     }
-    future = joint_settlement.decode(public)
-    assert (
-        not future["joint_probability"]
-        .numpy()[:, :, joint_settlement.DEPOSITS[:, 0] == 0]
-        .any()
-    )
-    for event, deposit, kind, mask in (
-        (1, 0, 0, 0),  # Declaration discard is ronned.
-        (19, 1, 2, 15),  # All four tenpai: no noten transfer.
-        (20, 1, 3, 16),  # Four-riichi abort accepts the fourth deposit.
-        (21, 0, 3, 16),  # Triple ron abort precedes declaration acceptance.
+    # Before the final boundary, an actor-payer ron can occur before or after
+    # declaration acceptance. Other endings require its deposit.
+    ordinary, _, legal = joint_settlement.event_probabilities(public)
+    assert legal[0, 0, 0] and legal[0, 0, 1]
+    assert not legal[0, 28, 0] and legal[0, 28, 1]
+    numpy.testing.assert_allclose(tf.reduce_sum(ordinary), 1, atol=1e-6)
+    for event, boundary, deposit, kind, mask in (
+        (0, 1, 0, 0, 0),  # Last declaration discard is ronned.
+        (47, 1, 1, 2, 15),  # All tenpai: no noten transfer.
+        (48, 2, 1, 3, 16),  # Four-riichi abort accepts the fourth stick.
+        (6, 2, 0, 3, 16),  # Triple ron abort precedes acceptance.
     ):
         ended = joint_settlement.decode(
             {
                 **public,
-                "immediate_probability": tf.one_hot([event], 25),
-            },
+                "ending_draw_kind": tf.constant([boundary]),
+                "event_logits": tf.one_hot(
+                    [event], len(joint_settlement.EVENTS), 0.0, -1e9
+                ),
+            }
         )
         probability = ended["joint_probability"].numpy()[0]
         support = ended["joint_support"].numpy()[0]
@@ -363,12 +356,30 @@ def test_terminal_draw_accepts_declaration_but_ron_and_triple_abort_do_not():
         assert not probability[support[:, 1] != kind].any()
         if kind >= 2:
             assert not probability[support[:, 3] != mask].any()
+    boundary = {
+        **public,
+        "ending_draw_kind": tf.constant([1]),
+        "ending_tenpai": tf.constant([[1, 1, -1, -1]]),
+        "ending_safe": tf.ones((1, 3), tf.bool),
+    }
+    event, _, legal = joint_settlement.event_probabilities(boundary)
+    kinds = numpy.array([row[0] for row in joint_settlement.EVENTS])
+    masks = numpy.array([row[3] for row in joint_settlement.EVENTS])
+    assert not event.numpy()[0, kinds != 2].any()
+    assert not event.numpy()[0, (masks & 3) != 3].any()
+    assert not legal.numpy()[0, kinds != 2].any()
+    # Safety at this action must not prohibit a later deal-in.
+    future, _, _ = joint_settlement.event_probabilities(
+        {**boundary, "ending_draw_kind": tf.zeros(1, tf.int32)}
+    )
+    assert future.numpy()[0, 0] > 0
 
 
-def test_future_draw_readiness_agrees_with_existing_and_new_riichi():
+def test_future_draw_readiness_requires_riichi_and_hadaka():
     public = {
         **inputs(),
         "riichi_required": tf.constant([[False, False, True, False]]),
+        "tenpai_required": tf.constant([[False, False, True, True]]),
         "deposit_required": tf.constant([[True, False, False, False]]),
     }
     result = joint_settlement.decode(public)
@@ -376,14 +387,17 @@ def test_future_draw_readiness_agrees_with_existing_and_new_riichi():
     support = result["joint_support"].numpy()[0]
     draws = support[:, 1] == 2
     ready = (support[:, 3, None] & (1 << numpy.arange(4))) > 0
-    required = numpy.array([True, False, True, False])
+    required = numpy.array([True, False, True, True])
     incompatible = draws[:, None] & numpy.any(
         ~ready[:, None] & (required | (joint_settlement.DEPOSITS > 0))[None], -1
     )
     assert not probability[incompatible].any()
     numpy.testing.assert_allclose(probability.sum(), 1, atol=1e-6)
     assert probability[draws & (support[:, 3] == 15)].sum() > 0
-    assert probability[draws & (support[:, 3] == 5)].sum() > 0
+    assert probability[draws & (support[:, 3] == 13)].sum() > 0
+    # Four melds require tenpai even without riichi; they do not force a stick.
+    assert probability[draws & (support[:, 3] == 13), 1].sum() > 0
+    assert not public["riichi_required"][0, 3]
     assert not result["joint_legal_deposits"].numpy()[0][incompatible].any()
 
 
@@ -391,17 +405,20 @@ def test_double_ron_awards_honba_and_bank_once_and_keeps_dealer_repeat():
     public = {
         **inputs(),
         "dealer": tf.constant([2]),
-        "immediate_probability": tf.one_hot([22], 25),
-        "immediate_score_probability": tf.broadcast_to(
+        "event_logits": tf.one_hot(
+            [2], len(joint_settlement.EVENTS), 0.0, -1e9
+        ),
+        "score_probability": tf.broadcast_to(
             tf.one_hot(
                 payment_scoring.SCORES.index((5, 0)),
                 len(payment_scoring.SCORES),
             ),
-            (1, 3, len(payment_scoring.SCORES)),
+            (1, 24, len(payment_scoring.SCORES)),
         ),
         "deposit_required": tf.constant([[False, False, False, True]]),
-        "immediate_deposit_required": tf.constant(
-            [[False, False, False, True]]
+        "deposit_logits": tf.broadcast_to(
+            tf.one_hot([8], 16, 0.0, -1e9)[:, None],
+            (1, len(joint_settlement.EVENTS), 16),
         ),
     }
     result = joint_settlement.decode(public)
@@ -418,7 +435,12 @@ def test_double_ron_awards_honba_and_bank_once_and_keeps_dealer_repeat():
     )
     assert result["joint_support"][0, row, 4] == 6
     triple = joint_settlement.decode(
-        {**public, "immediate_probability": tf.one_hot([21], 25)}
+        {
+            **public,
+            "event_logits": tf.one_hot(
+                [6], len(joint_settlement.EVENTS), 0.0, -1e9
+            ),
+        }
     )
     numpy.testing.assert_allclose(
         tf.reduce_sum(
@@ -437,21 +459,18 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
     monkeypatch.setattr(critic, "STATISTICS_CHUNK", 2)
     public = {
         **inputs(),
-        "state": tf.ones((1, 64)),
-        "immediate_wait": tf.ones((1, 3)) * 0.3,
-        "immediate_safe": tf.zeros((1, 3), tf.bool),
-        "immediate_allowed": tf.ones(1, tf.bool),
-        "immediate_ankan": tf.zeros(1, tf.bool),
+        "state": tf.concat(
+            [tf.fill((1, 12), 0.25), tf.fill((1, 408), 0.5), tf.ones((1, 92))],
+            -1,
+        ),
+        "action_tile": tf.zeros(1, tf.int32),
         "has_meld": tf.zeros((1, 4), tf.bool),
         "opened": tf.zeros((1, 4), tf.bool),
         "riichi_required": tf.zeros((1, 4), tf.bool),
         "ippatsu_allowed": tf.ones((1, 4), tf.bool),
-        "immediate_ippatsu": tf.ones((1, 4), tf.bool),
         "public_fu": tf.zeros((1, 4), tf.int32),
         "public_bonus": tf.zeros((1, 4), tf.int32),
         "yakuman_allowed": tf.ones((1, 4), tf.bool),
-        "immediate_draw_kind": tf.zeros(1, tf.int32),
-        "immediate_tenpai": tf.fill((1, 4), -1),
     }
     public = {
         name: tf.repeat(value, 3, axis=0) for name, value in public.items()
@@ -473,7 +492,7 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
         ),
         -1,
     )
-    predictor = critic.PaymentCritic()
+    predictor = critic.PaymentCritic(belief_offset=0)
     predictor(public)
     # Partial chunks have a dynamic batch dimension. Their compiled loss
     # must stay stateless so replicas can execute the backward pass together.
@@ -491,7 +510,7 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
     statistics, gradients = [], []
     for method in (predictor.chunk_statistics, predictor.supervised_statistics):
         with tf.GradientTape() as tape:
-            tape.watch([public["state"], public["immediate_wait"]])
+            tape.watch(public["state"])
             result = method(public, {**labels, "valid": tf.ones(3)})
             loss = tf.reduce_sum(result[:, 0])
         statistics.append(result)
@@ -500,7 +519,6 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
                 loss,
                 [
                     public["state"],
-                    public["immediate_wait"],
                     *predictor.trainable_variables,
                 ],
             )
@@ -508,7 +526,12 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
     numpy.testing.assert_allclose(statistics[0], statistics[1], atol=1e-4)
     for full, streamed in zip(*gradients):
         assert full is not None and streamed is not None
-        numpy.testing.assert_allclose(full, streamed, atol=3e-4, rtol=1e-4)
+        numpy.testing.assert_allclose(
+            tf.convert_to_tensor(full),
+            tf.convert_to_tensor(streamed),
+            atol=3e-4,
+            rtol=1e-4,
+        )
 
     # Flattening must preserve the original categorical loss and derivative,
     # including unknown labels, while avoiding its graph-level shape assert.
@@ -536,7 +559,7 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
     fresh = {name: labels[name] for name in ("payment", "pot")}
     for valid in ([False, True, False], [False] * 3):
         with tf.GradientTape() as tape:
-            tape.watch([public["state"], public["immediate_wait"]])
+            tape.watch(public["state"])
             result = predictor.supervised_statistics(
                 public, fresh, valid=tf.constant(valid)
             )
@@ -548,16 +571,16 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
             loss,
             [
                 public["state"],
-                public["immediate_wait"],
                 *predictor.trainable_variables,
             ],
         )
         numpy.testing.assert_array_equal(
-            result[:, 1], [sum(valid), 0, 0, sum(valid), sum(valid), sum(valid)]
+            result[:, 1],
+            [sum(valid), 0, 0, *([sum(valid)] * 5)],
         )
-        for gradient in gradients[:2]:
+        for gradient in gradients[:1]:
             numpy.testing.assert_array_equal(
-                gradient.numpy()[~numpy.array(valid)], 0
+                tf.convert_to_tensor(gradient).numpy()[~numpy.array(valid)], 0
             )
         if any(valid):
             expected = predictor.supervised_statistics(
@@ -573,10 +596,6 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
 def test_observed_categories_match_enumeration_without_score_cross_products():
     public = {
         **inputs(),
-        "immediate_probability": tf.fill((1, 25), 1 / 25),
-        "immediate_deposit_required": tf.constant(
-            [[False, True, False, False]]
-        ),
         "deposit_required": tf.constant([[True, True, False, False]]),
     }
     factors = tf.Variable(
@@ -646,6 +665,60 @@ def test_observed_categories_match_enumeration_without_score_cross_products():
                 ),
             ):
                 numpy.testing.assert_allclose(compact, full, atol=3e-5)
+
+
+def test_partial_ron_amount_marginalizes_scores_but_preserves_exact_event():
+    public = inputs()
+    event_logits = tf.Variable(public["event_logits"])
+    score_logits = tf.Variable(tf.math.log(public["score_probability"]))
+    reference = joint_settlement.decode(public)
+    # An unseen ura indicator hides a winning amount, while the event and
+    # bank remain known. Score uncertainty must not erase the ron target.
+    row = numpy.flatnonzero(reference["joint_support"].numpy()[0, :, 5] == 0)[0]
+    bank = numpy.argmax(
+        reference["joint_bank"][:, row, 0, :, None].numpy()
+        == joint_settlement.payment_values(public)[:, None].numpy(),
+        -1,
+    )
+    payment = tf.concat(
+        [tf.cast(reference["joint_classes"][:, row], tf.int32), bank], -1
+    )
+    payment = tf.where((tf.range(40)[None] < 24) & (payment != 1), -1, payment)
+    labels = {
+        "payment": payment,
+        "event": tf.constant([0]),
+        "pot": public["pot"],
+        "round_placement": tf.fill((1, 4), -1),
+    }
+    with tf.GradientTape(persistent=True) as tape:
+        values = {
+            **public,
+            "event_logits": event_logits,
+            "score_probability": tf.nn.softmax(score_logits),
+        }
+        actual = joint_settlement.observed_terms(labels, values)
+        expected = expanded_terms(labels, joint_settlement.decode(values))
+    numpy.testing.assert_allclose(
+        actual["payment_nll"], expected["payment_nll"], atol=1e-6
+    )
+    assert actual["settlement_supported_fraction"] == 1
+    for variable in (event_logits, score_logits):
+        numpy.testing.assert_allclose(
+            tape.gradient(actual["payment_nll"], variable),
+            tape.gradient(expected["payment_nll"], variable),
+            atol=1e-6,
+        )
+    numpy.testing.assert_allclose(
+        tape.gradient(actual["payment_nll"], score_logits), 0, atol=1e-6
+    )
+    assert (
+        float(
+            tf.linalg.global_norm(
+                [tape.gradient(actual["payment_nll"], event_logits)]
+            )
+        )
+        > 0
+    )
 
 
 def test_observed_hand_target_matches_critic_without_future_outcomes():

@@ -3,7 +3,6 @@
 import math
 
 import tensorflow as tf
-
 from model import actions, losses
 
 TENPAI_UKEIRE_WEIGHT = 9.0
@@ -99,6 +98,119 @@ class Probabilities(tf.keras.layers.Layer):
         }
 
 
+class TileAttention(tf.keras.layers.Layer):
+    """Refine count and wait marginals jointly across all 34 tile types."""
+
+    def __init__(self):
+        super().__init__(name="tile_attention", dtype="float32")
+        self.identity = tf.keras.layers.Embedding(34, 8, dtype="float32")
+        self.context = tf.keras.layers.Dense(3 * 32, dtype="float32")
+        self.tokens = tf.keras.layers.Dense(64, dtype="float32")
+        self.attention = [
+            tf.keras.layers.MultiHeadAttention(
+                num_heads=4, key_dim=16, dtype="float32"
+            )
+            for _ in range(2)
+        ]
+        self.attention_norm = [
+            tf.keras.layers.LayerNormalization(dtype="float32")
+            for _ in range(2)
+        ]
+        self.feedforward_norm = [
+            tf.keras.layers.LayerNormalization(dtype="float32")
+            for _ in range(2)
+        ]
+        self.feedforward = [
+            tf.keras.Sequential(
+                [
+                    tf.keras.layers.Dense(
+                        128, activation="gelu", dtype="float32"
+                    ),
+                    tf.keras.layers.Dense(64, dtype="float32"),
+                ]
+            )
+            for _ in range(2)
+        ]
+        # New refinements initially preserve the existing belief predictions.
+        self.correction = tf.keras.layers.Dense(
+            14,
+            kernel_initializer="zeros",
+            bias_initializer="zeros",
+            dtype="float32",
+        )
+
+    def call(self, inputs, hidden, counts, waits, shanten):
+        lower, available, _ = held_count_context(inputs)
+        red_tiles = tf.one_hot([4, 13, 22], 34)
+        count_probability = tf.nn.softmax(counts)
+        tile_features = tf.concat(
+            [
+                count_probability[:, :, :34],
+                tf.einsum(
+                    "bsrc,rt->bstc", count_probability[:, :, 34:], red_tiles
+                ),
+                tf.transpose(tf.sigmoid(waits), [0, 1, 3, 2]),
+                lower[:, :, :34, None] / 4,
+                tf.einsum("bsr,rt->bst", lower[:, :, 34:], red_tiles)[
+                    ..., None
+                ],
+                tf.broadcast_to(
+                    available[:, None, :34, None] / 4,
+                    tf.shape(lower[:, :, :34, None]),
+                ),
+                tf.broadcast_to(
+                    tf.einsum("br,rt->bt", available[:, 34:], red_tiles)[
+                        :, None, :, None
+                    ],
+                    tf.shape(lower[:, :, :34, None]),
+                ),
+            ],
+            axis=-1,
+        )
+        values = self.tokens(
+            tf.concat(
+                [
+                    tile_features,
+                    tf.broadcast_to(
+                        self.identity(tf.range(34))[None, None],
+                        [tf.shape(counts)[0], 3, 34, 8],
+                    ),
+                    tf.broadcast_to(
+                        tf.reshape(self.context(hidden), [-1, 3, 1, 32]),
+                        [tf.shape(counts)[0], 3, 34, 32],
+                    ),
+                    tf.broadcast_to(
+                        tf.nn.softmax(shanten)[:, :, None],
+                        [tf.shape(counts)[0], 3, 34, 4],
+                    ),
+                ],
+                axis=-1,
+            )
+        )
+        values = tf.reshape(values, [-1, 34, 64])
+        for attention, attention_norm, feedforward, feedforward_norm in zip(
+            self.attention,
+            self.attention_norm,
+            self.feedforward,
+            self.feedforward_norm,
+        ):
+            normalized = attention_norm(values)
+            values = values + attention(normalized, normalized)
+            values = values + feedforward(feedforward_norm(values))
+        correction = tf.reshape(self.correction(values), [-1, 3, 34, 14])
+        return (
+            counts
+            + tf.concat(
+                [
+                    correction[..., :5],
+                    tf.gather(correction[..., 5:10], [4, 13, 22], axis=2),
+                ],
+                axis=2,
+            ),
+            waits + tf.transpose(correction[..., 10:], [0, 1, 3, 2]),
+        )
+
+
 class OpponentBeliefs(tf.keras.Model):
     """Supervised opponent heads on the joint model's board encoder."""
 
@@ -113,6 +225,7 @@ class OpponentBeliefs(tf.keras.Model):
             )
             for name in BELIEF_HEADS
         }
+        self.tile_attention = TileAttention()
         self.held_count_mask = HeldCountMask(dtype="float32")
         self.count_projection = CountProjection(dtype="float32")
 
@@ -124,7 +237,31 @@ class OpponentBeliefs(tf.keras.Model):
             )
             for name in BELIEF_HEADS
         }
+        outputs[BELIEF_HEADS[2]], outputs[BELIEF_HEADS[1]] = (
+            self.tile_attention(
+                inputs=inputs,
+                hidden=hidden,
+                counts=outputs[BELIEF_HEADS[2]],
+                waits=outputs[BELIEF_HEADS[1]],
+                shanten=outputs[BELIEF_HEADS[0]],
+            )
+        )
         raw_counts = outputs[BELIEF_HEADS[2]]
+        raw_shanten = outputs[BELIEF_HEADS[0]]
+        outputs[BELIEF_HEADS[0]] = tf.where(
+            (
+                (inputs["riichi_state"][:, 1:, None] > 0)
+                | (
+                    tf.reduce_sum(
+                        tf.cast(inputs["meld_valid"][:, 1:] > 0, tf.int32), -1
+                    )[..., None]
+                    == 4
+                )
+            )
+            & (tf.range(4)[None, None] != 0),
+            -1e4,
+            raw_shanten,
+        )
         outputs[BELIEF_HEADS[2]] = self.held_count_mask(
             [outputs[BELIEF_HEADS[2]], inputs]
         )
@@ -134,6 +271,9 @@ class OpponentBeliefs(tf.keras.Model):
         outputs["belief_constraint_loss"] = tf.reduce_mean(
             losses.constraint_divergence(raw_counts, outputs[BELIEF_HEADS[2]]),
             axis=(1, 2),
+        ) + tf.reduce_mean(
+            losses.constraint_divergence(raw_shanten, outputs[BELIEF_HEADS[0]]),
+            axis=1,
         )
         return outputs
 

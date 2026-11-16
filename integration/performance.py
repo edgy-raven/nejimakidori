@@ -49,7 +49,6 @@ def compare(baseline, measured):
 def workloads():
     import numpy
     import tensorflow as tf
-
     from log_dataset import features, replay
     from training import self_play
 
@@ -91,9 +90,8 @@ def workloads():
 
     def infer():
         for _ in range(10):
-            # Materialize outputs inside the timer, including asynchronous work.
-            for value in predict(inputs).values():
-                value.numpy()
+            # The predictor materializes its NumPy outputs before returning.
+            predict(inputs)
 
     yield "packed_actor_10_batches_32", infer
 

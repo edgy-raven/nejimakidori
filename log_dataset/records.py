@@ -6,7 +6,6 @@ import math
 import pathlib
 
 import numpy
-
 from log_dataset import _native_collection
 
 LABELS = {
@@ -134,6 +133,13 @@ def parse_batch(examples):
             "meta/sample_weight": tf.io.FixedLenFeature([], tf.float32),
         },
     )
+    return decode_batch(parsed)
+
+
+def decode_batch(parsed):
+    """Decode shared numeric fields from one parsed Example batch."""
+    import tensorflow as tf
+
     decoded = {}
     for name, definition in FIELDS.items():
         size = math.prod(definition["shape"])

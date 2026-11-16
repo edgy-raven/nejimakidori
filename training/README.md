@@ -1,7 +1,12 @@
 # Training
 
 `main` supports the current candidate: recorded and generated replay trained
-with AWR, a fixed reference policy, and optional risk-adjusted action weights.
+with Q-weighted expert imitation, magnetic self-play improvement and
+positive expert priors.
+
+Recorded imitation uses equal expert/distill policy shares with separate Q weights.
+The [hybrid workflow](HYBRID.md) describes reusable greedy labels and their
+Q-weighted objective.
 
 ## Guides
 
@@ -11,14 +16,18 @@ with AWR, a fixed reference policy, and optional risk-adjusted action weights.
 | Understand losses, units and gradient boundaries | [Objective](OBJECTIVE.md) |
 | Understand which positions and action pairs are sampled | [Sampling](candidate/SAMPLING.md) |
 | Export weights and compare playing strength | [Evaluation](EVALUATION.md) |
+| Fit Q on completed match logs | [Match records](MATCH_RECORDS.md) |
 
 ## Source map
 
 | Module | Responsibility |
 | --- | --- |
 | [candidate/](candidate/) | Run scheduling, replay pools, collection and progress |
-| [trainer.py](trainer.py) | AWR update and distribution across training devices |
-| [optimization.py](optimization.py) | Gradient clipping, synchronization and optimizer step |
+| [trainer.py](trainer.py) | Source-specific actor gradients, optimizer steps and distribution across training devices |
+| [hybrid.py](hybrid.py) | Aligned expert records and distill-policy label reader |
+| [distill_policy.py](distill_policy.py) | Frozen upstream policy adapter |
+| [match_records.py](match_records.py) | Current-hand critic data from completed matches |
+| [temperature.py](temperature.py) | Rolling ESS calibration for expert and distill policy temperatures |
 | [self_play.py](self_play.py) | Simulator workers, action selection and paired continuations |
 | [evaluate.py](evaluate.py) | Seeded, seat-rotated matches between exports |
 | [frozen_policy.py](frozen_policy.py) | Frozen source snapshots and isolated opponent processes |

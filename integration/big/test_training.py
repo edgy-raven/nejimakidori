@@ -1,4 +1,4 @@
-"""AWR replay preserves hand targets, gradient boundaries and a fixed policy."""
+"""Replay preserves hand targets, gradient boundaries and fixed anchors."""
 
 import json
 import pathlib
@@ -7,10 +7,10 @@ import types
 import numpy
 import pytest
 import tensorflow as tf
-
 from log_dataset import afk, replay, training_data
 from model import actions
 from model import actor as actor_layers
+from model import beliefs
 from model import network as joint_network
 from training import self_play
 from training import trainer as training
@@ -76,12 +76,29 @@ def test_entropy_explores_followups_without_biasing_the_parent(head, gap, tail):
     )
 
 
+def test_greedy_reference_selects_marginal_branches_before_continuations():
+    logits = numpy.full((5, 150), -1e9, numpy.float32)
+    logits[0, 5] = 0
+    logits[1, [0, 37, 38]] = numpy.log([0.45, 0.28, 0.27])
+    logits[2, [0, 1, 2, 38, 112]] = numpy.log([0.4, 0.17, 0.15, 0.18, 0.1])
+    logits[3, 2] = 0
+    logits[4, 1] = 0
+    numpy.testing.assert_array_equal(
+        actor_layers.greedy_choices(tf.constant(logits), tf.range(5)),
+        [5, 37, 1, 2, 1],
+    )
+
+
 def test_magnet_uses_current_to_fixed_reference_kl():
     reference = tf.Variable(tf.math.log([[0.1, 0.9], [0.5, 0.5]]))
     logits = tf.Variable(tf.math.log([[0.8, 0.2], [0.2, 0.8]]))
     with tf.GradientTape(persistent=True) as tape:
         current = tf.nn.log_softmax(logits)
-        kl = actor_layers.policy_kl(reference, current, reverse=True)
+        kl = actor_layers.policy_kl(
+            reference=reference,
+            current=current,
+            reverse=True,
+        )
     numpy.testing.assert_allclose(
         kl,
         tf.reduce_mean(
@@ -91,7 +108,12 @@ def test_magnet_uses_current_to_fixed_reference_kl():
     assert tape.gradient(kl, reference) is None
     assert numpy.linalg.norm(tape.gradient(kl, logits)) > 0
     numpy.testing.assert_allclose(
-        actor_layers.policy_kl(reference, reference, reverse=True), 0
+        actor_layers.policy_kl(
+            reference=reference,
+            current=reference,
+            reverse=True,
+        ),
+        0,
     )
 
 
@@ -239,6 +261,11 @@ def test_fresh_critic_targets_preserve_deposits_and_preempted_calls(
                 "seat": [0, 1, 2, 3],
                 "event": [1, 4, 4, 7],
                 "legal": legal.tobytes(),
+                "opponent_shanten": numpy.zeros((4, 3), numpy.int8),
+                "opponent_ukeire": numpy.zeros((4, 3, 34), numpy.int8),
+                "opponent_hand_counts": numpy.zeros((4, 3, 37), numpy.int8),
+                "ron_legal": numpy.full((4, 3, 37), -1, numpy.int8),
+                "ron_payments": numpy.full((4, 3, 37), -1, numpy.int32),
             }
 
         def submit(self, chosen):
@@ -277,8 +304,7 @@ def test_fresh_critic_targets_preserve_deposits_and_preempted_calls(
     )
 
 
-@pytest.mark.parametrize("awr_q_std", [None, 1.0])
-def test_awr_updates_shared_model_with_fixed_reference(awr_q_std):
+def test_mixed_policy_updates_shared_model_with_fixed_anchors():
     events = json.loads(
         pathlib.Path(__file__)
         .parent.parent.joinpath("fixtures/model/payment_dealer_90fu.json")
@@ -310,12 +336,14 @@ def test_awr_updates_shared_model_with_fixed_reference(awr_q_std):
         network=network,
         features=inputs[0],
         mirror=reference.actor,
-        mirror_coefficient=0.3,
-        awr_q_std=awr_q_std,
+        magnet=reference.actor,
         args=types.SimpleNamespace(
-            awr_learning_rate=1e-5,
-            awr_entropy=0.01,
-            awr_temperature=10.0,
+            learning_rate=1e-5,
+            beta=16.0,
+            expert_prior=0.2,
+            mirror_coefficient=0.3,
+            magnet_coefficient=0.3,
+            risk_coefficient=0.1,
         ),
     )
     heads = tf.stack(
@@ -352,42 +380,46 @@ def test_awr_updates_shared_model_with_fixed_reference(awr_q_std):
         head=head,
         legal=legal,
         chosen=chosen,
+        distill=tf.where(
+            tf.constant([True, False]),
+            tf.argmax(tf.cast(legal, tf.int32), axis=1, output_type=tf.int32),
+            -1,
+        ),
         payment_points=tf.gather(
             training.joint_settlement.payment_values(inputs[2]),
             inputs[2]["payment"],
             axis=1,
             batch_dims=1,
         ),
-        returns=inputs[2]["returns"],
+        recorded=tf.constant([True, False]),
+        ron_legal=inputs[1]["ron_legal"],
+        ron_payments=inputs[1]["ron_payments"],
+        beliefs={
+            name: inputs[1][name]
+            for name in (
+                "opponent_shanten",
+                "opponent_ukeire",
+                "opponent_hand_counts",
+            )
+        },
     )
-    # Actor regression must not backpropagate through its value baseline.
+    # Both actor objectives must leave critic forecasts detached; the
+    # observed-outcome loss still trains the critic through its shared inputs.
     with tf.GradientTape(persistent=True) as tape:
-        awr_metrics = trainer.policy_update.python_function(
+        metrics = trainer.policy_update.python_function(
             batch, tf.constant(2), train=False
         )
-    value_variables = network.actor.get_layer("state_value").trainable_variables
-    if awr_q_std is not None:
-        assert float(awr_metrics["q_std_st3"]) > 0
-        numpy.testing.assert_allclose(
-            awr_metrics["q_risk_st3"],
-            awr_metrics["q_mean_st3"] - awr_metrics["q_std_st3"],
-            atol=1e-4,
-        )
-        assert (
-            float(
-                tf.linalg.global_norm(
-                    tape.gradient(
-                        awr_metrics["policy"],
-                        network.critic.trainable_variables,
-                    )
-                )
-            )
-            == 0
+        # Compare the same compiled training forward: bfloat16 kernels can
+        # round differently when no gradient recording is requested.
+        expected, _ = beliefs.belief_loss_terms(
+            inputs[0], inputs[1], network.actor(inputs[0], training=False)
         )
     assert (
         float(
             tf.linalg.global_norm(
-                tape.gradient(awr_metrics["policy"], value_variables)
+                tape.gradient(
+                    metrics["policy"], network.critic.trainable_variables
+                )
             )
         )
         == 0
@@ -395,10 +427,84 @@ def test_awr_updates_shared_model_with_fixed_reference(awr_q_std):
     assert (
         float(
             tf.linalg.global_norm(
-                tape.gradient(awr_metrics["value_loss"], value_variables)
+                tape.gradient(
+                    metrics["payment_nll"], network.critic.trainable_variables
+                )
             )
         )
         > 0
+    )
+    assert float(metrics["risk_penalty_st3"]) >= 0
+    for name, value in expected.items():
+        numpy.testing.assert_allclose(metrics[name], value, rtol=1e-5)
+    numpy.testing.assert_allclose(
+        metrics["belief_loss"], sum(expected.values()) / 3, rtol=1e-5
+    )
+    for head in network.beliefs.heads.values():
+        assert (
+            float(
+                tf.linalg.global_norm(
+                    tape.gradient(
+                        metrics["belief_loss"], head.trainable_variables
+                    )
+                )
+            )
+            > 0
+        )
+    assert (
+        float(
+            tf.linalg.global_norm(
+                tape.gradient(
+                    metrics["belief_loss"],
+                    [network.actor.get_layer("board_block_3_contract").kernel],
+                )
+            )
+        )
+        > 0
+    )
+    numpy.testing.assert_allclose(
+        metrics["joint_loss"],
+        metrics["policy"]
+        + metrics["weighted_mirror_loss"]
+        + metrics["weighted_magnet_loss"]
+        + 0.2 * metrics["expert_prior_loss"]
+        + 0.1 * (metrics["payment_nll"] + metrics["critic_constraint_loss"])
+        + 0.01 * metrics["constraint_loss"]
+        + metrics["belief_loss"],
+        rtol=1e-6,
+    )
+    padded = tf.nest.map_structure(
+        lambda value: tf.concat([value, value[-1:]], axis=0), batch
+    )
+    padded_metrics = trainer.policy_update.python_function(
+        padded, tf.constant(2), train=False
+    )
+    padded["beliefs"] = tf.nest.map_structure(
+        lambda value: tf.concat([value[:2], tf.zeros_like(value[-1:])], axis=0),
+        padded["beliefs"],
+    )
+    changed_padding = trainer.policy_update.python_function(
+        padded, tf.constant(2), train=False
+    )
+    for name in (*expected, "belief_loss", "joint_wait_brier"):
+        numpy.testing.assert_allclose(
+            changed_padding[name], padded_metrics[name], rtol=1e-5, atol=1e-7
+        )
+    numpy.testing.assert_allclose(metrics["record_fraction"], 0.5)
+    numpy.testing.assert_allclose(
+        metrics["policy"],
+        0.5 * (metrics["expert_loss"] + metrics["self_play_loss"]),
+        rtol=1e-6,
+    )
+    numpy.testing.assert_allclose(
+        metrics["self_play_loss"],
+        -metrics["self_play_gain_st3"],
+        rtol=1e-6,
+    )
+    numpy.testing.assert_allclose(
+        metrics["expert_loss"],
+        0.5 * (metrics["expert_weighted_ce"] + metrics["distill_weighted_ce"]),
+        rtol=1e-6,
     )
     before = {
         "policy": network.actor.get_layer("final_pass").kernel.numpy().copy(),
@@ -406,17 +512,24 @@ def test_awr_updates_shared_model_with_fixed_reference(awr_q_std):
         .kernel.numpy()
         .copy(),
         "critic": network.critic.event.kernel.numpy().copy(),
-        "value": network.actor.get_layer("state_value").kernel.numpy().copy(),
     }
+    distributed = training.DistributedTrainer(
+        trainer, tf.distribute.get_strategy()
+    )
     for _ in range(2):
-        metrics = trainer.policy_update(batch, tf.constant(2))
+        metrics = distributed.policy_update(batch, tf.constant(2))
         assert all(numpy.isfinite(float(v)) for v in metrics.values())
         numpy.testing.assert_allclose(
             metrics["weighted_mirror_loss"],
             0.3 * metrics["mirror_kl"],
             atol=1e-7,
         )
-    assert int(trainer.awr_optimizer.iterations) == 2
+        numpy.testing.assert_allclose(
+            metrics["weighted_magnet_loss"],
+            0.3 * metrics["magnet_kl"],
+            atol=1e-7,
+        )
+    assert int(trainer.optimizer.iterations) == 2
     assert float(metrics["mirror_kl"]) > 0
     assert float(metrics["payment_nll"]) > 0
     assert float(metrics["settlement_supported_fraction"]) == 1
@@ -424,7 +537,6 @@ def test_awr_updates_shared_model_with_fixed_reference(awr_q_std):
         "policy": network.actor.get_layer("final_pass").kernel,
         "encoder": network.actor.get_layer("board_block_3_contract").kernel,
         "critic": network.critic.event.kernel,
-        "value": network.actor.get_layer("state_value").kernel,
     }.items():
         assert numpy.any(before[name] != value.numpy()), name
     for before, after in zip(reference_weights, reference.actor.get_weights()):

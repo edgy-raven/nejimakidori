@@ -46,8 +46,9 @@ editing an old summary does not convert its records.
 int32 values containing actor-relative post-hand scores and zero-based ranks,
 next relative dealer, next hand number, terminal flag and outstanding deposits.
 Complete source games supply these labels before hand filtering. Parsing applies
-the shared fixed ST3 continuation forecast to obtain the observed return for
-value regression and AWR. These outcomes are targets, never encoder inputs.
+the shared fixed ST3 continuation forecast to obtain `projected_st3` in raw
+ST3 units for offline forecast diagnostics. Expert imitation weights use current-Q
+action gaps, not this observed target. These outcomes are targets, never encoder inputs.
 Older records without this required field must be rebuilt.
 
 For prediction meanings, see [the model architecture](../model/ARCHITECTURE.md).

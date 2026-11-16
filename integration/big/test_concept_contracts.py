@@ -1,15 +1,15 @@
 """Structural families, scored yaku and guaranteed value stay distinct."""
 
 import numpy
-import riichienv
 import tensorflow as tf
-
 from integration import feature_reference
 from log_dataset import _native_collection, scoring
 from model import actions
 from model import actor as actor_layers
 from model import critic, losses, network, payment_scoring
 from training import self_play
+
+import riichienv
 
 
 def test_route_families_include_yakuman_shapes_and_kan_completions():
@@ -89,21 +89,6 @@ def test_guaranteed_han_adds_public_dora_to_situational_yaku():
     ).numpy()
     # Four dora plus riichi plus menzen tsumo: at least six han.
     assert not completion[0, 1, 1, ordinary_below_haneman].any()
-    immediate_scores = critic.ImmediateOutcome()(
-        {
-            **critic.public_inputs(inputs),
-            "state": tf.zeros((1, 64)),
-            "immediate_wait": tf.ones((1, 3)),
-            "immediate_safe": tf.zeros((1, 3), tf.bool),
-            "immediate_allowed": tf.ones(1, tf.bool),
-            "immediate_ankan": tf.zeros(1, tf.bool),
-            "immediate_ippatsu": tf.ones((1, 4), tf.bool),
-            "immediate_draw_kind": tf.zeros(1, tf.int32),
-            "immediate_tenpai": tf.fill((1, 4), -1),
-        }
-    )["immediate_score_probability"].numpy()
-    # Four dora plus riichi plus ippatsu: at least six han.
-    assert not immediate_scores[0, 0, ordinary_below_haneman].any()
     terminal = tf.nn.softmax(
         payment_scoring.masked_score_logits(
             logits=tf.zeros((1, 24, 1, len(payment_scoring.SCORES))),
@@ -134,14 +119,11 @@ def test_bonus_prediction_uses_counts_without_bonus_type_heads():
     feature_reference.public_scoring_features(inputs)
     inputs = {name: tf.constant(value) for name, value in inputs.items()}
     public = critic.public_inputs(inputs, tf.constant([[0, 0]]))
-    predictor = critic.PaymentCritic()
+    predictor = critic.PaymentCritic(belief_offset=0)
     result = predictor.distributions(
         {
             **public,
             "state": tf.zeros((1, 64)),
-            "immediate_wait": tf.zeros((1, 3)),
-            "immediate_safe": tf.zeros((1, 3), tf.bool),
-            "immediate_allowed": tf.zeros(1, tf.bool),
         }
     )
     assert result["bonus_logits"].shape == (1, 24, 14)

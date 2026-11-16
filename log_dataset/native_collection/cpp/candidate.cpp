@@ -196,7 +196,13 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
       else
         flags(s.hand, s.exposed, s.wind, (s.actor + 4 - s.oya) % 4, cut_y, t);
       row.put(discard_action_yaku_possibility, cut * 19, cut_y, 19);
-      auto v = ranges(after, availability, t, context, score, structural[t]);
+      auto scoring_availability = availability;
+      scoring_availability.prior = legal.riichi[cut] && s.phase == 3;
+      auto v = ranges(after, scoring_availability, t, context, score, structural[t]);
+      if (scoring_availability.prior) {
+        row.set(riichi_dama_points, cut, v.dama_points);
+        row.set(riichi_extra_han, cut, v.extra_han);
+      }
       write(row, v, cut);
       write(row, v, 37 + cut);
       if (legal.riichi[cut])
@@ -272,8 +278,15 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
               analysis.shanten[base(cut)] + 1);
       row.set(chi ? chi_discard_ukeire_count : pon_discard_ukeire_count, position,
               analysis.ukeire_count[base(cut)]);
-      auto v =
-          ranges(after, availability, base(cut), context, score, structural[base(cut)]);
+      auto scoring_availability = availability;
+      scoring_availability.prior = s.phase == 1 && analysis.shanten[base(cut)] == 0;
+      auto v = ranges(after, scoring_availability, base(cut), context, score,
+                      structural[base(cut)]);
+      if (scoring_availability.prior) {
+        int slot = (chi ? option : 3) * 37 + cut;
+        row.set(call_open_points, slot, v.dama_points);
+        row.set(call_riichi_points, slot, v.riichi_points);
+      }
       write(row, v, (chi ? 112 : 223) + position);
       focus.fast |= (analysis.shanten[base(cut)] < a.distance ||
                      (analysis.shanten[base(cut)] == a.distance &&

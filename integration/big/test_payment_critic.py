@@ -6,13 +6,13 @@ import types
 
 import numpy
 import pytest
-import riichienv
 import tensorflow as tf
-
 from log_dataset import _native_collection, scoring
 from model import actions, beliefs, critic, export, inference
 from model import network as joint_network
 from model import outcomes, payment_scoring
+
+import riichienv
 
 
 def test_score_states_are_canonical_and_respect_win_methods():
@@ -293,17 +293,6 @@ def test_joint_training_checkpoint_export_and_placement_inference(
             inputs,
             outputs,
         )
-    assert (
-        float(
-            tf.linalg.global_norm(
-                tape.gradient(
-                    metrics["value_loss"],
-                    network.actor.get_layer("state_value").trainable_variables,
-                )
-            )
-        )
-        > 0
-    )
     assert all(numpy.isfinite(float(value)) for value in metrics.values())
     # Full-batch critic supervision includes every policy position.
     assert float(
@@ -338,7 +327,6 @@ def test_joint_training_checkpoint_export_and_placement_inference(
             {
                 **prediction,
                 "selected": prediction["selected"] + [part.start, 0],
-                "immediate_rows": prediction["immediate_rows"] + part.start,
             }
         )
     # Compare aggregation with fixed predictions. Separate BF16 forward
@@ -368,8 +356,6 @@ def test_joint_training_checkpoint_export_and_placement_inference(
         "belief_loss",
         "specialist_loss",
         "critic_loss",
-        "value_loss",
-        "value_bias",
         "joint_loss",
     ):
         numpy.testing.assert_allclose(combined[name], expected[name], atol=2e-5)
@@ -458,25 +444,21 @@ def test_joint_training_checkpoint_export_and_placement_inference(
     serving = export.ServingModel(restored)
     expected = serving.serve(**inputs[0])
 
-    @tf.function
-    def actor_value(features):
-        return restored.actor(features, training=False)["state_value"]
-
     root_outputs = serving.root_evaluation(**inputs[0])
-    assert "state_value" not in expected
-    numpy.testing.assert_allclose(
-        root_outputs["state_value"],
-        actor_value(inputs[0]),
-        atol=1e-6,
-    )
-    for name in (
-        "critic_action_indices",
-        "critic_projected_st3",
-        "discard_policy_logits",
-    ):
+    assert "state_value" not in restored_outputs
+    assert "state_value" not in root_outputs
+    for name in ("critic_action_indices", "discard_policy_logits"):
         numpy.testing.assert_allclose(
             root_outputs[name], expected[name], rtol=1e-5, atol=1e-6
         )
+    # Independent serving traces can reorder the FP32 settlement reduction;
+    # the absolute tolerance also covers values whose expectation is near zero.
+    numpy.testing.assert_allclose(
+        root_outputs["critic_projected_st3"],
+        expected["critic_projected_st3"],
+        rtol=1e-5,
+        atol=3e-5,
+    )
     numpy.testing.assert_allclose(
         tf.reduce_sum(expected["final_placement_probabilities"], -1),
         1,

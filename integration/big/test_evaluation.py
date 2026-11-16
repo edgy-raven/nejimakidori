@@ -2,17 +2,29 @@
 
 import argparse
 import json
+import os
 import pathlib
 import shutil
+import types
 
+import pytest
+import tensorboard.backend.event_processing.event_accumulator as events
 import tensorflow as tf
-
 from log_dataset import _native_collection
 from model import actions
-from training import evaluate, frozen_policy
+from training import distill_policy, evaluate, frozen_policy
+
+import riichienv
 
 
-def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(tmp_path):
+@pytest.mark.parametrize("opponent_kind", ["savedmodel", "distill"])
+def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(
+    tmp_path, opponent_kind
+):
+    if opponent_kind == "distill" and "DISTILL_SOURCE" not in os.environ:
+        pytest.skip(
+            "Set DISTILL_SOURCE and DISTILL_CHECKPOINT for distill policy games"
+        )
     root = pathlib.Path(__file__).parents[2]
     bundle = tmp_path / "policy"
     for name in ("model", "training", "log_dataset"):
@@ -76,7 +88,13 @@ def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(tmp_path):
         workers=1,
         devices="-1",
         batch_games=4,
+        distill_source=None,
+        tensorboard=None,
     )
+    if opponent_kind == "distill":
+        args.old = os.environ["DISTILL_CHECKPOINT"]
+        args.distill_source = os.environ["DISTILL_SOURCE"]
+        args.batch_games = 2
     evaluate.run(args)
     result = tmp_path / "games/games.jsonl"
     before = result.read_bytes()
@@ -87,6 +105,65 @@ def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(tmp_path):
     summary = json.loads((tmp_path / "games/summary.json").read_text())
     assert summary["compared_games"] == 4
     assert summary["seed_groups"] == 1
+    assert summary["format"] == (
+        "riichienv_standard_south"
+        if opponent_kind == "distill"
+        else "riichienv_duplicate_south"
+    )
     assert evaluate.summarize(rows[:3]) is None
     evaluate.run(args)
     assert result.read_bytes() == before
+    history = events.EventAccumulator(str(tmp_path / "games/tensorboard"))
+    history.Reload()
+    assert history.Scalars("progress/completed_games")[-1].value == 4
+    assert history.Scalars("progress/percent")[-1].value == 100
+    assert history.Scalars("difference/rank_points")[-1].step == 4
+    if opponent_kind == "distill":
+        fixture = json.loads(
+            (
+                root / "integration/fixtures/model/" "distill_delayed_dora.json"
+            ).read_text()
+        )
+        observation = riichienv.Observation.deserialize_from_base64(
+            fixture["observation"]
+        )
+        worker = distill_policy.DistillPolicy(
+            tmp_path / "games/old", capacity=1
+        )
+        try:
+            worker.process.stdin.write(
+                json.dumps(
+                    {
+                        "reset": True,
+                        "items": [
+                            {
+                                "stream": 0,
+                                "seat": fixture["seat"],
+                                "events": [
+                                    json.dumps(event)
+                                    for event in fixture["events"]
+                                ],
+                            }
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            worker.process.stdin.flush()
+            action = worker.receive_actions(
+                [
+                    (
+                        0,
+                        types.SimpleNamespace(mjai_log=fixture["events"]),
+                        observation,
+                    )
+                ]
+            )[0]
+            assert action.action_type == riichienv.ActionType.RON
+        finally:
+            worker.close()
+        changed = tmp_path / "changed.zip"
+        changed.write_bytes(pathlib.Path(args.old).read_bytes() + b"changed")
+        args.old = str(changed)
+        with pytest.raises(ValueError, match="Evaluation settings changed"):
+            evaluate.run(args)

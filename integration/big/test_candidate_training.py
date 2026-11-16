@@ -1,5 +1,6 @@
-"""Candidate AWR passes preserve source budgets and observed targets."""
+"""Candidate passes preserve source budgets and settlement targets."""
 
+import errno
 import json
 import pathlib
 import types
@@ -7,16 +8,64 @@ import types
 import numpy
 import pytest
 import tensorflow as tf
-
-from log_dataset import afk, replay, training_data
+from log_dataset import afk
+from log_dataset import replay as game_replay
+from log_dataset import training_data
+from model import actions
 from training import self_play
-from training.candidate import run
+from training.candidate import replay, run
+
+
+def test_checkpoint_matches_use_disjoint_wall_seeds(tmp_path, monkeypatch):
+    commands = []
+    fitted = []
+    monkeypatch.setattr(
+        run.subprocess,
+        "run",
+        lambda command, **kwargs: commands.append(command),
+    )
+    network = types.SimpleNamespace(save_weights=lambda path: None)
+    command = [
+        "python",
+        "--weights",
+        "{weights}",
+        "--output",
+        "{output}",
+        "--seed",
+        "941",
+        "--games",
+        "10000",
+    ]
+    stages = ["record-imitation"] + [f"mixed-policy-{i}" for i in range(1, 6)]
+    for stage in stages + [stages[-1]]:
+        run.finish_checkpoint(
+            stage=stage,
+            root=tmp_path,
+            network=network,
+            pools=[],
+            report=lambda *args: None,
+            evaluation_command=command,
+            fit_critic=lambda stage: fitted.append((stage, len(commands))),
+        )
+    seeds = [int(argv[argv.index("--seed") + 1]) for argv in commands]
+    assert seeds == [941 + i * 2500 for i in range(6)] + [13441]
+    assert (
+        len({seed + game // 4 for seed in seeds[:6] for game in range(10000)})
+        == 15000
+    )
+    assert command[command.index("--seed") + 1] == "941"
+    assert commands[-1] == commands[-2]
+    assert fitted == [
+        (stage, index + 1) for index, stage in enumerate(stages[:-1])
+    ]
 
 
 def test_exact_source_quotas_and_disk_replay(tmp_path):
     generator = numpy.random.default_rng(941)
     pools = [
-        run.Replay(tmp_path / str(index), 13, generator, reservoir=index < 2)
+        replay.ReplayBuffer(
+            tmp_path / str(index), 13, generator, reservoir=index < 2
+        )
         for index in range(4)
     ]
     for index, pool in enumerate(pools):
@@ -36,28 +85,46 @@ def test_exact_source_quotas_and_disk_replay(tmp_path):
         seen = numpy.zeros(4, numpy.int64)
         for start in range(0, 103, 11):
             end = min(start + 11, 103)
-            quotas = run.allocation(end, fraction, 0.4, start=start)
+            quotas = replay.allocation(end, fraction, 0.4, start=start)
             numpy.testing.assert_array_equal(
                 quotas,
-                run.allocation(end, fraction, 0.4)
-                - run.allocation(start, fraction, 0.4),
+                replay.allocation(end, fraction, 0.4)
+                - replay.allocation(start, fraction, 0.4),
             )
-            batch = run.mixed_batch(pools, quotas, generator)
+            batch = replay.mixed_batch(pools, quotas, generator)
             seen += numpy.bincount(batch["source"], minlength=4)
         numpy.testing.assert_array_equal(
-            seen, run.allocation(103, fraction, 0.4)
+            seen, replay.allocation(103, fraction, 0.4)
         )
         if fraction == 0:
             assert seen[:2].sum() == 0
         numpy.testing.assert_array_equal(
-            run.allocation(103, fraction, 0.4, start=103),
+            replay.allocation(103, fraction, 0.4, start=103),
             numpy.zeros(4, numpy.int64),
         )
 
 
+def test_replay_disk_exhaustion_fails_before_rows_are_written(
+    tmp_path, monkeypatch
+):
+    pool = replay.ReplayBuffer(
+        tmp_path / "replay", 13, numpy.random.default_rng(941), reservoir=False
+    )
+
+    def full_disk(fd, offset, length):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(replay.os, "posix_fallocate", full_disk)
+    with pytest.raises(OSError) as error:
+        pool.add({"row": numpy.arange(1, 8)})
+    assert error.value.errno == errno.ENOSPC
+    assert pool.seen == 0
+    numpy.testing.assert_array_equal(pool.arrays[0], 0)
+
+
 @pytest.mark.parametrize("reservoir", (False, True))
 def test_replay_selected_rows_match_stream_replacement(tmp_path, reservoir):
-    pool = run.Replay(
+    pool = replay.ReplayBuffer(
         tmp_path / "replay",
         1031,
         numpy.random.default_rng(941),
@@ -153,7 +220,7 @@ def test_mixed_replay_preserves_shuffle_alignment_and_rng():
         expected = tf.nest.map_structure(
             lambda *values: numpy.concatenate(values)[selected], *parts
         )
-        actual = run.mixed_batch(pools, counts, generator)
+        actual = replay.mixed_batch(pools, counts, generator)
         numpy.testing.assert_equal(actual, expected)
         assert generator.bit_generator.state == reference.bit_generator.state
         actual["features"]["pair"][:] = 0
@@ -172,7 +239,7 @@ def test_record_adapter_keeps_legality_return_and_target_categories(
     )
     targets = training_data.game_targets(events + [{"type": "end_game"}])
     observations = list(
-        replay.Replay(
+        game_replay.Replay(
             "candidate-probe", afk.retained_hands(events)[0]
         ).observations()
     )[:3]
@@ -182,39 +249,68 @@ def test_record_adapter_keeps_legality_return_and_target_categories(
             for row in observations
         ]
     )
-    batch = run.record_batch(raw)
-    expected = training_data.parse_batch(raw)
-    numpy.testing.assert_allclose(batch["returns"], expected[2]["returns"])
+    _, labels, _ = training_data.parse_batch(raw)
+    distill = tf.reduce_max(
+        tf.stack(
+            [
+                tf.cast(labels[name], tf.int32)
+                for name in actions.TRAIN_POLICY_HEADS
+            ],
+            axis=1,
+        ),
+        axis=1,
+    )
+    batch = replay.decode_records(raw, distill)
+    packed = replay.pack_batch(
+        tf.nest.map_structure(lambda value: value.numpy(), batch),
+        training_data.PackedBatch(batch["features"]),
+    )
+    for name in batch["beliefs"]:
+        numpy.testing.assert_array_equal(packed["beliefs"][name], labels[name])
+        assert packed["beliefs"][name].dtype == numpy.int8
+    for name in ("ron_legal", "ron_payments"):
+        numpy.testing.assert_array_equal(packed[name], labels[name])
+        assert packed[name].shape == (3, 3, 37)
+    numpy.testing.assert_array_equal(batch["recorded"], [True] * 3)
+    numpy.testing.assert_array_equal(packed["distill"], distill)
     assert tf.reduce_all(
         tf.gather(batch["legal"], batch["chosen"], batch_dims=1)
     )
-    features = {
-        name: numpy.array([2, 1, 3, 3])
-        for name in (
-            "normal_self_shanten",
-            "chiitoitsu_self_shanten",
-            "kokushi_self_shanten",
-        )
-    }
-    features["live_wall_count"] = numpy.array([16, 30, 30, 30])
+    features = numpy.zeros(4, self_play.FEATURE_DTYPE)
+    for name in (
+        "normal_self_shanten",
+        "chiitoitsu_self_shanten",
+        "kokushi_self_shanten",
+    ):
+        features[name] = [2, 1, 3, 3]
+    features["live_wall_count"] = [16, 30, 30, 30]
+    features["self_efficiency"][:, 0] = numpy.array([1, 0, 2, 2]) / 8
+    features["pon_discard_legal"][2, 0, 0] = 1
+    features["pon_discard_shanten"][2, 0, 0] = 2
+    features["kan_legal_mask"][3, 1] = 1
+    features["kan_efficiency"][3, 0, 0] = 1 / 8
     numpy.testing.assert_array_equal(
         self_play.target_categories(
             features, numpy.array([0, 1, 2, 3]), numpy.array([0, 0, 0, 4])
         ),
-        [1, 2, 4, 12],
+        [1, 2, 4, 4],
     )
 
     monkeypatch.setattr(
-        training_data,
-        "dataset",
-        lambda **kwargs: tf.data.Dataset.from_tensor_slices(raw).batch(2),
+        replay.hybrid,
+        "raw_batches",
+        lambda *args: tf.data.Dataset.from_tensor_slices((raw, distill)).batch(
+            2
+        ),
     )
-    args = types.SimpleNamespace(data="fixture", batch_size=2, seed=941)
-    batches = list(run.record_stream(args).as_numpy_iterator())
+    args = types.SimpleNamespace(
+        distill_labels="fixture", batch_size=2, seed=941
+    )
+    batches = list(replay.recorded_batches(args).as_numpy_iterator())
     assert [len(batch["chosen"]) for batch in batches] == [2, 1]
     numpy.testing.assert_array_equal(
-        numpy.concatenate([batch["returns"] for batch in batches]),
-        expected[2]["returns"],
+        numpy.concatenate([batch["recorded"] for batch in batches]),
+        [True] * 3,
     )
 
 
@@ -223,20 +319,20 @@ def test_record_stream_consumes_rows_without_a_small_fixed_cache(monkeypatch):
         {"chosen": numpy.arange(start, start + 4)} for start in (0, 4, 8)
     ]
     monkeypatch.setattr(
-        run,
-        "record_stream",
+        replay,
+        "recorded_batches",
         lambda *a, **kw: types.SimpleNamespace(
             as_numpy_iterator=lambda: iter(batches)
         ),
     )
     monkeypatch.setattr(
-        run,
+        replay,
         "classify_records",
         lambda batch, *a: (batch["chosen"] % 2).astype(numpy.uint8),
     )
-    monkeypatch.setattr(run, "prepare", lambda batch, trainer: batch)
+    monkeypatch.setattr(replay, "pack_batch", lambda batch, trainer: batch)
     targeted = []
-    stream = run.RecordStream(
+    stream = replay.RecordedStream(
         None,
         types.SimpleNamespace(feature_packing=None),
         types.SimpleNamespace(
@@ -252,46 +348,47 @@ def test_record_stream_consumes_rows_without_a_small_fixed_cache(monkeypatch):
     assert targeted == list(range(1, 12, 2))
 
 
-def test_recorded_and_mixed_restarts_accept_capped_ramp(tmp_path):
+def test_candidate_plan_uses_selected_recipe(tmp_path):
     command = tmp_path / "evaluation.json"
-    command.write_text(json.dumps(["evaluate", "{weights}", "{output}"]))
+    command.write_text(
+        json.dumps(
+            [
+                "evaluate",
+                "{weights}",
+                "{output}",
+                "--seed",
+                "941",
+                "--games",
+                "4",
+            ]
+        )
+    )
     args = run.argument_parser().parse_args(
         [
             "--initial",
-            "awr4.weights.h5",
-            "--data",
-            str(tmp_path),
+            "checkpoint.weights.h5",
+            "--reference",
+            "reference.weights.h5",
+            "--distill-labels",
+            str(tmp_path / "labels"),
             "--output",
             str(tmp_path / "run"),
             "--evaluation-command",
             str(command),
             "--collection-device",
             "GPU-test",
-            "--mixed-only",
-            "--record-fractions",
-            "0.8,0.6,0.4,0.2,0.2",
         ]
     )
-    fractions, _ = run.settings(args)
+    fractions, evaluation = run.settings(args)
     assert fractions == [0.8, 0.6, 0.4, 0.2, 0.2]
-    args.awr_pull = 0.3
-    with pytest.raises(ValueError, match="fixed --awr-reference"):
-        run.settings(args)
-    args.awr_reference = "reference.weights.h5"
-    args.awr_q_std = 1.0
-    run.settings(args)
-    for penalty in (-1.0, float("nan"), float("inf")):
-        args.awr_q_std = penalty
-        with pytest.raises(ValueError, match="standard-deviation"):
-            run.settings(args)
-    args.awr_q_std = 1.0
-    for coefficient in (-0.1, float("nan"), float("inf")):
-        args.awr_pull = coefficient
-        with pytest.raises(ValueError, match="pull"):
-            run.settings(args)
-    args.awr_pull = 0.3
-    args.mixed_only = False
-    run.settings(args)
+    assert evaluation == json.loads(command.read_text())
+    assert (args.mirror_coefficient, args.magnet_coefficient) == (0.3, 0.3)
+    assert args.risk_coefficient == 0.1
+    assert args.expert_prior == 0.2
+    assert args.riichi_rate_target == 0.20
+    assert (args.target_fraction, args.root_copies) == (0.5, 1)
+    assert args.learning_rate == 2e-5
+    assert args.reference != args.initial
 
 
 def test_cohort_checkpoints_are_immutable_and_latest_tracks_progress(tmp_path):
@@ -308,29 +405,3 @@ def test_cohort_checkpoints_are_immutable_and_latest_tracks_progress(tmp_path):
         run.save_cohort(network, tmp_path, 100)
     assert first.read_bytes() == b"first cohort"
     assert (tmp_path / "latest.weights.h5").read_bytes() == b"second cohort"
-
-
-@pytest.mark.parametrize("mixed_only", [False, True])
-def test_awr_rate_is_constant_within_each_pass(mixed_only):
-    args = types.SimpleNamespace(
-        mixed_only=mixed_only,
-        awr_learning_rate=5e-6,
-        awr_final_learning_rate=3e-6,
-        record_fractions="0.8,0.6,0.4,0.2,0.2",
-    )
-    trainer = types.SimpleNamespace(
-        awr_optimizer=types.SimpleNamespace(learning_rate=tf.Variable(0.0))
-    )
-    rates = (
-        [5e-6, 13e-6 / 3, 11e-6 / 3, 3e-6, 3e-6]
-        if mixed_only
-        else [5e-6, 4.5e-6, 4e-6, 3.5e-6, 3e-6, 3e-6]
-    )
-    for phase, expected in enumerate(rates):
-        for position in (0, 50, 99):
-            run.set_awr_learning_rate(
-                trainer, args, phase * 100 + position, 100
-            )
-            assert float(trainer.awr_optimizer.learning_rate) == pytest.approx(
-                expected
-            )

@@ -11,33 +11,46 @@
 | Ordinary generated | Bounded recent replay pool |
 | Targeted generated | Bounded recent replay pool |
 
-`--target-fraction` allocates targeted positions within each source. Ordinary
+A fixed 50% share allocates targeted positions within each source. Ordinary
 sampling can also encounter targeted states. Cumulative quotas preserve source
 and target shares across partial batches. All strata enter one shuffled
-minibatch and share AWR weight normalization and optimizer state.
+minibatch and share optimizer state; recorded weights normalize across recorded rows.
 
 `--replay-positions` sets capacity per pool. Three memory-mapped pools live
 under the run output; ordinary recorded data does not need a pool. Generated
 chunks are shuffled so the last appended fork cannot dominate the pool.
 
+Every replay row also retains int8 opponent shanten, improving-tile and held
+tile-count labels, separate from packed public features. Native continuations
+label their actual decision-time hidden hands, including forced root rows.
+The existing TFRecords already contain these labels; replay pools must be
+created anew with this contract.
+
+Self-play inference transfers all five policy heads in one contiguous output
+buffer, then returns NumPy views for host-side action sampling. Packed public
+feature transport and replica ordering are unchanged.
+
 ## Target predicates
 
 | Path | Eligibility | Action pair |
 | --- | --- | --- |
-| Calls | Optional response or own-kan decision, including passes | Preferred legal call versus pass; own kan versus decline |
+| Calls | Optional response or own-kan with a strictly shanten-reducing call, including pass alternatives | Preferred shanten-reducing call versus pass; own kan versus decline |
 | Tenpai | Actual shanten ≤0 | Keep tenpai versus break it |
 | Keiten | Actual shanten ≤1 and live wall ≤16 | Preserve best shanten versus worsen it |
-| Disagreement | Sample 1/64 of discard states; distinct choices and sufficient Q gap | Max-Q versus legal Q closest to V |
+| Disagreement | Sample 1/64 of discard states; distinct max-Q/policy choices and sufficient Q gap | Max-Q versus policy-preferred legal action |
 
 Shanten features store actual distance plus one. Hand-category pairs choose the
 highest-policy-probability action in each group, including riichi/discard
 variants. Roots without both groups are skipped. Only the disagreement path
-uses max-Q versus closest-to-V.
+uses max-Q versus the policy-preferred action.
 
-Disagreement qualifies if the Q gap is at least 0.25 ST3, or the closest Q is
-still at least 8 ST3 from V. Both quantities use current-hand projected ST3.
-Identical choices never form a pair. These are selection rules, not labels
+Disagreement qualifies when the max-Q versus policy-action gap is at least
+0.25 ST3. Identical choices never form a pair. These are selection rules, not labels
 that declare either action correct.
+
+Same-shanten or worse calls are excluded from targeted replay and root
+action pairs, including own kan. Pass is targeted only if an improving call
+exists. Natural replay and inference legality remain unchanged.
 
 ## Overlapping paths
 
@@ -48,7 +61,8 @@ Recorded and generated target selection use observable state only.
 
 ## Matched continuations
 
-`--root-copies` counts repeats **per action**. The selected recipe uses eight.
+Each selected action receives one continuation, paired with the other action
+using the same fork seed.
 
 1. Capture a root during a fresh game.
 2. Keep the observed prefix and concealed hands fixed.
@@ -59,10 +73,9 @@ Recorded and generated target selection use observable state only.
 Calls are attempted before priority resolution. Independent root streams share
 inference batches; feature rows return to trajectory order before labeling.
 
-The root count decreases approximately in proportion to the repeat count,
-targeting two continuation games per natural game when enough pairs exist.
+Each selected root produces two continuation games when both actions exist.
 Fresh-position budgets and replay shares do not change. Report roots, branches
-and training positions separately: repeated branches from one root correlate.
+and training positions separately: the two branches from one root correlate.
 
 ## What enters replay
 
@@ -71,22 +84,32 @@ and training positions separately: repeated branches from one root correlate.
 | `paired_root` | Marks the forced first action during collection |
 | `root_path` | Keiten=1, tenpai=2, calls=4, disagreement=8 |
 | Behavior distribution | Records the initial intervention |
-| Current-hand settlement | Observed target for V and critic |
+| Current-hand settlement | Observed target for the critic |
 | Later-hand decisions | Ordinary examples from the continuation |
 
 Only suffix decisions enter replay. Root markers are not retained in compact
 replay. Each realized return stays a separate target: matching seeds does not
-make AWR consume an eight-runout average or a paired action-difference target.
-V is a replay-mixture baseline, including forced roots; these samples are not
-unbiased observations under the unmodified current policy.
+make the actor consume a paired action-difference target. Generated rows train
+expected-Q improvement, not imitation of forced actions.
 
 ## Collection timing
 
 A frozen joint model collects at most one cohort ahead of the learner. Its
-actor, V and action utilities stay fixed for the collection job. After the
+actor and action utilities stay fixed for the collection job. After the
 first cohort of each pass, generated data is one cohort behind the learner.
 Evaluation is a pass-boundary barrier.
 
 A partial final cohort scales its fresh-position budget proportionally.
 Collection estimates positions per game to shrink the last game batch and
 continues until the budget is met.
+
+## Outcome labels
+
+Only the played action's observed settlement supervises Q. Replay retains its
+existing hidden-label schema; unplayed terminal alternatives receive no loss.
+Hidden labels remain separate from public model inputs.
+
+Observed ST3 targets use raw `projected_st3` throughout replay. Recorded rows
+project their stored `critic/settlement`; generated rows project their actual
+`settlement` in the training controller before packing. Collection workers stay
+TensorFlow-free. Padding repeats the target but contributes zero loss/count.

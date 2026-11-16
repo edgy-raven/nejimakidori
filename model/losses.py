@@ -47,10 +47,7 @@ def masked_totals(loss, mask, weight=None):
     if weight is not None:
         mask *= tf.cast(weight, tf.float32)
     return tf.stack(
-        [
-            tf.reduce_sum(tf.cast(loss, tf.float32) * mask),
-            tf.reduce_sum(mask),
-        ]
+        [tf.reduce_sum(tf.cast(loss, tf.float32) * mask), tf.reduce_sum(mask)]
     )
 
 

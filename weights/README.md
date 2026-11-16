@@ -1,27 +1,27 @@
 # Model files
 
-Download [Nejimakidori 2026-11-10](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-20261110)
+Download [Nejimakidori v2](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2)
 and complete [source setup](../SETUP.md).
 
 The release contains two downloads:
 
 | Download | Contents |
 | --- | --- |
-| `nejimakidori-20261110.tar.gz` | Model, training weights, source and evaluation results. |
+| `nejimakidori-v2.tar.gz` | Model, training weights, source and evaluation results. |
 | `SHA256SUMS` | SHA-256 checksum for the archive. |
 
 ## Download and verify
 
 Download the archive and checksum from the
-[release](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-20261110):
+[release](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2):
 
 ```sh
 mkdir -p artifacts
 cd artifacts
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-20261110/nejimakidori-20261110.tar.gz
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-20261110/SHA256SUMS
+curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2/nejimakidori-v2.tar.gz
+curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2/SHA256SUMS
 sha256sum -c SHA256SUMS
-tar -xzf nejimakidori-20261110.tar.gz
+tar -xzf nejimakidori-v2.tar.gz
 cd ..
 ```
 
@@ -41,3 +41,10 @@ matching source, and evaluation results. The contents are listed below.
 
 Frozen evaluation uses the matching source included in the release. Training
 weights contain no optimizer state and require a compatible model architecture. To continue training, see the [training guide](../training/README.md).
+
+## Evaluation
+
+The released checkpoint completed 10,000 games against v1 with a mean
+difference of +0.3141 ST3 points/game (paired 95% bounds -2.7954 to +3.6112).
+This comparison does not establish a strength advantage. The release contains
+the evaluated policy weights, before subsequent match-log critic fitting.

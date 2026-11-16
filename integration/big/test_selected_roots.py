@@ -4,7 +4,6 @@ import json
 
 import numpy
 import pytest
-
 from log_dataset import _native_collection
 from model import actions
 from training import self_play
@@ -156,7 +155,7 @@ def test_focused_worker_collection_keeps_natural_rows(workers, focus):
     def score_roots(features):
         scored_rows.append(len(features["decision_phase"]))
         if focus not in ("disagreement", "targeted"):
-            pytest.fail("Q/V pairing must only score disagreement roots")
+            pytest.fail("Q/policy pairing must only score disagreement roots")
         pairs = numpy.full(
             (len(features["decision_phase"]), 2), -1, numpy.int32
         )
@@ -223,17 +222,15 @@ def test_focused_worker_collection_keeps_natural_rows(workers, focus):
         )
 
 
-def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
+def test_disagreement_compares_max_q_with_policy_choice(monkeypatch):
     import types
 
     import tensorflow as tf
-
     from training.candidate import collection
 
     outputs = {
-        "state_value": tf.Variable([0.01, 0.15]),
         "critic_projected_st3": tf.Variable([10.0, 0.0, 5.0, 5.0]),
-        actions.TRAIN_POLICY_HEADS[0]: tf.constant(
+        actions.TRAIN_POLICY_HEADS[0]: tf.Variable(
             [[0.0, numpy.log(9.0)], [0.0, 0.0]]
         ),
     }
@@ -241,7 +238,6 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
     def score(**inputs):
         rows = tf.cast(inputs["live_wall_count"], tf.int32)
         return {
-            "state_value": tf.gather(outputs["state_value"], rows),
             "critic_action_indices": tf.stack(
                 [
                     tf.repeat(tf.range(tf.shape(rows)[0]), 2),
@@ -271,7 +267,9 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
     )
 
     def repeated_actor(*args, **kwargs):
-        pytest.fail("Root scoring must reuse V from its actor forward pass")
+        pytest.fail(
+            "Root scoring must reuse the policy from its actor forward pass"
+        )
 
     monkeypatch.setattr(
         collection._native_collection,
@@ -282,8 +280,8 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
         },
     )
     network = types.SimpleNamespace(actor=repeated_actor)
-    evaluate = collection.disagreement_evaluator(network)
-    for count in (2, 9):
+    evaluate = collection.root_scorer(network)
+    for count in (2, 9, 65, 129):
         priority = evaluate(
             {
                 "decision_phase": numpy.zeros(count, numpy.int8),
@@ -296,16 +294,14 @@ def test_disagreement_priorities_compare_actions_and_value_in_st3(monkeypatch):
         numpy.testing.assert_array_equal(priority["actions"][0], [0, 1])
         numpy.testing.assert_array_equal(priority["actions"][1], [-1, -1])
 
-    # A max-Q/closest-V gap below 0.25 does not qualify, unless the
-    # closest action is still at least eight ST3 from V.
+    # Only distinct policy/max-Q actions with a 0.25 ST3 gap qualify.
     outputs["critic_projected_st3"].assign([0.1, 0.0, 0.1, 0.0])
-    outputs["state_value"].assign([-0.079, -0.08])
+    outputs[actions.TRAIN_POLICY_HEADS[0]].assign([[0.0, 1.0], [0.0, 1.0]])
     features = {
         "decision_phase": numpy.zeros(2, numpy.int8),
         "live_wall_count": numpy.arange(2, dtype=numpy.int8),
     }
-    numpy.testing.assert_array_equal(evaluate(features)["priority"], [0, 1])
-    outputs["state_value"].assign([0.0, 0.0])
+    numpy.testing.assert_array_equal(evaluate(features)["priority"], [0, 0])
     outputs["critic_projected_st3"].assign([0.249, 0.0, 0.25, 0.0])
     numpy.testing.assert_array_equal(evaluate(features)["priority"], [0, 1])
     rows = numpy.zeros(2, self_play.FEATURE_DTYPE)
@@ -368,13 +364,28 @@ def test_action_pairs_repeat_each_choice_on_matched_walls():
 
 
 def test_call_and_hand_pairs_use_policy_choices_within_separate_groups():
-    features = {"discard_action_all_shanten": numpy.full(37, 2)}
+    features = numpy.zeros((), self_play.FEATURE_DTYPE)
+    for name in (
+        "normal_self_shanten",
+        "chiitoitsu_self_shanten",
+        "kokushi_self_shanten",
+    ):
+        features[name] = 3
+    features["self_efficiency"][0] = 2 / 8
+    features["discard_action_all_shanten"] = 2
     features["discard_action_all_shanten"][[1, 2]] = 1
+    features["chi_discard_legal"][0, 0] = 1
+    features["chi_discard_shanten"][0, 0] = 2
+    features["pon_discard_legal"][0, 0] = 1
+    features["pon_discard_shanten"][0, 0] = 2
+    features["kan_legal_mask"][[2, 9]] = 1
+    features["kan_efficiency"][1, 0] = 1 / 8
+    features["kan_efficiency"][8, 0] = 2 / 8
     for head, codes, scores, expected in (
         (0, [1, 2, 3], [1, 2, 9], [2, 3]),
         (1, [1, 38, 3], [2, 3, 9], [38, 3]),
-        (2, [0, 1, 112, 149], [10, 2, 3, 4], [149, 0]),
-        (3, [0, 2, 9], [10, 2, 3], [9, 0]),
+        (2, [0, 1, 112, 149], [10, 2, 3, 4], [112, 0]),
+        (3, [0, 2, 9], [10, 2, 3], [2, 0]),
     ):
         legal = numpy.zeros(150, numpy.bool_)
         policy = numpy.full(150, -1e9)
@@ -390,3 +401,47 @@ def test_call_and_hand_pairs_use_policy_choices_within_separate_groups():
     legal[:] = False
     legal[0] = True
     assert self_play.focused_action_pair(features, 2, legal, policy) is None
+
+
+def test_targeted_calls_require_shanten_progress_for_both_root_and_replay():
+    features = numpy.zeros(5, self_play.FEATURE_DTYPE)
+    for name in (
+        "normal_self_shanten",
+        "chiitoitsu_self_shanten",
+        "kokushi_self_shanten",
+    ):
+        features[name] = 2
+    features["live_wall_count"] = 8
+    features["self_efficiency"][:, 0] = 1 / 8
+    features["chi_discard_legal"][:, 0, :2] = 1
+    features["chi_discard_shanten"][:, 0, :2] = [1, 2]
+    features["chi_discard_shanten"][2] = 2
+    features["kan_legal_mask"][:, 1] = 1
+    features["kan_efficiency"][:, 0, 0] = 1 / 8
+    features["kan_efficiency"][4, 0, 0] = 0
+    heads = numpy.array([2, 2, 2, 3, 3])
+    numpy.testing.assert_array_equal(
+        self_play.target_categories(features, heads, numpy.zeros(5)),
+        [4, 4, 0, 0, 4],
+    )
+    # Pass remains useful when the alternative improves; selected redundant
+    # calls do not enter targeted replay through the overlapping keiten bit.
+    numpy.testing.assert_array_equal(
+        self_play.target_categories(
+            features, heads, numpy.zeros(5), chosen=numpy.array([0, 2, 0, 1, 1])
+        ),
+        [4, 0, 0, 0, 4],
+    )
+    policy = numpy.arange(150, dtype=float)
+    legal = numpy.zeros(150, bool)
+    legal[:3] = True
+    numpy.testing.assert_array_equal(
+        self_play.focused_action_pair(features[0], 2, legal, policy), [1, 0]
+    )
+    assert self_play.focused_action_pair(features[2], 2, legal, policy) is None
+    # High shanten is clipped in family-category features, not efficiency.
+    features[0]["self_efficiency"][0] = 4 / 8
+    features[0]["chi_discard_shanten"][0, :2] = [4, 5]
+    numpy.testing.assert_array_equal(
+        self_play.focused_action_pair(features[0], 2, legal, policy), [1, 0]
+    )

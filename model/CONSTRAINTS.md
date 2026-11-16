@@ -17,6 +17,30 @@ Shared-head constraint weight is 0.01. Critic constraints join the critic
 objective at weight 0.1. Unknown feasible yaku do not become positive labels.
 Padded rows do not contribute.
 
+Opponent held-count marginals respect known meld copies, concealed hand sizes
+and shared unseen-copy limits. Declared riichi or four fixed melds (hadaka
+tanki) fix the opponent's shanten distribution to tenpai. Both require tenpai
+in exhaustive-draw settlements; four melds do not imply a riichi deposit.
+Both projections teach their raw heads through detached-target KL penalties.
+Direct belief supervision uses the projected outputs.
+
+Structural wait probability is tenpai probability times the conditional wait
+probability. There is one settlement head, with no separate immediate-ron
+branch. Last-discard and abort boundaries restrict event support, preserving
+ron priority and declaration timing. Future wins are not capped by present
+waits because hands can change before winning.
+
+Directional penalties compare half/double belief-odds probes with all other
+inputs fixed. Higher opponent tenpai should increase that opponent's winning
+probability and readiness conditional on exhaustive draw. Higher conditional
+wait probability on the candidate tile should increase that opponent's ron
+against the actor. Triple-ron abort is excluded from winning marginals.
+Violating probe pairs train toward a detached equal-probability target;
+probe inputs are detached so the critic, not the belief labels, absorbs this
+penalty. The terms enter critic constraints once. They encourage directional
+consistency but do not guarantee global monotonicity. Known readiness and
+no-tile actions naturally have no applicable probe change.
+
 ## Policy exceptions
 
 | Case | Treatment |

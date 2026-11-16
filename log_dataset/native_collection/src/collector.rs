@@ -1,7 +1,9 @@
 use crate::{
     actions, candidate,
     history::PublicHistory,
+    nyanten,
     packed::{ROW_BYTES, Row},
+    scoring,
 };
 use pyo3::{
     prelude::*,
@@ -14,6 +16,7 @@ use riichienv_core::{
     observation::Observation,
     rule::GameRule,
     state::GameState,
+    types::{Conditions, Wind},
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -72,6 +75,123 @@ impl Game {
             cuts: [0; 4],
             riichi_turn_sum: 0,
         }
+    }
+    // Counterfactual terminal labels stay separate from observable feature rows.
+    fn ron_labels(&self, request: &Request) -> (Vec<Vec<i8>>, Vec<Vec<i32>>) {
+        let mut legal = vec![vec![-1; 37]; 3];
+        let mut payments = vec![vec![-1; 37]; 3];
+        if !matches!(request.phase, 0 | 2 | 3) {
+            return (legal, payments);
+        }
+        let cuts: Vec<_> = request
+            .obs
+            .legal_actions_method()
+            .into_iter()
+            .filter(|action| {
+                if request.phase == 2 {
+                    matches!(action.action_type, ActionType::Ankan | ActionType::Kakan)
+                } else {
+                    action.action_type == ActionType::Discard
+                }
+            })
+            .collect();
+        let mut dora = self.engine.wall.dora_indicators.clone();
+        // Discard and kakan expose deferred indicators before any ron settlement.
+        for index in
+            dora.len()..(dora.len() + self.engine.wall.pending_kan_dora_count as usize).min(5)
+        {
+            dora.push(
+                self.engine.wall.tiles
+                    [(4 + 2 * index).saturating_sub(self.engine.wall.dead_wall_shift())],
+            );
+        }
+        let ura: Vec<_> = (0..dora.len())
+            .map(|index| {
+                self.engine.wall.tiles
+                    [(5 + 2 * index).saturating_sub(self.engine.wall.dead_wall_shift())]
+            })
+            .collect();
+        for offset in 1..4 {
+            let seat = (request.seat + offset) % 4;
+            let player = &self.engine.players[seat];
+            for action in &cuts {
+                let code = if request.phase == 2 {
+                    (action.tile.unwrap() / 4) as usize
+                } else {
+                    candidate::code(action.tile.unwrap())
+                };
+                legal[offset - 1][code] = 0;
+                payments[offset - 1][code] = 0;
+            }
+            if player.hand.len() % 3 != 1
+                || player.missed_agari_riichi
+                || player.missed_agari_doujun
+            {
+                continue;
+            }
+            let evaluator = HandEvaluator::new(player.hand.clone(), player.melds.clone());
+            let waits = evaluator.get_waits_u8();
+            if player
+                .discards
+                .iter()
+                .any(|tile| waits.contains(&(tile / 4)))
+            {
+                continue;
+            }
+            for action in &cuts {
+                let tile = action.tile.unwrap();
+                if !waits.contains(&(tile / 4)) {
+                    continue;
+                }
+                let scored = scoring::normalize_score(
+                    evaluator.calc_with_indicators(
+                        tile,
+                        &dora,
+                        if player.riichi_declared { &ura } else { &[] },
+                        Some(Conditions {
+                            riichi: player.riichi_declared,
+                            double_riichi: player.double_riichi_declared,
+                            ippatsu: player.ippatsu_cycle,
+                            houtei: self.engine.wall.drawable_count == 0
+                                && !self.engine.is_rinshan_flag
+                                && request.phase != 2,
+                            chankan: request.phase == 2,
+                            player_wind: Wind::from((seat as u8 + 4 - self.engine.oya) % 4),
+                            round_wind: Wind::from(self.engine.round_wind),
+                            ..Conditions::default()
+                        }),
+                    ),
+                    seat as u8 == self.engine.oya,
+                    false,
+                );
+                if !scored.is_win
+                    || (action.action_type == ActionType::Ankan
+                        && !(scored.yaku.contains(&42) || scored.yaku.contains(&49)))
+                {
+                    continue;
+                }
+                let code = if request.phase == 2 {
+                    (tile / 4) as usize
+                } else {
+                    candidate::code(tile)
+                };
+                legal[offset - 1][code] = 1;
+                // Each claimant includes honba; settlement assigns it once by seat priority.
+                payments[offset - 1][code] = if player.pao.is_empty() {
+                    scored.ron_agari as i32 + 300 * self.engine.honba as i32
+                } else {
+                    -1
+                };
+            }
+        }
+        for code in 0..37 {
+            if legal.iter().all(|opponent| opponent[code] == 1) {
+                for opponent in &mut payments {
+                    opponent[code] = -1;
+                }
+            }
+        }
+        (legal, payments)
     }
     fn sync(&mut self, counts: &mut HashMap<String, i64>) {
         for event in self.engine.drain_events() {
@@ -382,6 +502,55 @@ impl NativeCollector {
             Ok(())
         })?;
         result.set_item("features", features)?;
+        // Hidden state is a training target only, never part of feature rows.
+        let mut shanten = Vec::new();
+        let mut ukeire = Vec::new();
+        let mut hand_counts = Vec::new();
+        let mut ron_legal = Vec::new();
+        let mut ron_payments = Vec::new();
+        for request in &self.requests {
+            let (legal, payments) = self.games[request.game].ron_labels(request);
+            ron_legal.push(legal);
+            ron_payments.push(payments);
+            let mut distances = Vec::new();
+            let mut improving = Vec::new();
+            let mut holdings = Vec::new();
+            for offset in 1..4 {
+                let player =
+                    &self.games[request.game].history.replay.players[(request.seat + offset) % 4];
+                let mut concealed = [0u8; 34];
+                let mut counts = vec![0i8; 37];
+                for &tile in &player.hand {
+                    concealed[(tile / 4) as usize] += 1;
+                    counts[candidate::code(tile)] += 1;
+                }
+                for meld in &player.melds {
+                    for &tile in &meld.tiles {
+                        counts[candidate::code(tile)] += 1;
+                    }
+                }
+                let (distance, waits) = if player.hand.len() % 3 == 1 {
+                    let (distance, mask) = nyanten::improving(&concealed);
+                    (
+                        distance.min(3) as i8,
+                        (0..34).map(|tile| ((mask >> tile) & 1) as i8).collect(),
+                    )
+                } else {
+                    (-1, vec![-1i8; 34])
+                };
+                distances.push(distance);
+                improving.push(waits);
+                holdings.push(counts);
+            }
+            shanten.push(distances);
+            ukeire.push(improving);
+            hand_counts.push(holdings);
+        }
+        result.set_item("ron_legal", ron_legal)?;
+        result.set_item("ron_payments", ron_payments)?;
+        result.set_item("opponent_shanten", shanten)?;
+        result.set_item("opponent_ukeire", ukeire)?;
+        result.set_item("opponent_hand_counts", hand_counts)?;
         result.set_item(
             "head",
             self.requests
@@ -556,6 +725,47 @@ impl NativeCollector {
 #[cfg(test)]
 mod root_tests {
     use super::*;
+
+    #[test]
+    fn counterfactual_ron_scores_honba_and_masks_furiten_and_response() {
+        let mut collector = NativeCollector::new(1, 941).unwrap();
+        collector.prepare();
+        let mut request = collector.requests[0].clone();
+        request.seat = 0;
+        request.phase = 0;
+        request.obs.replace_legal_actions(vec![Action::new(
+            ActionType::Discard,
+            Some(116),
+            vec![],
+            Some(0),
+        )]);
+        let game = &mut collector.games[request.game];
+        game.engine.oya = 0;
+        game.engine.round_wind = 0;
+        game.engine.honba = 2;
+        game.engine.wall.dora_indicators = vec![120];
+        game.engine.wall.pending_kan_dora_count = 0;
+        game.engine.wall.drawable_count = 30;
+        for player in &mut game.engine.players {
+            player.hand.clear();
+        }
+        game.engine.players[1].hand = vec![0, 4, 8, 36, 40, 44, 96, 100, 104, 124, 125, 126, 117];
+        let (legal, payments) = game.ron_labels(&request);
+        assert_eq!(legal[0][29], 1);
+        // Closed chanta + green dragon: 3 han, 40 fu, plus two honba.
+        assert_eq!(payments[0][29], 5800);
+        assert_eq!(legal[0][28], -1);
+        game.engine.players[1].missed_agari_doujun = true;
+        let (legal, payments) = game.ron_labels(&request);
+        assert_eq!((legal[0][29], payments[0][29]), (0, 0));
+        game.engine.players[1].missed_agari_doujun = false;
+        game.engine.players[1].discards.push(118);
+        assert_eq!(game.ron_labels(&request).0[0][29], 0);
+        request.phase = 1;
+        let (legal, payments) = game.ron_labels(&request);
+        assert!(legal.iter().flatten().all(|&value| value == -1));
+        assert!(payments.iter().flatten().all(|&value| value == -1));
+    }
 
     #[test]
     fn snapshots_preserve_state_and_shuffle_only_unseen_wall() {

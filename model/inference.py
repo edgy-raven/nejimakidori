@@ -7,7 +7,6 @@ import time
 
 import numpy
 import tensorflow as tf
-
 from log_dataset import _native_collection, scoring, shanten
 from model import actions, outcomes
 
@@ -67,10 +66,7 @@ class Predictor:
                 len(scoring.CELLS),
                 len(outcomes.PAYMENT_VALUES) + 4,
             ],
-            "critic_immediate_probabilities": [3],
-            "critic_legal_ron_probabilities": [3],
             "critic_structural_wait_probabilities": [3],
-            "critic_conditional_ron_eligibility": [3],
         }
         if self.output_specs.keys() != expected.keys():
             raise ValueError("SavedModel must include joint actor and critic")
@@ -94,10 +90,6 @@ class Predictor:
             "payment_forecast": "active_policy_mixture_honba_free",
             "payment_events": "coexisting_ron_claims_tsumo_exhaustive_abort",
             "bank_payment": "accepted_deposits_and_priority_pot_award",
-            "immediate_ron_target": (
-                "per_opponent_paid_ron_event_excluding_triple_abort"
-            ),
-            "legal_ron_target": "counterfactual_legal_ron_exposure",
             "critic_action_ranges": {
                 "discard": [0, 37],
                 "riichi": [37, 111],
@@ -197,7 +189,11 @@ class Predictor:
         action_points = outputs["critic_expected_points"].numpy()
         projected_st3 = outputs["critic_projected_st3"].numpy()
         selected = outputs["critic_action_indices"].numpy()
-        immediate = outputs["critic_immediate_probabilities"].numpy()
+        structural_waits = outputs[
+            "critic_structural_wait_probabilities"
+        ].numpy()
+        settlement_mean = outputs["settlement_mean"].numpy()
+        settlement_variance = outputs["settlement_variance"].numpy()
         predictions = []
         for index in range(len(instances)):
             row = {
@@ -217,22 +213,9 @@ class Predictor:
                     "action": int(selected[action, 1]),
                     "expected_points": action_points[action].tolist(),
                     "projected_st3": float(projected_st3[action]),
-                    "immediate_ron_probabilities": immediate[action].tolist(),
-                    "legal_ron_probabilities": outputs[
-                        "critic_legal_ron_probabilities"
-                    ][action]
-                    .numpy()
-                    .tolist(),
-                    "structural_wait_probabilities": outputs[
-                        "critic_structural_wait_probabilities"
-                    ][action]
-                    .numpy()
-                    .tolist(),
-                    "conditional_ron_eligibility": outputs[
-                        "critic_conditional_ron_eligibility"
-                    ][action]
-                    .numpy()
-                    .tolist(),
+                    "structural_wait_probabilities": structural_waits[
+                        action
+                    ].tolist(),
                 }
                 for action in numpy.flatnonzero(selected[:, 0] == index)
             ]
@@ -249,11 +232,9 @@ class Predictor:
                 ).tolist(),
                 "payment_mean": mean.tolist(),
                 "payment_stddev": numpy.sqrt(variance).tolist(),
-                "settlement_mean": outputs["settlement_mean"][index]
-                .numpy()
-                .tolist(),
+                "settlement_mean": settlement_mean[index].tolist(),
                 "settlement_stddev": numpy.sqrt(
-                    outputs["settlement_variance"][index].numpy()
+                    settlement_variance[index]
                 ).tolist(),
                 "uncertainty": "joint hand settlement",
             }

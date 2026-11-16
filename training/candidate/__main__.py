@@ -1,4 +1,4 @@
-"""Run candidate AWR training."""
+"""Run six-pass hybrid training."""
 
 from training.candidate import run
 

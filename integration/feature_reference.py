@@ -3,11 +3,11 @@
 import json
 
 import numpy
-import riichienv
-
-from integration import scoring_reference
-from log_dataset import _native_collection, shanten
+from integration import focus_reference, scoring_reference
+from log_dataset import _native_collection, amend_riichi_prior, shanten
 from model import outcomes
+
+import riichienv
 
 PHASES = {"DISCARD": 0, "RESPONSE": 1, "KAN": 2, "RIICHI": 3, "WIN": 4}
 OUTSIDE = ((), (0,), (0, 1), (1, 2), (2, 6), (6, 7), (7, 8), (8,), ())
@@ -306,6 +306,12 @@ def pack(
         ) % 4
     candidate_features(packed, state, actor, legal_observation, stage=stage)
     public_scoring_features(packed)
+    # Cross-check runtime prior facts through the recorded-data amendment path.
+    packed.update(
+        amend_riichi_prior.prior_values(
+            packed, focus_reference.visible_opponent_threat(packed)
+        )
+    )
     return packed
 
 

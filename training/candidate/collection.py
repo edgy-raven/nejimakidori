@@ -1,18 +1,17 @@
-"""One frozen-policy collection cohort ahead of the AWR learner."""
+"""One frozen-policy collection cohort ahead of the learner."""
 
 import concurrent.futures
 import time
 
 import numpy
 import tensorflow as tf
-
 from log_dataset import _native_collection, training_data
 from model import export
 from training import self_play
 
 
-def disagreement_evaluator(network):
-    """Compare discard max-Q and closest-to-V in projected current-hand ST3."""
+def root_scorer(network):
+    """Compare discard max-Q with the current policy choice."""
     module = export.ServingModel(network)
     specs = {
         name: tf.TensorSpec([None, *spec["shape"]], spec["dtype"])
@@ -23,44 +22,81 @@ def disagreement_evaluator(network):
 
     @tf.function(reduce_retracing=True)
     def predict(inputs):
-        return signature(**packing.unpack(inputs))
+        outputs = signature(**packing.unpack(inputs))
+        state_rows = outputs["critic_action_indices"][:, 0]
+        q_st3 = outputs["critic_projected_st3"]
+        state_count = tf.shape(outputs["discard_policy_logits"])[0]
+        policy_scores = tf.gather_nd(
+            outputs["discard_policy_logits"],
+            outputs["critic_action_indices"],
+        )
+        action_positions = tf.range(tf.size(q_st3))
+        selected = []
+        # Minimize -Q for the best action, then -policy logit for the comparison.
+        # Ties choose the first candidate in the existing action order.
+        for scores in (-q_st3, -policy_scores):
+            minimum = tf.math.unsorted_segment_min(
+                scores, state_rows, state_count
+            )
+            tied_for_minimum = scores == tf.gather(minimum, state_rows)
+            selected.append(
+                tf.math.unsorted_segment_min(
+                    tf.where(
+                        tied_for_minimum, action_positions, tf.size(q_st3)
+                    ),
+                    state_rows,
+                    state_count,
+                )
+            )
+        best, preferred = selected
+        different_actions = best != preferred
+        q_gap_st3 = tf.gather(q_st3, best) - tf.gather(q_st3, preferred)
+        return {
+            "priority": tf.cast(
+                different_actions & (q_gap_st3 >= 0.25),
+                tf.float32,
+            ),
+            "actions": tf.where(
+                different_actions[:, None],
+                tf.gather(
+                    outputs["critic_action_indices"][:, 1],
+                    tf.stack([best, preferred], axis=1),
+                ),
+                -1,
+            ),
+        }
 
     def evaluate(features):
-        with tf.device("/CPU:0"):
-            inputs = {
-                name: tf.convert_to_tensor(value)
-                for name, value in packing.pack_numpy(features).items()
-            }
-        outputs = predict(inputs)
-        values = outputs["state_value"].numpy() * 100
-        indices = outputs["critic_action_indices"].numpy()
-        estimates = outputs["critic_projected_st3"].numpy()
-        priority = numpy.zeros(len(values), numpy.float32)
-        pairs = numpy.full((len(values), 2), -1, numpy.int32)
-        # Encoder tf.where order is preserved by the export's active mask.
-        boundaries = numpy.searchsorted(
-            indices[:, 0], numpy.arange(len(values) + 1)
-        )
-        for row, (begin, end) in enumerate(
-            zip(boundaries[:-1], boundaries[1:])
-        ):
-            codes = indices[begin:end, 1]
-            q = estimates[begin:end]
-            best = q.argmax()
-            closest = numpy.abs(q - values[row]).argmin()
-            if best == closest:
-                continue
-            pairs[row] = codes[[best, closest]]
-            priority[row] = (
-                q[best] - q[closest] >= 0.25
-                or abs(float(q[closest] - values[row])) >= 8
+        # Stable encoder shapes avoid recompiling for each sampled root count.
+        packed = packing.pack_numpy(features)
+        count = len(features["decision_phase"])
+        # Small self-play requests need small buckets, not 64 padded roots.
+        chunk_size = min(64, 1 << (count - 1).bit_length())
+        outputs = []
+        for begin in range(0, count, chunk_size):
+            indices = numpy.minimum(
+                numpy.arange(begin, begin + chunk_size), count - 1
             )
-        return {"priority": priority, "actions": pairs}
+            with tf.device("/CPU:0"):
+                inputs = {
+                    name: tf.convert_to_tensor(value[indices])
+                    for name, value in packed.items()
+                }
+            outputs.append(
+                {
+                    name: value.numpy()[: min(chunk_size, count - begin)]
+                    for name, value in predict(inputs).items()
+                }
+            )
+        return {
+            name: numpy.concatenate([output[name] for output in outputs])
+            for name in outputs[0]
+        }
 
     return evaluate
 
 
-class Prefetch:
+class BackgroundCollector:
     def __init__(self, *, weights, device, games, workers, root_copies, seed):
         self.device = device
         self.games = games
@@ -75,7 +111,7 @@ class Prefetch:
                 workers,
                 focus="targeted",
                 root_copies=root_copies,
-                root_evaluate=disagreement_evaluator(self.network),
+                root_evaluate=root_scorer(self.network),
             )
 
     def __enter__(self):

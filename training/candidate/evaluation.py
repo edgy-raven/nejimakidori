@@ -1,4 +1,4 @@
-"""Export one phase and run its fixed-seed comparison against the incumbent."""
+"""Export one phase and compare it against the incumbent."""
 
 import argparse
 import hashlib

@@ -10,7 +10,6 @@ import zipfile
 
 import numpy
 import tensorflow as tf
-
 from integration import archive_fixture
 from log_dataset import training_data
 from model import joint_settlement
@@ -70,10 +69,10 @@ def test_dataset_job_builds_joint_records_and_resumes(tmp_path):
         )
         # Serialized expert outcomes use the same payoff as fresh rollouts.
         numpy.testing.assert_allclose(
-            inputs[2]["returns"],
-            joint_settlement.observed_payoffs(settlements) / 100,
+            inputs[2]["projected_st3"],
+            joint_settlement.observed_payoffs(settlements),
         )
-        assert numpy.isfinite(inputs[2]["returns"]).all()
+        assert numpy.isfinite(inputs[2]["projected_st3"]).all()
         validation_rows = list(
             tf.data.TFRecordDataset(
                 str(data / row["validation_path"]), compression_type="GZIP"

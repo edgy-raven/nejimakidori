@@ -53,6 +53,9 @@ struct Focus {
 struct Ranges {
   double values[8];
   uint8_t valid[4], restricted[2], eligible;
+  int dama_points;
+  uint8_t extra_han;
+  int riichi_points;
   void merge(Ranges const &other);
 };
 struct RangeContext {
@@ -60,6 +63,7 @@ struct RangeContext {
   int missed_agari;
   uint8_t unavailable[34];
   int unavailable_red[3];
+  uint8_t prior;
 };
 using Score = void (*)(void *, Hand const *, RangeContext const *, int, uint64_t,
                        Ranges *);

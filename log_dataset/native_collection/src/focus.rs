@@ -149,7 +149,7 @@ pub fn yakuhai(
         .sum()
 }
 
-fn visible_threat(state: &PublicHistory, actor: usize, analysis: &Analysis) -> bool {
+pub(crate) fn visible_threat(state: &PublicHistory, actor: usize, analysis: &Analysis) -> bool {
     let dora_counts = dora(&state.dora_markers);
     (0..4).filter(|&seat| seat != actor).any(|seat| {
         if state.declared[seat] || state.accepted[seat] {

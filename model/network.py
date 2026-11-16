@@ -1,7 +1,6 @@
 """Assembly of the shared actor, beliefs and payment critic."""
 
 import tensorflow as tf
-
 from model import actions
 from model import actor as actor_layers
 from model import beliefs, critic, encoder, joint_settlement, payment_scoring
@@ -54,7 +53,7 @@ class JointPolicyPayment(tf.keras.Model):
         tf.keras.mixed_precision.set_global_policy("float32")
         self.context = critic.HandContext(dtype="float32")
         self.public = critic.PublicContext(dtype="float32")
-        self.critic = critic.PaymentCritic()
+        self.critic = critic.PaymentCritic(belief_offset=candidates.shape[-1])
 
         inputs = self.encoder.input
         encoded = self.encoder.output
@@ -87,16 +86,6 @@ class JointPolicyPayment(tf.keras.Model):
                 outputs["round_completion_score_logits_constraint_loss"],
             ]
         )
-        # Replay state value in ST3 / 100 units; no chosen action or label.
-        outputs["state_value"] = tf.keras.layers.Dense(
-            1, kernel_initializer="zeros", dtype="float32", name="state_value"
-        )(
-            tf.keras.layers.Dense(
-                128, activation="gelu", dtype="float32", name="value_hidden"
-            )(encoded["board"])
-        )[
-            :, 0
-        ]
         # Auxiliary heads have visible-route and hindsight targets.
         # Only predictions enter the actor; labels stay in the trainer.
         self.actor = tf.keras.Model(inputs, {**outputs, **encoded})
@@ -123,14 +112,17 @@ class JointPolicyPayment(tf.keras.Model):
         self.critic.joint_distributions = tf.function(
             self.critic.joint_distributions, jit_compile=True
         )
-        self.critic.projected_mean_std = tf.function(
-            self.critic.projected_mean_std, jit_compile=True
+        self.critic.projected_mean_downside = tf.function(
+            self.critic.projected_mean_downside, jit_compile=True
         )
         self.critic.chunk_statistics = tf.function(
             self.critic.chunk_statistics, jit_compile=True
         )
         self.critic.chunk_gradients = tf.function(
             self.critic.chunk_gradients, jit_compile=True
+        )
+        self.critic.candidate_chunk = tf.function(
+            self.critic.candidate_chunk, jit_compile=True
         )
         self.critic.supervised_statistics = tf.function(
             self.critic.supervised_statistics
@@ -139,6 +131,9 @@ class JointPolicyPayment(tf.keras.Model):
             block.call = tf.function(block.call, jit_compile=True)
         river = self.encoder.get_layer("river_encoder")
         river.encode = tf.function(river.encode, jit_compile=True)
+        self.beliefs.tile_attention.call = tf.function(
+            self.beliefs.tile_attention.call, jit_compile=True
+        )
 
     def candidate_context(self, features, encoded):
         state = tf.concat(
@@ -159,14 +154,7 @@ class JointPolicyPayment(tf.keras.Model):
         base = tf.where(
             tiles == 37, 0, tf.where(tiles < 34, tiles, 4 + 9 * (tiles - 34))
         )
-        encoded["immediate_safe"] = tf.gather_nd(
-            tf.transpose(
-                actions.guaranteed_safe_tiles(features),
-                [0, 2, 1],
-            ),
-            tf.stack([encoded["selected"][:, 0], base], axis=1),
-        )
-        encoded["immediate_wait"] = tf.gather_nd(
+        encoded["structural_wait"] = tf.gather_nd(
             tf.transpose(encoded["belief_wait_probability"], [0, 2, 1]),
             tf.stack([encoded["selected"][:, 0], base], axis=1),
         )
@@ -199,8 +187,6 @@ class JointPolicyPayment(tf.keras.Model):
         return {
             **outputs,
             **self.supervised_outputs(inputs, encoded, state),
-            "immediate_safe": encoded["immediate_safe"],
-            "immediate_wait": encoded["immediate_wait"],
         }
 
     def chosen_inputs(self, features, encoded, state, chosen):
@@ -217,16 +203,7 @@ class JointPolicyPayment(tf.keras.Model):
         return {
             **joint_settlement.public_inputs(features),
             "state": tf.boolean_mask(state, recorded),
-            "immediate_safe": tf.boolean_mask(
-                encoded["immediate_safe"], recorded
-            ),
             **critic.public_inputs(features, selected),
-            "immediate_allowed": actions.immediate_decisions(
-                features, selected
-            ),
-            "immediate_wait": tf.boolean_mask(
-                encoded["immediate_wait"], recorded
-            ),
         }
 
     def supervised_outputs(self, inputs, encoded, state):
@@ -243,32 +220,4 @@ class JointPolicyPayment(tf.keras.Model):
                 recorded_inputs, inputs[2]
             )
         }
-        candidate_public = {
-            **critic.public_inputs(features, encoded["selected"]),
-            "immediate_allowed": actions.immediate_decisions(
-                features, encoded["selected"]
-            ),
-            "honba": tf.cast(
-                tf.gather(features["honba"], encoded["selected"][:, 0]),
-                tf.int32,
-            ),
-        }
-        outputs["immediate_rows"] = encoded["selected"][:, 0]
-        immediate_outputs = self.critic.immediate(
-            {
-                **candidate_public,
-                "state": state,
-                "immediate_safe": encoded["immediate_safe"],
-                "immediate_wait": encoded["immediate_wait"],
-            }
-        )
-        outputs.update(
-            critic.immediate_loss_terms(
-                labels=labels,
-                selected=encoded["selected"],
-                structure=encoded["structure"],
-                public=candidate_public,
-                outputs=immediate_outputs,
-            )
-        )
         return outputs

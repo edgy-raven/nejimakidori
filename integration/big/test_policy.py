@@ -5,7 +5,6 @@ import pathlib
 
 import numpy
 import tensorflow as tf
-
 from log_dataset import _native_collection, replay, training_data
 from model import actions
 from model import actor as actor_layers
@@ -237,8 +236,10 @@ def test_recorded_win_head_learns_both_choices_and_uses_state_baseline():
             outputs = model.actor(inputs[0])
             imitation = actor_layers.policy_loss(labels, outputs)
             current = tf.nn.log_softmax(outputs["win_decision_logits"])
-            awr = actor_layers.awr_policy_terms(
-                -current[:, target], tf.ones(1), tf.ones(1, tf.bool)
+            awr = actor_layers.weighted_imitation_terms(
+                nll=-current[:, target],
+                advantages=tf.ones(1),
+                eligible=tf.ones(1, tf.bool),
             )["loss"]
         numpy.testing.assert_allclose(
             tape.gradient(imitation, head.bias),

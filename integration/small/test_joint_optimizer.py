@@ -1,11 +1,12 @@
-"""Joint training uses dense AdamW updates and detached AWR weights."""
+"""Joint training uses dense AdamW updates and detached imitation weights."""
+
+import types
 
 import numpy
 import pytest
 import tensorflow as tf
-
 from model import actor as actor_layers
-from training import optimization
+from training import trainer
 
 
 def test_repeated_tiles_match_dense_adamw_updates():
@@ -23,7 +24,7 @@ def test_repeated_tiles_match_dense_adamw_updates():
                 tf.gather(table, tiles)
                 * tf.constant(weights, tf.float32)[:, None]
             )
-        metrics = optimization.apply_gradients(optimizer, tape, loss, [table])
+        metrics = trainer.apply_gradients(optimizer, tape, loss, [table])
         with tf.GradientTape() as tape:
             loss = tf.reduce_sum(
                 tf.matmul(tf.one_hot(tiles, 34), reference)
@@ -43,16 +44,19 @@ def test_repeated_tiles_match_dense_adamw_updates():
             )
 
 
-def test_awr_ess_matches_effective_weights_and_survives_tiny_advantages():
+def test_imitation_ess_matches_weights_and_survives_tiny_q_gaps():
     for values in (
+        numpy.array([-200.0, 0.0, 200.0, 1000.0]) / 200.0,
         numpy.log([1.0, 2.0, 100.0, 1e10]),
         numpy.array([-1000.0, -1001.0, -1002.0, 0.0]),
     ):
         nll = tf.Variable([1.0, 2.0, 4.0, 100.0])
         advantages = tf.Variable(values, dtype=tf.float32)
         with tf.GradientTape(persistent=True) as tape:
-            terms = actor_layers.awr_policy_terms(
-                nll, advantages, tf.constant([True, True, True, False])
+            terms = actor_layers.weighted_imitation_terms(
+                nll=nll,
+                advantages=advantages,
+                eligible=tf.constant([True, True, True, False]),
             )
         weights = numpy.exp(
             numpy.minimum(values[:3], numpy.log(20))
@@ -82,7 +86,7 @@ def test_nonfinite_gradients_fail_before_optimizer_mutation():
     def update():
         with tf.GradientTape() as tape:
             loss = value * tf.constant(float("nan"))
-        return optimization.apply_gradients(optimizer, tape, loss, [value])
+        return trainer.apply_gradients(optimizer, tape, loss, [value])
 
     with pytest.raises(
         tf.errors.InvalidArgumentError, match="Non-finite local gradient norm"
@@ -90,3 +94,63 @@ def test_nonfinite_gradients_fail_before_optimizer_mutation():
         update()
     assert float(value) == 1.0
     assert int(optimizer.iterations) == 0
+
+
+def test_q_gap_scores_disagreeing_labels_and_generated_actions(monkeypatch):
+    calls = []
+
+    def project(inputs, payoff, weights, integer_fields):
+        calls.append(1)
+        return inputs["state"]
+
+    monkeypatch.setattr(
+        trainer.critic,
+        "active_candidates",
+        lambda features, selected: tf.ones(tf.shape(selected)[0], tf.bool),
+    )
+    monkeypatch.setattr(
+        trainer.critic, "public_inputs", lambda features, selected: {}
+    )
+    monkeypatch.setattr(
+        trainer.joint_settlement, "public_inputs", lambda features: {}
+    )
+    monkeypatch.setattr(
+        trainer.joint_settlement,
+        "gather_position_payoffs",
+        lambda inputs, positions: tf.zeros([tf.shape(positions)[0], 1, 16]),
+    )
+    learner = object.__new__(trainer.Trainer)
+    learner.network = types.SimpleNamespace(
+        critic=types.SimpleNamespace(
+            candidate_chunk=project, trainable_variables=[]
+        )
+    )
+    outputs = {
+        "selected": tf.constant([[0, 0], [0, 1], [1, 0], [1, 1]]),
+    }
+    for recorded, reference, distill, scored in (
+        ([True, True], [0, 1], [0, 1], []),
+        ([True, True], [0, 0], [0, 1], [1]),
+        ([False, True], [0, 0], [0, 1], [0, 1]),
+        ([True, True], [0, 1], [1, 1], [0]),
+    ):
+        calls.clear()
+        values = learner.candidate_values(
+            features={"dealer_relative_seat": tf.zeros([2], tf.int8)},
+            outputs=outputs,
+            state=tf.reshape(tf.range(8, dtype=tf.float32), [4, 2]),
+            chosen=tf.constant([0, 1]),
+            distill=tf.constant(distill),
+            reference=tf.constant(reference),
+            batch={"recorded": tf.constant(recorded)},
+            count=tf.constant(2),
+        )
+        values = values.numpy()
+        assert len(calls) == bool(scored)
+        for position in range(2):
+            expected = (
+                numpy.arange(position * 4, position * 4 + 4).reshape(2, 2)
+                if position in scored
+                else numpy.zeros((2, 2))
+            )
+            numpy.testing.assert_array_equal(values[position, :2], expected)

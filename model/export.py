@@ -8,7 +8,6 @@ import shutil
 
 import numpy
 import tensorflow as tf
-
 from log_dataset import (
     _native_collection,
     focus_sampling,
@@ -34,13 +33,11 @@ class ServingModel(tf.Module):
 
     @tf.function
     def serve(self, **features):
-        outputs = self._serve(features)
-        outputs.pop("state_value")
-        return outputs
+        return self._serve(features)
 
     @tf.function
     def root_evaluation(self, **features):
-        """Training-only action utility and V from one actor evaluation."""
+        """Training-only action utilities from one actor evaluation."""
         outputs = self._serve(features, chunk_size=32, root_only=True)
         return {
             name: outputs[name]
@@ -48,7 +45,6 @@ class ServingModel(tf.Module):
                 "critic_action_indices",
                 "critic_projected_st3",
                 "discard_policy_logits",
-                "state_value",
             )
         }
 
@@ -58,11 +54,14 @@ class ServingModel(tf.Module):
         active = critic.active_candidates(features, encoded["selected"])
         selected = tf.boolean_mask(encoded["selected"], active)
         state = tf.boolean_mask(state, active)
-        safe = tf.boolean_mask(encoded["immediate_safe"], active)
-        wait = tf.boolean_mask(encoded["immediate_wait"], active)
-        allowed = actions.immediate_decisions(features, selected)
+        wait = tf.boolean_mask(encoded["structural_wait"], active)
         public = joint_settlement.public_inputs(features)
         candidate_public = critic.public_inputs(features, selected)
+        if root_only:
+            payoffs = joint_settlement.gather_position_payoffs(
+                {**public, "dealer": features["dealer_relative_seat"]},
+                tf.range(tf.shape(features["decision_phase"])[0]),
+            )
         probability = tf.TensorArray(
             tf.float32,
             size=0,
@@ -91,22 +90,10 @@ class ServingModel(tf.Module):
         settlement = tf.TensorArray(
             tf.float32, size=0, dynamic_size=True, element_shape=[None, 2, 5]
         )
-        eligibility = tf.TensorArray(
-            tf.float32, size=0, dynamic_size=True, element_shape=[None, 3]
-        )
-        legal_ron = tf.TensorArray(
-            tf.float32, size=0, dynamic_size=True, element_shape=[None, 3]
-        )
-        immediate = tf.TensorArray(
-            tf.float32, size=0, dynamic_size=True, element_shape=[None, 3]
-        )
         for begin in tf.range(0, tf.shape(selected)[0], chunk_size):
             rows = selected[begin : begin + chunk_size, 0]
             inputs = {
                 "state": state[begin : begin + chunk_size],
-                "immediate_safe": safe[begin : begin + chunk_size],
-                "immediate_wait": wait[begin : begin + chunk_size],
-                "immediate_allowed": allowed[begin : begin + chunk_size],
                 **{
                     name: tf.gather(value, rows)
                     for name, value in public.items()
@@ -129,6 +116,25 @@ class ServingModel(tf.Module):
                     )
                     for name, value in inputs.items()
                 }
+                utility = utility.write(
+                    begin // chunk_size,
+                    self.network.critic.projected_mean_downside(
+                        inputs,
+                        tf.gather(
+                            payoffs,
+                            tf.gather(
+                                rows,
+                                tf.minimum(
+                                    tf.range(chunk_size), tf.shape(rows)[0] - 1
+                                ),
+                            ),
+                        ),
+                    )[
+                        : tf.minimum(chunk_size, tf.shape(selected)[0] - begin),
+                        0,
+                    ],
+                )
+                continue
             forecast = self.network.critic.joint_distributions(inputs)
             payoff, final_probability = joint_settlement.continuation_forecast(
                 scores=forecast["joint_scores"],
@@ -144,8 +150,6 @@ class ServingModel(tf.Module):
                     forecast["joint_probability"], payoff
                 )[: tf.minimum(chunk_size, tf.shape(selected)[0] - begin)],
             )
-            if root_only:
-                continue
             # Mutually exclusive endings from the actor's perspective.
             categories = tf.constant(
                 [
@@ -209,27 +213,11 @@ class ServingModel(tf.Module):
                 begin // chunk_size,
                 tf.stack(joint_settlement.settlement_moments(forecast), axis=1),
             )
-            eligibility = eligibility.write(
-                begin // chunk_size, forecast["conditional_ron_eligibility"]
-            )
-            legal_ron = legal_ron.write(
-                begin // chunk_size,
-                tf.sigmoid(forecast["immediate_logits"])
-                * tf.cast(
-                    allowed[begin : begin + chunk_size, None], tf.float32
-                ),
-            )
-            immediate = immediate.write(
-                begin // chunk_size,
-                forecast["immediate_ron_probability"]
-                - forecast["immediate_probability"][:, 21, None],
-            )
         if root_only:
             return {
                 "critic_action_indices": selected,
                 "critic_projected_st3": utility.concat(),
                 "discard_policy_logits": outputs["discard_policy_logits"],
-                "state_value": outputs["state_value"],
             }
         probability = probability.concat()
         weights = tf.gather_nd(
@@ -249,7 +237,6 @@ class ServingModel(tf.Module):
         )
         return {
             **{name: outputs[name] for name in actions.ACTOR_OUTPUTS},
-            "state_value": outputs["state_value"],
             "round_placement_logits": tf.math.log(
                 tf.maximum(
                     tf.math.unsorted_segment_sum(
@@ -292,10 +279,7 @@ class ServingModel(tf.Module):
             * tf.one_hot(1, len(outcomes.PAYMENT_VALUES) + 4),
             "critic_action_indices": selected,
             "critic_payment_probabilities": probability,
-            "critic_immediate_probabilities": immediate.concat(),
-            "critic_legal_ron_probabilities": legal_ron.concat(),
             "critic_structural_wait_probabilities": wait,
-            "critic_conditional_ron_eligibility": eligibility.concat(),
         }
 
 
@@ -312,11 +296,6 @@ def load_network(weights, inputs):
                 ).items()
             },
             "state": state[:1],
-            "immediate_safe": encoded["immediate_safe"][:1],
-            "immediate_wait": encoded["immediate_wait"][:1],
-            "immediate_allowed": actions.immediate_decisions(
-                inputs, encoded["selected"][:1]
-            ),
             **critic.public_inputs(inputs, encoded["selected"][:1]),
         }
     )

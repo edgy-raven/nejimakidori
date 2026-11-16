@@ -7,47 +7,46 @@ import numpy
 import pytest
 import tensorboard.backend.event_processing.event_accumulator as accumulator
 import tensorboard.util.tensor_util
-
 from training.candidate import monitor
 
 
 def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
-    clock = iter([1.0, 2.0, 4.0, 10.0, 12.0, 14.0])
+    clock = iter([1.0, 2.0, 4.0, 10.0, 12.0, 14.0, 16.0, 18.0])
     monkeypatch.setattr(monitor.time, "monotonic", lambda: next(clock))
     progress = monitor.Monitor(
         tmp_path,
         100,
-        {"awr_temperature": 3, "mixed_only": False},
+        {"learning_rate": 2e-5},
     )
     progress.report(
-        stage="record-awr", metrics={}, exposures=0, cohort=0, games=0
+        stage="record-imitation", metrics={}, exposures=0, cohort=0, games=0
     )
     progress.report(
-        stage="record-awr",
+        stage="record-imitation",
         metrics={"policy": 0.2},
         exposures=100,
         cohort=0,
         games=0,
     )
     progress.report(
-        stage="mixed-awr-1_collecting",
+        stage="mixed-policy-1_collecting",
         metrics={},
         exposures=100,
         cohort=0,
         games=0,
     )
     progress.report(
-        stage="mixed-awr-1_updating",
+        stage="mixed-policy-1_updating",
         metrics={},
         exposures=100,
         cohort=0,
         games=2,
     )
     progress.report(
-        stage="mixed-awr-1",
+        stage="mixed-policy-1",
         metrics={
-            "value_loss": 0.25,
-            "value_bias": -0.1,
+            "belief_loss": 0.25,
+            "joint_wait_brier": 0.1,
             "payment_nll": 2.0,
             "effective_sample_fraction": 0.6,
             "weight_clipped_fraction": 0.2,
@@ -57,6 +56,14 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
         cohort=1,
         games=2,
     )
+    for count in (100, 200):
+        progress.report(
+            stage="mixed-policy-1_q-fit",
+            metrics={"q_total_exposures": count, "q/payment_nll": 1.5},
+            exposures=150,
+            cohort=1,
+            games=2,
+        )
     progress.close()
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["phase_index"] == 2
@@ -66,9 +73,9 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
     events = accumulator.EventAccumulator(str(tmp_path / "tensorboard"))
     events.Reload()
     for name, expected in {
-        "awr/value_rmse_st3": 50,
-        "awr/value_bias_st3": -10,
-        "awr/policy": 0.2,
+        "policy/belief_loss": 0.25,
+        "policy/joint_wait_brier": 0.1,
+        "policy/policy": 0.2,
         "replay/record_fraction": 0.8,
         "progress/total_fraction": 150 / 600,
     }.items():
@@ -80,6 +87,10 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
             rtol=1e-6,
         )
     assert "custom_scalars__config__" in events.Tags()["tensors"]
+    assert [event.step for event in events.Tensors("q/payment_nll")] == [
+        100,
+        200,
+    ]
 
 
 def test_phase_evaluation_passes_loadable_export_to_matches(
@@ -141,23 +152,17 @@ def test_phase_evaluation_passes_loadable_export_to_matches(
     assert len(calls) == 3
 
 
-@pytest.mark.parametrize(
-    "mixed_only,phase,budget",
-    [(True, "mixed-awr-1", 500), (False, "record-awr", 600)],
-)
-def test_restart_monitor_starts_at_zero(tmp_path, mixed_only, phase, budget):
-    progress = monitor.Monitor(
-        tmp_path,
-        100,
-        {"mixed_only": mixed_only},
+def test_restart_monitor_starts_at_zero(tmp_path):
+    progress = monitor.Monitor(tmp_path, 100, {})
+    progress.report(
+        stage="record-imitation", metrics={}, exposures=0, cohort=0, games=0
     )
-    progress.report(stage=phase, metrics={}, exposures=0, cohort=0, games=0)
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["phase_index"] == 1
     assert status["phase_exposures"] == status["total_exposures"] == 0
-    assert status["budget_exposures"] == budget
+    assert status["budget_exposures"] == 600
     progress.report(
-        stage="complete", metrics={}, exposures=budget, cohort=5, games=10
+        stage="complete", metrics={}, exposures=600, cohort=5, games=10
     )
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["total_fraction"] == status["phase_fraction"] == 1

@@ -1,10 +1,10 @@
 """Legal actions, physical-copy selection and model action indexing."""
 
 import numpy
-import riichienv
-
 from log_dataset import features
 from model import outcomes
+
+import riichienv
 
 TRAIN_POLICY_HEADS = (
     "discard_policy_logits",
@@ -235,12 +235,7 @@ def policy_candidates(request):
         for action in request["legal_actions"]:
             if action.action_type in KAN_ACTIONS:
                 result.append(
-                    (
-                        "kan_action_logits",
-                        1 + action.tile // 4,
-                        action,
-                        {},
-                    )
+                    ("kan_action_logits", 1 + action.tile // 4, action, {})
                 )
     return list({(row[0], row[1]): row for row in result}.values())
 

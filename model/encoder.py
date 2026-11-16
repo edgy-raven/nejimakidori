@@ -3,18 +3,22 @@
 import math
 
 import tensorflow as tf
-
 from log_dataset import _native_collection
 from model import actions
 
 HAND_BATCH_BUCKET = 512
-# Scoring constraints bypass learned projections to preserve weights.
+# Scoring constraints and objective priors bypass learned projections.
 SCORING_INPUTS = frozenset(
     {
         "public_fu",
         "public_bonus",
         "candidate_public_fu",
         "candidate_public_bonus",
+        "policy_prior_no_threat",
+        "riichi_dama_points",
+        "riichi_extra_han",
+        "call_open_points",
+        "call_riichi_points",
     }
 )
 
@@ -280,10 +284,7 @@ class HandBank(tf.keras.layers.Layer):
                         tf.math.asinh(
                             tf.concat(
                                 [
-                                    tf.cast(
-                                        inputs[name][..., None],
-                                        tf.float32,
-                                    )
+                                    tf.cast(inputs[name][..., None], tf.float32)
                                     for name in (
                                         "dora_multiplicity",
                                         "known_unavailable_counts",
@@ -386,10 +387,7 @@ class HandBank(tf.keras.layers.Layer):
             (-1, 27, 128),
         )
         suits = tf.pad(suits, ((0, (-size) % multiple), (0, 0), (0, 0)))
-        values = tf.concat(
-            [suits, self.honors(values[:, 27:])],
-            axis=1,
-        )
+        values = tf.concat([suits, self.honors(values[:, 27:])], axis=1)
         values = self.normalization(
             self.projection(tf.reshape(values, (-1, 34 * 128)))
         )

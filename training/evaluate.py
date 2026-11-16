@@ -1,24 +1,30 @@
-"""Native duplicate matches and paired estimates over full seat rotations."""
+"""Native matches and paired estimates over full seat rotations."""
 
 import argparse
 import atexit
 import concurrent.futures
 import gzip
+import hashlib
+import importlib.util
 import itertools
 import json
 import multiprocessing
 import pathlib
 import secrets
+import shutil
 import time
 
 import numpy
-
+import tensorboard.compat.proto.event_pb2 as event_proto
+import tensorboard.compat.proto.summary_pb2 as summary_proto
+import tensorboard.summary.writer.event_file_writer as event_writer
 from model import outcomes
 
 WORKER_POLICIES = {}
+MATCH_FORMATS = ("riichienv_duplicate_south", "riichienv_standard_south")
 
 
-def completed_games(root, requested):
+def completed_games(root, requested, match_format):
     root = pathlib.Path(root)
     path = root / "games.jsonl"
     if not path.exists():
@@ -30,7 +36,7 @@ def completed_games(root, requested):
     results = []
     for line in complete.splitlines():
         row = json.loads(line)
-        if row.get("format") != "riichienv_duplicate_south":
+        if row["format"] != match_format:
             raise ValueError("Evaluation format mismatch; use a fresh output")
         if (row["seed"], *row["new_seats"]) not in requested:
             continue
@@ -44,7 +50,10 @@ def completed_games(root, requested):
 def summarize(results, bootstrap_seed=0):
     rotations = {}
     for row in results:
-        if row.get("format") != "riichienv_duplicate_south":
+        if (
+            row["format"] not in MATCH_FORMATS
+            or row["format"] != results[0]["format"]
+        ):
             raise ValueError("Cannot combine different evaluation formats")
         rotation = rotations.setdefault(row["seed"], {})
         seat = tuple(row["new_seats"])
@@ -62,15 +71,14 @@ def summarize(results, bootstrap_seed=0):
     grouped = {}
     for row in complete:
         pair = grouped.setdefault(row["seed"], {"new": [], "old": []})
+        rank_points = outcomes.saint3_jade_south(row["scores"], row["ranks"])
         for seat in range(4):
             pair["new" if seat in row["new_seats"] else "old"].append(
                 [
                     row["ranks"][seat],
                     row["ranks"][seat] == 1,
                     row["ranks"][seat] == 4,
-                    outcomes.saint3_jade_south(row["scores"], row["ranks"])[
-                        seat
-                    ],
+                    rank_points[seat],
                     row["scores"][seat],
                     outcomes.SAINT3_JADE_SOUTH_OFFSETS[row["ranks"][seat] - 1],
                 ]
@@ -91,10 +99,18 @@ def summarize(results, bootstrap_seed=0):
     }
     difference = clusters["new"] - clusters["old"]
     generator = numpy.random.default_rng(bootstrap_seed)
-    draws = generator.integers(0, len(grouped), (2000, len(grouped)))
-    bootstrap = difference[draws].mean(1)
+    bootstrap = numpy.concatenate(
+        [
+            difference[
+                generator.integers(
+                    0, len(grouped), (min(64, 2000 - begin), len(grouped))
+                )
+            ].mean(1)
+            for begin in range(0, 2000, 64)
+        ]
+    )
     return {
-        "format": "riichienv_duplicate_south",
+        "format": results[0]["format"],
         "rank_point_formula": "ceil((final_score-25000)/1000 + ST3_offset)",
         "rank_point_offsets": list(outcomes.SAINT3_JADE_SOUTH_OFFSETS),
         "observed_games": len(results),
@@ -114,16 +130,23 @@ def summarize(results, bootstrap_seed=0):
     }
 
 
-def start_worker(root, devices):
+def start_worker(root, devices, batch_games):
     from training import frozen_policy
 
     device = devices.get()
     for name in ("new", "old"):
-        WORKER_POLICIES[name] = frozen_policy.FrozenPolicy(
-            model_path=root / name / "saved_model",
-            device=device,
-            memory_mb=2048,
-        )
+        if (root / name / "checkpoint").exists():
+            from training import distill_policy
+
+            WORKER_POLICIES[name] = distill_policy.DistillPolicy(
+                root / name, device=device, capacity=batch_games * 3
+            )
+        else:
+            WORKER_POLICIES[name] = frozen_policy.FrozenPolicy(
+                model_path=root / name / "saved_model",
+                device=device,
+                memory_mb=1536,
+            )
         atexit.register(WORKER_POLICIES[name].close)
 
 
@@ -133,7 +156,10 @@ def play_games(tasks):
     for policy in WORKER_POLICIES.values():
         policy.reset()
     rule = riichienv.GameRule.default_tenhou()
-    rule.duplicate = True
+    match_format = json.loads((tasks[0][0] / "evaluation.json").read_text())[
+        "format"
+    ]
+    rule.duplicate = match_format == "riichienv_duplicate_south"
     games = [
         riichienv.RiichiEnv(game_mode=2, seed=seed, rule=rule)
         for _, seed, _ in tasks
@@ -179,7 +205,7 @@ def play_games(tasks):
         ranks = list(env.ranks())
         results.append(
             {
-                "format": "riichienv_duplicate_south",
+                "format": match_format,
                 "seed": seed,
                 "new_seats": [seat],
                 "replay": replay_path,
@@ -193,21 +219,51 @@ def play_games(tasks):
     return results
 
 
-def publish_summary(root, results, bootstrap_seed):
+def publish_summary(root, results, bootstrap_seed, writer):
     comparison = summarize(results, bootstrap_seed)
     if comparison is not None:
         summary = root / "summary.json.partial"
         summary.write_text(json.dumps(comparison, indent=2))
         summary.replace(root / "summary.json")
+    values = {
+        "progress/completed_games": len(results),
+        "progress/percent": 100
+        * len(results)
+        / json.loads((root / "evaluation.json").read_text())["games"],
+    }
+    if comparison is not None:
+        for side, metrics in comparison["models"].items():
+            values.update(
+                {f"{side}/{key}": value for key, value in metrics.items()}
+            )
+        for key, value in comparison["new_minus_old"].items():
+            values[f"difference/{key}"] = value
+            values[f"difference/{key}_lower"] = comparison["paired_bounds"][
+                key
+            ][0]
+            values[f"difference/{key}_upper"] = comparison["paired_bounds"][
+                key
+            ][1]
+    writer.add_event(
+        event_proto.Event(
+            wall_time=time.time(),
+            step=len(results),
+            summary=summary_proto.Summary(
+                value=[
+                    summary_proto.Summary.Value(tag=key, simple_value=value)
+                    for key, value in values.items()
+                ]
+            ),
+        )
+    )
+    writer.flush()
 
 
 def run(args):
     from training import frozen_policy
 
     if args.games <= 0 or args.games % 4:
-        raise ValueError(
-            "Duplicate evaluation requires complete four-game groups"
-        )
+        raise ValueError("Evaluation requires complete four-game seat groups")
     root = pathlib.Path(args.output)
     root.mkdir(parents=True, exist_ok=True)
     (root / "replays").mkdir(exist_ok=True)
@@ -215,26 +271,63 @@ def run(args):
         (args.seed + game // 4, game % 4) for game in range(args.games)
     }
     manifest = {
-        "format": "riichienv_duplicate_south",
+        "format": (
+            "riichienv_standard_south"
+            if args.distill_source is not None
+            else "riichienv_duplicate_south"
+        ),
         "seed": args.seed,
         "games": args.games,
     }
+    if args.distill_source is not None:
+        distill_files = {
+            "checkpoint": pathlib.Path(args.old),
+            "source/libriichi.so": pathlib.Path(
+                importlib.util.find_spec("libriichi").origin
+            ),
+            **{
+                f"source/{name}": pathlib.Path(args.distill_source)
+                / "mortal"
+                / name
+                for name in ("model.py", "engine.py")
+            },
+            **{
+                f"adapter/training/{name}": pathlib.Path(__file__).parent / name
+                for name in ("distill_policy.py", "frozen_policy.py")
+            },
+        }
+        manifest["distill"] = {}
+        for name, path in distill_files.items():
+            with path.open("rb") as stream:
+                manifest["distill"][name] = hashlib.file_digest(
+                    stream, "sha256"
+                ).hexdigest()
     manifest_path = root / "evaluation.json"
     if (
         manifest_path.exists()
         and json.loads(manifest_path.read_text()) != manifest
     ):
         raise ValueError("Evaluation settings changed; use a fresh output")
-    results = completed_games(root, requested)
+    results = completed_games(root, requested, manifest["format"])
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    publish_summary(root, results, args.seed)
+    writer = event_writer.EventFileWriter(
+        str(args.tensorboard or root / "tensorboard")
+    )
+    atexit.register(writer.close)
+    publish_summary(root, results, args.seed, writer)
     completed = {(row["seed"], *row["new_seats"]) for row in results}
     tasks = [(root, seed, seat) for seed, seat in sorted(requested - completed)]
     if not tasks:
+        writer.close()
         return
     for name, model_path in (("new", args.new), ("old", args.old)):
         path = root / name
         if not path.exists():
+            if name == "old" and args.distill_source is not None:
+                for filename, source in distill_files.items():
+                    (path / filename).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, path / filename)
+                continue
             source = frozen_policy.source_directory(model_path)
             frozen_policy.freeze_source(
                 source.parent, path / "source", include_native=True
@@ -264,7 +357,7 @@ def run(args):
         max_workers=args.workers,
         mp_context=context,
         initializer=start_worker,
-        initargs=(root, devices),
+        initargs=(root, devices, args.batch_games),
     ) as executor:
         batches = iter(batches)
         pending = {
@@ -281,7 +374,7 @@ def run(args):
                     for row in completed:
                         stream.write(json.dumps(row) + "\n")
                 results.extend(completed)
-                publish_summary(root, results, args.seed)
+                publish_summary(root, results, args.seed, writer)
                 print(
                     f"games={len(results)}/{args.games} "
                     f"elapsed_seconds={time.monotonic() - started:.3f}",
@@ -293,13 +386,21 @@ def run(args):
             )
     devices.close()
     devices.join_thread()
+    writer.close()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--new", required=True)
     parser.add_argument("--old", required=True)
+    parser.add_argument(
+        "--distill-source",
+        help="distill policy checkout; --old is its .pth or ZIP",
+    )
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--tensorboard", help="Event directory; default OUTPUT/tensorboard"
+    )
     parser.add_argument("--games", type=int, default=10000)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--workers", type=int, default=1)

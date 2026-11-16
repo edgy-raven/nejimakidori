@@ -48,9 +48,10 @@ for replicas in (1, 2):
                 def terms(mean):
                     return (
                         actor_layers.policy_loss(labels, outputs, mean=mean),
-                        actor_layers.awr_policy_terms(
-                            actor_layers.policy_nll(labels, outputs)[0],
-                            tf.ones((1,)), tf.reshape(active, (1,)),
+                        actor_layers.weighted_imitation_terms(
+                            nll=actor_layers.policy_nll(labels, outputs)[0],
+                            advantages=tf.ones((1,)),
+                            eligible=tf.reshape(active, (1,)),
                             mean=mean)["loss"],
                     )
                 if packed:
@@ -107,26 +108,21 @@ from integration.small.test_joint_settlement import inputs
 public = inputs()
 public.update(
     {
-        "state": tf.ones((1, 64)),
-        "immediate_wait": tf.ones((1, 3)) * 0.3,
-        "immediate_safe": tf.zeros((1, 3), tf.bool),
-        "immediate_allowed": tf.ones(1, tf.bool),
-        "immediate_ankan": tf.zeros(1, tf.bool),
+        "state": tf.concat(
+            [tf.fill((1, 12), 0.25), tf.fill((1, 408), 0.5),
+             tf.ones((1, 92))], -1
+        ),
+        "action_tile": tf.zeros(1, tf.int32),
         "has_meld": tf.zeros((1, 4), tf.bool),
         "opened": tf.zeros((1, 4), tf.bool),
         "riichi_required": tf.zeros((1, 4), tf.bool),
         "ippatsu_allowed": tf.ones((1, 4), tf.bool),
-        "immediate_ippatsu": tf.ones((1, 4), tf.bool),
         "public_fu": tf.zeros((1, 4), tf.int32),
         "public_bonus": tf.zeros((1, 4), tf.int32),
         "yakuman_allowed": tf.ones((1, 4), tf.bool),
-        "immediate_draw_kind": tf.zeros(1, tf.int32),
-        "immediate_tenpai": tf.fill((1, 4), -1),
     }
 )
 for name in [
-    "immediate_probability",
-    "immediate_score_probability",
     "score_probability",
     "event_logits",
     "deposit_logits",
@@ -144,8 +140,10 @@ labels = {
     ),
 }
 public = {name: tf.repeat(value, 2, axis=0) for name, value in public.items()}
-public["state"] *= tf.constant([[1.0], [2.0]])
-public["immediate_wait"] *= tf.constant([[1.0], [2.0]])
+public["state"] = tf.concat(
+    [public["state"][:, :420],
+     public["state"][:, 420:] * tf.constant([[1.0], [2.0]])], -1
+)
 labels = {name: tf.repeat(value, 2, axis=0) for name, value in labels.items()}
 tf.keras.utils.set_random_seed(941)
 for replicas in (1, 2):
@@ -153,7 +151,7 @@ for replicas in (1, 2):
         devices=[f"/cpu:{i}" for i in range(replicas)]
     )
     with strategy.scope():
-        model = critic.PaymentCritic()
+        model = critic.PaymentCritic(belief_offset=0)
         model(public)
         if replicas == 1:
             weights = model.get_weights()
@@ -260,7 +258,7 @@ from log_dataset import _native_collection
 from model import actions
 from training import trainer as training
 from model import losses
-import types
+from model import actor as actor_layers
 strategies = {
     replicas: tf.distribute.MirroredStrategy(
         devices=[f"/cpu:{i}" for i in range(replicas)]
@@ -268,102 +266,69 @@ strategies = {
     for replicas in (1, 2)
 }
 
-class Payment(tf.keras.Model):
-    def __init__(self):
-        super().__init__()
-        self.value = tf.keras.layers.Dense(1)
-
-    def supervised_statistics(self, inputs, labels, valid):
-        prediction = self.value(inputs["state"])[:, 0]
-        return tf.stack([
-            losses.masked_totals(tf.square(prediction - 0.02), valid),
-            tf.zeros(2),
-            tf.zeros(2),
-            losses.masked_totals(tf.zeros_like(prediction), valid),
-            losses.masked_totals(tf.ones_like(prediction), valid),
-            losses.masked_totals(prediction ** 2, valid),
-        ])
-
-
-class Network(tf.keras.Model):
-    def __init__(self):
-        super().__init__()
-        x = tf.keras.Input((1,), name="x")
-        board = tf.keras.layers.Dense(2)(x)
-        logits = tf.keras.layers.Dense(150)(board)
-        self.critic = Payment()
-        self.actor = tf.keras.Model(
-            {"x": x},
-            {
-                "board": board,
-                "state_value": logits[:, 0],
-                "constraint_loss": tf.keras.ops.sum(logits ** 2, -1),
-                **{
-                    name + "_prior_loss": logits[:, 0] ** 2
-                    for name in actions.TRAIN_POLICY_HEADS
-                },
-                **{
-                    name: logits
-                    for name in actions.TRAIN_POLICY_HEADS
-                },
-            },
-        )
-
-    def candidate_context(self, features, outputs):
-        return outputs, outputs["board"]
-
-    def chosen_inputs(self, features, outputs, state, chosen):
-        return {"state": state, "pot": tf.zeros(tf.shape(state)[0])}
-
-    def call(self, inputs):
-        outputs = self.actor(inputs[0])
-        self.critic.value(outputs["board"])
-        return outputs
-
-
-training.critic.chosen_actions = lambda features, labels: (
-    labels["discard_policy_logits"])
-first = (
-    {"x": tf.constant([[0.01], [0.09], [0.03], [0.05]])},
-    {"y": tf.constant([-1.0, 0.02, 0.01, -1.0])},
-    {},
-)
+# Exercise real reductions and AdamW without a mock model architecture.
 for replicas in (1, 2):
-    tf.keras.utils.set_random_seed(941)
     strategy = strategies[replicas]
     with strategy.scope():
-        network = Network()
-        network(first)
-        trainer = training.Trainer(
-            network=network,
-            args=types.SimpleNamespace(
-                awr_learning_rate=0.01,
-                awr_entropy=0.01,
-                awr_temperature=3.0,
-            ),
-            features=first[0],
-        )
-    trainer = training.DistributedTrainer(trainer, strategy)
-    batch = dict(
-        features=trainer.feature_packing.pack(first[0]),
-        head=tf.zeros(4, tf.int32),
-        legal=tf.ones((4, 150), tf.bool),
-        chosen=tf.constant([0, 1, 2, 3]),
-        returns=tf.constant([0.1, -0.1, 0.2, -0.2]),
-        payment_points=tf.zeros((4, 40), tf.int32),
-    )
-    metrics = []
-    for count in (3, 1):
-        update = trainer.policy_update(
-            batch, tf.constant(count))
-        # Local gradient norms depend on replica partitioning; global
-        # objectives and resulting weights must still match.
-        assert numpy.isfinite(float(update["gradient/local_norm"]))
-        metrics.extend(
-            value for name, value in update.items()
-            if name != "gradient/local_norm"
-        )
-    result = [numpy.asarray(v) for v in [*network.weights, *metrics]]
+        logits = tf.Variable([0.1, -0.1])
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=0.01, weight_decay=1e-4, clipnorm=1.0)
+        optimizer.build([logits])
+
+    def step(count):
+        begin = (
+            tf.distribute.get_replica_context().replica_id_in_sync_group
+            * (4 // replicas))
+        indices = tf.range(begin, begin + 4 // replicas)
+        valid = indices < count
+        recorded = (indices >= 2) & valid
+        generated = (indices < 2) & valid
+        chosen = indices % 2
+        with tf.GradientTape() as tape:
+            current = tf.nn.log_softmax(
+                logits[None] * tf.cast(indices[:, None] + 1, tf.float32) / 10)
+            def terms(mean):
+                expert = actor_layers.weighted_imitation_terms(
+                    nll=-tf.gather(current, chosen, batch_dims=1),
+                    advantages=tf.cast(indices, tf.float32) / 10,
+                    eligible=recorded, mean=mean)
+                return {
+                    "expert": expert["loss"],
+                    "generated": mean(
+                        -tf.reduce_sum(tf.exp(current) * [0.1, -0.1], -1),
+                        generated),
+                    "fraction": mean(tf.cast(recorded, tf.float32), valid),
+                    "mirror": mean(tf.reduce_sum(
+                        tf.exp(current) * (current - tf.math.log([0.6, 0.4])),
+                        -1), valid),
+                    "magnet": mean(tf.reduce_sum(
+                        tf.exp(current) * (current - tf.math.log([0.4, 0.6])),
+                        -1), valid),
+                    "ess": expert["effective_sample_fraction"],
+                }
+            means = losses.MaskedMeans()
+            terms(means.collect)
+            means.reduce()
+            metrics = terms(means.read)
+            loss = (
+                metrics["fraction"] * metrics["expert"]
+                + (1 - metrics["fraction"]) * metrics["generated"]
+                + 0.3 * (metrics["mirror"] + metrics["magnet"]))
+            scaled = loss / replicas
+        training.apply_gradients(optimizer, tape, scaled, [logits])
+        return tf.stack([loss, *metrics.values()])
+
+    @tf.function
+    def update(count):
+        return strategy.reduce(
+            tf.distribute.ReduceOp.MEAN, strategy.run(step, args=(count,)),
+            None)
+
+    result = []
+    # Includes unequal source labels and an entirely padded second replica.
+    for count in (4, 3, 1):
+        result.append(update(tf.constant(count)).numpy())
+    result.extend(value.numpy() for value in [logits, *optimizer.variables])
     if replicas == 1:
         expected = result
     else:

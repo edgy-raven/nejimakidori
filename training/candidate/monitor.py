@@ -8,15 +8,20 @@ import tensorboard.plugins.custom_scalar.layout_pb2 as scalar_layout
 import tensorboard.plugins.custom_scalar.summary as scalar_summary
 import tensorflow as tf
 
-from training.candidate import state
+
+def write_json(path, value):
+    """Replace run metadata atomically so readers never see partial JSON."""
+    temporary = path.with_suffix(".partial")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.replace(path)
 
 
 class Monitor:
     def __init__(self, root, positions, plan):
         self.root = pathlib.Path(root)
         self.positions = positions
-        self.phases = ([] if plan["mixed_only"] else ["record-awr"]) + [
-            f"mixed-awr-{index}" for index in range(1, 6)
+        self.phases = ["record-imitation"] + [
+            f"mixed-policy-{index}" for index in range(1, 6)
         ]
         self.started = self.previous = time.monotonic()
         self.previous_exposures = 0
@@ -30,31 +35,71 @@ class Monitor:
                 "Pass and total fractions": r"progress/(phase|total)_fraction$",
                 "Training positions": r"progress/total_exposures$",
             },
-            "AWR health": {
-                "Policy loss": r"awr/policy$",
-                "Value RMSE (ST3)": r"awr/value_rmse_st3$",
-                "Value bias (ST3)": r"awr/value_bias_st3$",
-                "Settlement NLL": r"awr/payment_nll$",
-                "Entropy": r"awr/entropy$",
-                "Weight health": r"awr/(effective_sample_fraction|weight_clipped_fraction)$",
-                "Learning rate": r"awr/learning_rate$",
-                "Fixed-reference magnet": r"awr/(mirror_kl|weighted_mirror_loss)$",
-                "Q-like risk score (ST3)": r"awr/q_(mean|std|risk)_st3$",
+            "Policy health": {
+                "Actor objectives": (
+                    r"policy/(policy|expert_loss|self_play_loss)$"
+                ),
+                "Label Q gaps (ST3)": r"policy/(expert|distill)_q_gap_st3$",
+                "Self-play gain (ST3)": r"policy/self_play_gain_st3$",
+                "Settlement NLL": r"policy/payment_nll$",
+                "Belief-Q direction": r"policy/(tenpai|wait)_direction_loss$",
+                "Entropy": r"policy/entropy$",
+                "Recorded targets": r"policy/(expert|distill)_weighted_ce$",
+                "Recorded ESS": (
+                    r"policy/(expert|distill)_effective_sample_fraction$"
+                ),
+                "Adaptive beta": r"policy/(expert|distill)_beta$",
+                "Rolling ESS": r"policy/(expert|distill)_rolling_ess$",
+                "Minimum attainable ESS": (
+                    r"policy/(expert|distill)_minimum_rolling_ess$"
+                ),
+                "Clipped weights": (
+                    r"policy/(expert|distill)_weight_clipped_fraction$"
+                ),
+                "Learning rate": r"policy/learning_rate$",
+                "Policy anchors": r"policy/(mirror_kl|magnet_kl)$",
+                "Weighted anchors": r"policy/weighted_(mirror|magnet)_loss$",
+                "Risk penalty (ST3)": r"policy/risk_penalty_st3$",
                 "Local gradient norm": r"gradient/local_norm$",
             },
             "Replay": {
                 "Source shares": r"replay/(record|generated)_fraction$",
-                "Targeted shares within source": r"replay/(record|generated)_target_fraction$",
+                "Targeted shares within source": (
+                    r"replay/(record|generated)_target_fraction$"
+                ),
                 "Pool occupancy": r"replay/.*_pool_positions$",
+            },
+            "Match critic fitting": {
+                "Settlement likelihood": r"q/payment_nll$",
+                "Constraints": r"q/critic_constraint_loss$",
+                "Settlement support": r"q/settlement_supported_fraction$",
+                "Local gradient norm": r"q/gradient/local_norm$",
+                "Learning rate": r"q/learning_rate$",
             },
             "Self play": {
                 "Collection positions/s": r"collection/positions_per_second$",
-                "Roots and branches": r"collection/(selected_roots|root_continuations)$",
+                "Roots and branches": (
+                    r"collection/(selected_roots|root_continuations)$"
+                ),
                 "Games": r"progress/games$",
             },
+            "Belief health": {
+                "Supervision": r"policy/(belief_loss|opponent_.*_loss)$",
+                "Wait calibration": r"policy/(joint_wait|tenpai_wait)_brier$",
+                "Wait recall": r"policy/tenpai_wait_recall_at_5$",
+                "Count constraints": (
+                    r"policy/count_(size_error|copy_overflow)$"
+                ),
+                "Constraint loss": r"policy/belief_constraint_loss$",
+            },
             "Runtime": {
+                "Step breakdown (seconds)": (
+                    r"runtime/(input|root|update)_seconds$"
+                ),
                 "Training positions/s": r"runtime/positions_per_second$",
-                "End-to-end positions/s": r"runtime/overall_positions_per_second$",
+                "End-to-end positions/s": (
+                    r"runtime/overall_positions_per_second$"
+                ),
                 "Elapsed hours": r"runtime/elapsed_hours$",
             },
         }.items():
@@ -85,7 +130,7 @@ class Monitor:
             0,
             min(self.positions, exposures - (phase_index - 1) * self.positions),
         )
-        # Collection/evaluation pauses are not mislabeled as slow optimizer work.
+        # Collection/evaluation pauses are not counted as slow optimizer work.
         if exposures > self.previous_exposures:
             self.rate = (exposures - self.previous_exposures) / (
                 now - self.previous
@@ -108,7 +153,7 @@ class Monitor:
             "updated_at": time.time(),
             **{name: float(value) for name, value in metrics.items()},
         }
-        state.save(self.root / "status.json", status)
+        write_json(self.root / "status.json", status)
         with (self.root / "progress.jsonl").open("a") as stream:
             stream.write(json.dumps(status) + "\n")
         with self.writer.as_default(step=exposures):
@@ -131,20 +176,20 @@ class Monitor:
             if exposures > self.previous_exposures:
                 tf.summary.scalar("runtime/positions_per_second", self.rate)
             for name, value in metrics.items():
+                if name.startswith("q/"):
+                    tf.summary.scalar(
+                        name, value, step=int(metrics["q_total_exposures"])
+                    )
+                    continue
+                if name.startswith("q_"):
+                    continue
                 if "/" in name:
                     tag = name
                 elif stage.endswith("_cohort") or stage.endswith("_collecting"):
                     tag = "collection/" + name
                 else:
-                    tag = "awr/" + name
+                    tag = "policy/" + name
                 tf.summary.scalar(tag, value)
-            if "value_loss" in metrics:
-                tf.summary.scalar(
-                    "awr/value_rmse_st3", tf.sqrt(metrics["value_loss"]) * 100
-                )
-                tf.summary.scalar(
-                    "awr/value_bias_st3", metrics["value_bias"] * 100
-                )
         self.writer.flush()
         self.previous, self.previous_exposures = now, exposures
 

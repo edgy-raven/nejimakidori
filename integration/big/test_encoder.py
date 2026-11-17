@@ -4,10 +4,134 @@ import json
 import pathlib
 
 import numpy
+import pytest
 import tensorflow as tf
 
 from log_dataset import _native_collection, features, replay, shanten
-from model import encoder
+from model import actions, encoder, export, initialize
+from training import self_play
+
+
+def test_candidate_river_attention_learns_masked_action_specific_history():
+    tf.keras.utils.set_random_seed(941)
+    inputs = {
+        name: tf.zeros((4, *spec["shape"]), tf.as_dtype(spec["dtype"]))
+        for name, spec in _native_collection.INPUTS.items()
+        if name.startswith("river_")
+    }
+    inputs["river_pre_valid"] = tf.tensor_scatter_nd_update(
+        inputs["river_pre_valid"], [[0, 0, 0], [0, 0, 1], [2, 1, 3]], [1, 1, 1]
+    )
+    inputs["river_pre_tile_id"] = tf.tensor_scatter_nd_update(
+        inputs["river_pre_tile_id"],
+        [[0, 0, 0], [0, 0, 1], [2, 1, 3]],
+        [4, 13, 22],
+    )
+    river = encoder.RiverEncoding(dtype="float32")
+    _, tokens, valid = river(inputs)
+    candidates = tf.random.normal((4, 384))
+    selected = tf.constant([[0, 1], [0, 9], [1, 3], [2, 7]])
+    attention = encoder.CandidateRiverAttention(dtype="float32")
+    values = [candidates, selected, tokens, valid]
+    numpy.testing.assert_array_equal(attention(values), candidates)
+
+    # A neutral insertion must start learning without changing old outputs.
+    target = tf.random.normal((4, 384))
+    optimizer = tf.keras.optimizers.SGD(0.01)
+    for _ in range(2):
+        with tf.GradientTape() as tape:
+            output = attention(values)
+            loss = tf.reduce_sum(output * target)
+        gradients = tape.gradient(loss, attention.trainable_variables)
+        assert all(
+            numpy.isfinite(tf.convert_to_tensor(g)).all() for g in gradients
+        )
+        optimizer.apply_gradients(zip(gradients, attention.trainable_variables))
+    assert all(numpy.any(tf.convert_to_tensor(g) != 0) for g in gradients)
+    output = attention(values).numpy()
+    assert not numpy.allclose(
+        output[0] - candidates[0], output[1] - candidates[1]
+    )
+    numpy.testing.assert_array_equal(output[2], candidates[2])
+
+    # Padding, other boards and the unoccupied board cannot contaminate a query.
+    padded = tf.where(valid[..., None], tokens, tf.ones_like(tokens) * 100)
+    numpy.testing.assert_array_equal(
+        attention([candidates, selected, padded, valid]), output
+    )
+    changed = tf.tensor_scatter_nd_add(tokens, [[2, 67]], [tf.ones(64) * 10])
+    actual = attention([candidates, selected, changed, valid]).numpy()
+    numpy.testing.assert_array_equal(actual[:3], output[:3])
+    assert not numpy.allclose(actual[3], output[3])
+    shifted = tf.roll(tokens, 1, axis=1)
+    shifted_valid = tf.roll(valid, 1, axis=1)
+    assert not numpy.allclose(
+        attention([candidates, selected, shifted, shifted_valid])[0], output[0]
+    )
+    compiled = tf.function(attention)
+    numpy.testing.assert_allclose(
+        compiled(values), output, rtol=1e-5, atol=1e-5
+    )
+    assert attention([candidates[:0], selected[:0], tokens, valid]).shape == (
+        0,
+        384,
+    )
+
+
+def test_river_attention_weight_conversion_preserves_policy_and_critic(
+    tmp_path, monkeypatch
+):
+    inputs = self_play.initial_features(941)
+    # Build the previous graph: all existing heads, no candidate-river branch.
+    with monkeypatch.context() as context:
+        context.setattr(
+            encoder,
+            "CandidateRiverAttention",
+            lambda **kwargs: lambda values: values[0],
+        )
+        previous = export.build_network(inputs)
+    original = tmp_path / "original.weights.h5"
+    previous.save_weights(original)
+    previous_module = export.ServingModel(previous)
+    expected = previous_module.serve(**inputs)
+    output = tmp_path / "attention.weights.h5"
+    converted = initialize.initialize(original, output, inputs)
+    module = export.ServingModel(converted)
+    actual = module.serve(**inputs)
+    for name in expected:
+        numpy.testing.assert_array_equal(actual[name], expected[name])
+    # Persist an active branch too, not just its initially zero correction.
+    correction = converted.encoder.get_layer(
+        "candidate_river_attention"
+    ).correction
+    correction.kernel.assign(tf.random.normal(correction.kernel.shape) * 0.01)
+    trained = tmp_path / "trained.weights.h5"
+    converted.save_weights(trained)
+    loaded = export.load_network(trained, inputs)
+    converted.compile_training()
+    expected_policy = converted.actor(inputs)
+    actual_policy = loaded.actor(inputs)
+    for name in actions.TRAIN_POLICY_HEADS:
+        numpy.testing.assert_allclose(
+            actual_policy[name],
+            expected_policy[name],
+            rtol=1e-5,
+            atol=1e-5,
+        )
+    tf.saved_model.save(
+        module,
+        str(tmp_path / "saved_model"),
+        signatures={"policy": module.policy.get_concrete_function(**inputs)},
+    )
+    restored = tf.saved_model.load(str(tmp_path / "saved_model"))
+    expected_policy = module.policy(**inputs)
+    for name, value in restored.signatures["policy"](**inputs).items():
+        numpy.testing.assert_allclose(
+            value, expected_policy[name], rtol=1e-5, atol=1e-5
+        )
+    # Already-converted files are not silently reinitialized or overwritten.
+    with pytest.raises(ValueError, match="missing candidate-river"):
+        initialize.initialize(output, tmp_path / "invalid.weights.h5", inputs)
 
 
 def test_reused_suits_match_float32_gradient_accumulation(monkeypatch):

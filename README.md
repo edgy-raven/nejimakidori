@@ -1,10 +1,12 @@
-# Nejimakidori v2
+# Nejimakidori v2.0
 
 Nejimakidori (ねじまき鳥) is a four-player riichi mahjong model.
 This repository contains its network, dataset tools, training and release weights.
 
-Version 2 adds tile-attention belief refinement, current-hand settlement
-learning from match logs, and Q-weighted imitation with adaptive temperatures.
+Version 2.0 retains tile-attention belief refinement and current-hand settlement
+learning, and adds candidate attention over opponent rivers. The released
+checkpoint completed a recorded-policy training pass using a fixed production
+anchor and Q-weighted imitation with adaptive temperatures.
 See the [architecture](model/ARCHITECTURE.md) and
 [training objective](training/OBJECTIVE.md) for the complete method.
 

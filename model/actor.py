@@ -3,6 +3,7 @@
 import math
 
 import tensorflow as tf
+
 from model import actions, beliefs, encoder, losses, payment_scoring
 
 POLICY_ENTROPY_WEIGHT = 0.01
@@ -699,12 +700,11 @@ def expert_prior(inputs, heads):
     )
 
 
-def expert_prior_loss(current, preference, heads, mean=losses.mean_valid):
-    """Encourage eligible mass, with fivefold riichi pressure, over all rows."""
+def expert_prior_loss(current, preference, mean=losses.mean_valid):
+    """Encourage eligible riichi and call mass equally over all rows."""
     log_mass = tf.reduce_logsumexp(tf.where(preference, current, -1e9), axis=1)
     return mean(
-        tf.where(tf.reduce_any(preference, axis=1), -log_mass, 0.0)
-        * tf.where(heads == 1, 5.0, 1.0),
+        tf.where(tf.reduce_any(preference, axis=1), -log_mass, 0.0),
         tf.ones(tf.shape(current)[0]),
     )
 

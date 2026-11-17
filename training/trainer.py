@@ -1,6 +1,7 @@
 """Hybrid expert/distill policy imitation and magnetic self-play policy improvement."""
 
 import tensorflow as tf
+
 from log_dataset import training_data
 from model import actions
 from model import actor as actor_layers
@@ -306,7 +307,6 @@ class Trainer:
                         actor_layers.expert_prior(features, batch["head"])[
                             :count
                         ],
-                        batch["head"][:count],
                         mean=mean,
                     ),
                     **actor_layers.decision_regularizers(

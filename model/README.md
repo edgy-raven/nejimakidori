@@ -20,6 +20,7 @@
 | Score vocabulary and legality | [outcomes.py](outcomes.py), [payment_scoring.py](payment_scoring.py) |
 | Shared loss reductions | [losses.py](losses.py) |
 | SavedModel creation and loading | [export.py](export.py), [inference.py](inference.py) |
+| Explicit candidate-river weight transfer | [initialize.py](initialize.py) |
 
 Training orchestration lives in [training/](../training/README.md). Model imports
 do not load runners; export loads snapshot and collection helpers when invoked.

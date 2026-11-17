@@ -134,7 +134,7 @@ qualifying riichi and call actions:
 
 ```text
 mean_over_all_decisions(coefficient * -log(sum P(eligible actions)))
-coefficient = 1.0 for riichi, 0.2 for calls
+coefficient = 0.2 for both riichi and calls
 ```
 
 Rows without eligible actions contribute zero. This retains a useful gradient
@@ -170,7 +170,7 @@ riichi on 20% of hands, measured in games; it is not an enforced quota.
 ## Combined loss and gradients
 
 The actor loss mixes expert loss and self-play loss by their actual source
-fractions. Both anchors, positive expert CE (1.0 riichi, 0.2 calls),
+fractions. Both anchors, positive expert CE (0.2 riichi, 0.2 calls),
 0.1 settlement likelihood and
 critic constraints, and 0.01 structural constraints then enter once. There is no
 separate entropy bonus. Direct belief supervision adds the mean of the
@@ -198,7 +198,8 @@ values. They receive no additional outcome targets or backward pass.
 ## Diagnostics
 
 Checkpoint matches are followed by two critic-only passes over their recorded
-decisions. This phase minimizes the observed Q loss above at 2e-5;
+decisions. This phase minimizes the observed Q loss above at the preceding
+policy pass's learning rate (2e-5 down to 5e-6 as self-play rises to 80%);
 it updates the shared encoder without actor objectives or policy-owned weight
 updates. It uses a fresh optimizer per Q phase. These fit metrics are in-sample.
 Q fitting follows the recorded pass and mixed passes 1–4 only. The final

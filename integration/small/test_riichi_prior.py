@@ -2,6 +2,7 @@
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import amend_riichi_prior, features, replay
 from model import actor
 
@@ -52,11 +53,11 @@ def test_positive_prior_has_gradient_at_tiny_mass_and_is_neutral_elsewhere():
     )
     with tf.GradientTape() as tape:
         loss = 0.2 * actor.expert_prior_loss(
-            tf.nn.log_softmax(logits), preference, tf.constant([1, 2, 1])
+            tf.nn.log_softmax(logits), preference
         )
     gradient = tape.gradient(loss, logits).numpy()
-    numpy.testing.assert_allclose(gradient[0], [-1 / 3, 1 / 6, 1 / 6])
-    numpy.testing.assert_allclose(gradient[1], gradient[0] / 5)
+    numpy.testing.assert_allclose(gradient[0], [-1 / 15, 1 / 30, 1 / 30])
+    numpy.testing.assert_allclose(gradient[1], gradient[0])
     numpy.testing.assert_array_equal(gradient[2], 0)
 
 

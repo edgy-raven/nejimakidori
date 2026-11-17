@@ -18,7 +18,8 @@ projected current-hand ST3 and the reference action comes from the fixed
 production policy. Each label uses its own Q gap; weights do not backpropagate
 into Q. The full recipe retains self-play improvement, both KL anchors,
 positive priors and shared belief/critic objectives.
-AdamW uses learning rate 2e-5, weight decay 1e-4 and clip norm 1. The actor and
+AdamW starts at 2e-5, decreasing linearly to 5e-6 as the scheduled self-play
+share rises from 0% to 80%, with weight decay 1e-4 and clip norm 1. The actor and
 its shared encoder train. The full recipe also supervises the critic and
 beliefs. Existing outcome labels remain associated
 with the original played actions, and are not assigned to distill policy alternatives.

@@ -3,6 +3,7 @@
 import math
 
 import tensorflow as tf
+
 from log_dataset import _native_collection
 from model import actions
 
@@ -498,7 +499,11 @@ class RiverEncoding(tf.keras.layers.Layer):
         encoded = self.projection(
             tf.concat([tf.reshape(values, (-1, 32 * 64)), maximum], axis=-1)
         ) * tf.cast(occupied, self.compute_dtype)
-        return tf.reshape(encoded, (-1, 384))
+        return (
+            tf.reshape(encoded, (-1, 384)),
+            tf.reshape(values, (-1, 192, 64)),
+            tf.reshape(mask > 0, (-1, 192)),
+        )
 
 
 def last_draw_context(inputs, selected):
@@ -714,6 +719,86 @@ class DecisionCandidates(tf.keras.layers.Layer):
         )
 
 
+@tf.keras.utils.register_keras_serializable(package="nejimakidori")
+class CandidateRiverAttention(tf.keras.layers.Layer):
+    """Legal candidates query observed rivers without repeating their keys."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**{**kwargs, "autocast": False})
+        self.stream = tf.keras.layers.Embedding(6, 64, dtype=self.dtype_policy)
+        self.position = tf.keras.layers.Embedding(
+            32, 64, dtype=self.dtype_policy
+        )
+        self.normalization = tf.keras.layers.LayerNormalization(
+            dtype=self.dtype_policy
+        )
+        self.attention = tf.keras.layers.MultiHeadAttention(
+            num_heads=4,
+            key_dim=16,
+            output_shape=64,
+            use_bias=False,
+            dtype=self.dtype_policy,
+        )
+        self.correction = tf.keras.layers.Dense(
+            384,
+            use_bias=False,
+            kernel_initializer="zeros",
+            dtype=self.dtype_policy,
+        )
+
+    def build(self, input_shape):
+        self.stream.build((192,))
+        self.position.build((192,))
+        self.normalization.build((None, None, 384))
+        self.attention.build(
+            query_shape=(None, None, 384), value_shape=(None, 193, 64)
+        )
+        self.correction.build((None, None, 64))
+        super().build(input_shape)
+
+    def call(self, values):
+        candidates, selected, tokens, valid = values
+        batch = tf.shape(tokens)[0]
+        counts = tf.math.unsorted_segment_sum(
+            tf.ones_like(selected[:, 0]), selected[:, 0], batch
+        )
+        # selected is row-major. Pack only legal choices, not all 295 slots.
+        indices = tf.stack(
+            [
+                selected[:, 0],
+                tf.range(tf.shape(selected)[0])
+                - tf.gather(tf.cumsum(counts, exclusive=True), selected[:, 0]),
+            ],
+            axis=-1,
+        )
+        queries = tf.scatter_nd(
+            indices,
+            candidates,
+            (batch, tf.maximum(tf.reduce_max(counts), 1), 384),
+        )
+        tokens = (
+            tokens
+            + self.stream(tf.range(192) // 32)[None]
+            + self.position(tf.range(192) % 32)[None]
+        ) * tf.cast(valid[..., None], tokens.dtype)
+        # A zero-valued null key makes empty rivers finite and exactly neutral,
+        # including after training. It also permits ignoring observed history.
+        tokens = tf.concat(
+            [tokens, tf.zeros((batch, 1, 64), tokens.dtype)], axis=1
+        )
+        valid = tf.concat([valid, tf.ones((batch, 1), tf.bool)], axis=1)
+        return candidates + tf.gather_nd(
+            self.correction(
+                self.attention(
+                    self.normalization(queries),
+                    tokens,
+                    attention_mask=valid[:, None, :],
+                )
+            ),
+            indices,
+        )
+
+
 def encode_inputs():
     inputs = {
         name: tf.keras.Input(
@@ -722,10 +807,13 @@ def encode_inputs():
         for name, definition in _native_collection.INPUTS.items()
     }
     bank = HandBank(name="hand_bank")(inputs)
+    rivers, river_tokens, river_valid = RiverEncoding(name="river_encoder")(
+        inputs
+    )
     encoded = [
         bank[:, 0],
         tf.keras.layers.GlobalAveragePooling1D()(bank),
-        RiverEncoding(name="river_encoder")(inputs),
+        rivers,
         numeric_features(
             [
                 # Ignore retired inputs, including values in cached records.
@@ -776,6 +864,9 @@ def encode_inputs():
     candidates, selected, structure = DecisionCandidates(
         name="decision_candidates"
     )([inputs, bank, hidden])
+    candidates = CandidateRiverAttention(name="candidate_river_attention")(
+        [candidates, selected, river_tokens, river_valid]
+    )
     candidates = tf.keras.layers.LayerNormalization(
         center=False,
         scale=False,

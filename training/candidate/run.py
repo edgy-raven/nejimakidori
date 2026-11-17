@@ -41,7 +41,17 @@ def settings(args):
     games = int(command[command.index("--games") + 1])
     if games <= 0 or games % 4:
         raise ValueError("Evaluation needs complete four-game seed groups")
-    return args.record_fractions, command
+    return (
+        args.record_fractions,
+        [
+            args.learning_rate
+            + (args.final_learning_rate - args.learning_rate)
+            * (1 - fraction)
+            / (1 - min(args.record_fractions))
+            for fraction in [1.0, *args.record_fractions]
+        ],
+        command,
+    )
 
 
 def save_cohort(network, root, exposures):
@@ -87,7 +97,7 @@ def finish_checkpoint(
 
 
 def run(args):
-    fractions, evaluation_command = settings(args)
+    fractions, learning_rates, evaluation_command = settings(args)
     label_plan = json.loads(
         (pathlib.Path(args.distill_labels) / "plan.json").read_text()
     )
@@ -151,6 +161,7 @@ def run(args):
             **vars(args),
             "positions_per_pass": positions,
             "record_fractions": fractions,
+            "phase_learning_rates": learning_rates,
             "expert_weight": 0.5,
             "distill_weight": 0.5,
             "imitation_weighting": "q_gap_to_fixed_reference",
@@ -210,6 +221,9 @@ def run(args):
             args=args,
             report=report,
             total_exposures=q_exposures,
+            learning_rate=float(
+                trainer.trainer.optimizer.learning_rate.numpy()
+            ),
         )
         previous.actor.set_weights(network.actor.get_weights())
 
@@ -279,6 +293,9 @@ def run(args):
     ) as collector:
         for phase, fraction in enumerate(fractions, 1):
             stage = f"mixed-policy-{phase}"
+            trainer.trainer.optimizer.learning_rate.assign(
+                learning_rates[phase]
+            )
             used = 0
             report(stage, {})
             while used < positions:
@@ -461,6 +478,7 @@ def argument_parser():
         target_fraction=0.5,
         root_copies=1,
         learning_rate=2e-5,
+        final_learning_rate=5e-6,
         beta=16.0,
         mirror_coefficient=0.3,
         magnet_coefficient=0.3,

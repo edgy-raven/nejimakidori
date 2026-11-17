@@ -43,7 +43,8 @@ match is the final evaluation. There is no final Q fit or separate confirmation
 match. `final.weights.h5` contains those final evaluated policy weights.
 
 See the [match-record contract](../MATCH_RECORDS.md) for recorded actions and
-target construction. Each Q phase starts a fresh optimizer at 2e-5. Its two
+target construction. Each Q phase starts a fresh optimizer at the learning
+rate of its preceding policy pass. Its two
 passes retain every row, including the final partial batch. Policy exposure
 budgets and Q exposure counters are tracked separately.
 
@@ -73,13 +74,15 @@ Reusing a replay position counts toward this budget.
 | Pass | Recorded | Self-play | Learning rate |
 | --- | --- | --- | --- |
 | Recorded imitation | 100% | 0% | 2e-5 |
-| Mixed 1 | 80% | 20% | 2e-5 |
-| Mixed 2 | 60% | 40% | 2e-5 |
-| Mixed 3 | 40% | 60% | 2e-5 |
-| Mixed 4 | 20% | 80% | 2e-5 |
-| Mixed 5 | 20% | 80% | 2e-5 |
+| Mixed 1 | 80% | 20% | 1.625e-5 |
+| Mixed 2 | 60% | 40% | 1.25e-5 |
+| Mixed 3 | 40% | 60% | 8.75e-6 |
+| Mixed 4 | 20% | 80% | 5e-6 |
+| Mixed 5 | 20% | 80% | 5e-6 |
 
-Learning rate stays constant across all passes. Every run starts with recorded
+Learning rate decreases linearly with the scheduled self-play share, from
+2e-5 at 0% to 5e-6 at 80%. It stays constant within each pass. Changing the
+rate preserves policy optimizer moments. Every run starts with recorded
 imitation, then five mixed passes capped at 80% self-play. Alternative recipes belong
 on experiment branches, not launch flags.
 
@@ -89,7 +92,7 @@ on experiment branches, not launch flags.
 | --- | --- |
 | Fixed-reference KL coefficient | 0.3 |
 | Excess losing-hand downside penalty coefficient | 0.1 |
-| Positive-only expert CE coefficient | 1.0 riichi; 0.2 calls |
+| Positive-only expert CE coefficient | 0.2 riichi; 0.2 calls |
 | Riichi hand-rate calibration target | 20% |
 | Recorded imitation | 50% expert / 50% greedy distill policy Q-weighted CE; separate adaptive beta targeting 70% ESS |
 | Previous-policy mirror KL coefficient | 0.3 |

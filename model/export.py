@@ -8,6 +8,7 @@ import shutil
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import (
     _native_collection,
     focus_sampling,
@@ -283,7 +284,8 @@ class ServingModel(tf.Module):
         }
 
 
-def load_network(weights, inputs):
+def build_network(inputs):
+    """Build every actor and critic variable before strict weight loading."""
     network = joint_network.JointPolicyPayment()
     outputs = network.actor(inputs, training=False)
     encoded, state = network.candidate_context(inputs, outputs)
@@ -300,6 +302,11 @@ def load_network(weights, inputs):
         }
     )
     network.built = True
+    return network
+
+
+def load_network(weights, inputs):
+    network = build_network(inputs)
     network.load_weights(weights)
     network.compile_training()
     return network

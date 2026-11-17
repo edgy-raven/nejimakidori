@@ -8,12 +8,23 @@ import time
 
 import numpy
 import tensorflow as tf
+
 from training import match_records
 from training import trainer as trainers
 from training.candidate import replay
 
 
-def run(*, stage, root, network, strategy, args, report, total_exposures):
+def run(
+    *,
+    stage,
+    root,
+    network,
+    strategy,
+    args,
+    report,
+    total_exposures,
+    learning_rate,
+):
     report(stage + "_q-building", {})
     data = root / (stage + "-q-data")
     subprocess.run(
@@ -40,15 +51,27 @@ def run(*, stage, root, network, strategy, args, report, total_exposures):
         args=args,
         report=report,
         total_exposures=total_exposures,
+        learning_rate=learning_rate,
     )
 
 
-def fit(*, stage, root, data, network, strategy, args, report, total_exposures):
+def fit(
+    *,
+    stage,
+    root,
+    data,
+    network,
+    strategy,
+    args,
+    report,
+    total_exposures,
+    learning_rate,
+):
     positions = json.loads((data / "dataset.json").read_text())["positions"]
     with strategy.scope():
         trainer = trainers.DistributedCriticTrainer(
             trainers.CriticTrainer(
-                network, network.encoder.input, args.learning_rate
+                network, network.encoder.input, learning_rate
             ),
             strategy,
         )

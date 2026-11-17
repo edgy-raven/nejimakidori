@@ -78,6 +78,33 @@ them across candidate actions. Only the settlement probabilities depend on the
 action. Payoff construction and action forecasts use bounded GPU chunks; the
 shared payoff tensor exists only for the current root batch.
 
+## Candidate attention to rivers
+
+Each legal candidate queries the river encoder's 192 event tokens: three
+opponents, two pre/post-riichi streams and 32 positions per stream. Tokens
+retain the existing convolutional event features, with learned stream and
+position embeddings. Four attention heads of width 16 produce a residual
+correction to the 384-wide candidate representation shared by policy and
+critic. The pooled river representation still feeds the board encoder.
+
+Queries are packed by board using only legal candidates; river keys are shared
+across those candidates. Invalid events are masked. A zero-valued null token
+allows empty rivers to produce exactly zero correction, including after
+training. The output projection starts at zero, preserving existing predictions
+when weights are explicitly transferred. Training must learn the new branch
+before it can change decisions. Input features and exported outputs are unchanged.
+
+To add this branch to otherwise matching weights, run:
+
+```sh
+CUDA_VISIBLE_DEVICES=-1 python -m model.initialize \
+    --weights previous.weights.h5 --output river.weights.h5
+```
+
+The converter rejects unrelated architecture differences and existing output
+files. Normal checkpoint loading remains strict. This command does not start
+training or alter frozen runs or serving models.
+
 ## Tile interactions in opponent beliefs
 
 Initial count and structural-wait predictions feed 34 tile tokens per opponent.

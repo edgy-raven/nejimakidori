@@ -8,6 +8,7 @@ import types
 import numpy
 import pytest
 import tensorflow as tf
+
 from log_dataset import afk
 from log_dataset import replay as game_replay
 from log_dataset import training_data
@@ -15,7 +16,7 @@ from model import actions
 from training.candidate import replay, run
 
 
-def test_checkpoint_matches_use_disjoint_wall_seeds(tmp_path, monkeypatch):
+def test_phase_rates_and_checkpoint_matches(tmp_path, monkeypatch):
     commands = []
     fitted = []
     monkeypatch.setattr(
@@ -35,6 +36,26 @@ def test_checkpoint_matches_use_disjoint_wall_seeds(tmp_path, monkeypatch):
         "--games",
         "10000",
     ]
+    (tmp_path / "evaluation-command").write_text(json.dumps(command))
+    args = run.argument_parser().parse_args(
+        [
+            value
+            for name in (
+                "initial",
+                "reference",
+                "distill-labels",
+                "output",
+                "evaluation-command",
+                "collection-device",
+            )
+            for value in ("--" + name, str(tmp_path / name))
+        ]
+    )
+    fractions, rates, command = run.settings(args)
+    numpy.testing.assert_allclose(fractions, [0.8, 0.6, 0.4, 0.2, 0.2])
+    numpy.testing.assert_allclose(
+        rates, [2e-5, 1.625e-5, 1.25e-5, 8.75e-6, 5e-6, 5e-6]
+    )
     stages = ["record-imitation"] + [f"mixed-policy-{i}" for i in range(1, 6)]
     for stage in stages + [stages[-1]]:
         run.finish_checkpoint(

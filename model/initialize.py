@@ -1,4 +1,4 @@
-"""Explicitly add neutral candidate-river attention to existing weights."""
+"""Explicitly add neutral river attention branches to existing weights."""
 
 import argparse
 import pathlib
@@ -38,7 +38,14 @@ def initialize(weights, output, inputs):
             if (
                 not added
                 or any(
-                    "/candidate_river_attention/" not in name for name in added
+                    not any(
+                        branch in name
+                        for branch in (
+                            "/candidate_river_attention/",
+                            "/river_attention/",
+                        )
+                    )
+                    for name in added
                 )
                 or any(
                     target_arrays.get(name) != shape
@@ -46,7 +53,7 @@ def initialize(weights, output, inputs):
                 )
             ):
                 raise ValueError(
-                    "Weights must differ only by missing candidate-river attention"
+                    "Weights must differ only by missing river attention"
                 )
             for name in original_arrays:
                 target[name][...] = original[name][...]

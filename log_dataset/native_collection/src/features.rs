@@ -170,6 +170,8 @@ struct Focus {
 pub struct Ranges {
     pub values: [f64; 8],
     pub valid: [u8; 4],
+    pub magnet_values: [f64; 8],
+    pub magnet_valid: [u8; 4],
     pub restricted: [u8; 2],
     pub eligible: u8,
     pub dama_points: i32,
@@ -183,6 +185,7 @@ pub struct RangeContext {
     pub unavailable: [u8; 34],
     pub unavailable_red: [i32; 3],
     pub prior: u8,
+    pub riichi: u8,
 }
 impl RangeContext {
     pub fn new(ctx: &scoring::Context) -> Self {
@@ -192,6 +195,7 @@ impl RangeContext {
             unavailable: ctx.unavailable,
             unavailable_red: ctx.unavailable_red,
             prior: 0,
+            riichi: 0,
         }
     }
     pub fn available_tiles(&self, base: u8) -> impl Iterator<Item = (u8, bool)> {
@@ -276,6 +280,8 @@ unsafe extern "C" fn score(
         *out = Ranges {
             values: result.values,
             valid: result.valid,
+            magnet_values: result.magnet_values,
+            magnet_valid: result.magnet_valid,
             restricted: result.restricted,
             eligible: result.eligible as u8,
             dama_points: result.dama_points,
@@ -316,6 +322,8 @@ pub fn ranges(
     scoring::Ranges {
         values: out.values,
         valid: out.valid,
+        magnet_values: out.magnet_values,
+        magnet_valid: out.magnet_valid,
         restricted: out.restricted,
         eligible: out.eligible != 0,
         dama_points: out.dama_points,
@@ -556,7 +564,10 @@ pub fn pack(
             branches.len(),
             &mut legal,
             &mut focus,
-            &RangeContext::new(&ctx),
+            &RangeContext {
+                riichi: state.accepted[actor] as u8,
+                ..RangeContext::new(&ctx)
+            },
             &mut ctx as *mut _ as *mut std::ffi::c_void,
             score,
         );

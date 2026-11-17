@@ -78,17 +78,56 @@ def test_candidate_river_attention_learns_masked_action_specific_history():
     )
 
 
+def test_river_self_attention_connects_streams_without_padding_leakage():
+    tf.keras.utils.set_random_seed(941)
+    valid = tf.constant(
+        [[True] * 64 + [False] * 64 + [True] * 64, [False] * 192]
+    )
+    tokens = tf.where(valid[..., None], tf.random.normal((2, 192, 64)), 0)
+    attention = encoder.RiverSelfAttention(dtype="float32")
+    numpy.testing.assert_array_equal(attention([tokens, valid]), tokens)
+    optimizer = tf.keras.optimizers.SGD(0.01)
+    target = tf.random.normal((2, 192, 64))
+    for _ in range(2):
+        with tf.GradientTape() as tape:
+            loss = tf.reduce_mean(attention([tokens, valid]) * target)
+        gradients = tape.gradient(loss, attention.trainable_variables)
+        assert all(
+            numpy.isfinite(tf.convert_to_tensor(g)).all() for g in gradients
+        )
+        optimizer.apply_gradients(zip(gradients, attention.trainable_variables))
+    assert all(numpy.any(tf.convert_to_tensor(g) != 0) for g in gradients)
+    expected = attention([tokens, valid])
+    changed = tf.tensor_scatter_nd_add(
+        tokens, [[0, 191]], [tf.cast(tf.range(64), tf.float32)]
+    )
+    assert numpy.any(attention([changed, valid])[0, 0] != expected[0, 0])
+    padded = tf.where(valid[..., None], tokens, 100)
+    numpy.testing.assert_array_equal(attention([padded, valid]), expected)
+    numpy.testing.assert_array_equal(expected[1], numpy.zeros((192, 64)))
+    numpy.testing.assert_allclose(
+        tf.function(attention)([tokens, valid]), expected, atol=1e-6
+    )
+
+
+@pytest.mark.parametrize("candidate_attention", [False, True])
 def test_river_attention_weight_conversion_preserves_policy_and_critic(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, candidate_attention
 ):
     inputs = self_play.initial_features(941)
-    # Build the previous graph: all existing heads, no candidate-river branch.
+    # Convert both earlier architectures without changing existing heads.
     with monkeypatch.context() as context:
         context.setattr(
             encoder,
-            "CandidateRiverAttention",
-            lambda **kwargs: lambda values: values[0],
+            "RiverSelfAttention",
+            lambda **kwargs: tf.keras.layers.Lambda(lambda values: values[0]),
         )
+        if not candidate_attention:
+            context.setattr(
+                encoder,
+                "CandidateRiverAttention",
+                lambda **kwargs: lambda values: values[0],
+            )
         previous = export.build_network(inputs)
     original = tmp_path / "original.weights.h5"
     previous.save_weights(original)
@@ -104,6 +143,10 @@ def test_river_attention_weight_conversion_preserves_policy_and_critic(
     correction = converted.encoder.get_layer(
         "candidate_river_attention"
     ).correction
+    correction.kernel.assign(tf.random.normal(correction.kernel.shape) * 0.01)
+    correction = converted.encoder.get_layer(
+        "river_encoder"
+    ).river_attention.correction
     correction.kernel.assign(tf.random.normal(correction.kernel.shape) * 0.01)
     trained = tmp_path / "trained.weights.h5"
     converted.save_weights(trained)
@@ -130,7 +173,7 @@ def test_river_attention_weight_conversion_preserves_policy_and_critic(
             value, expected_policy[name], rtol=1e-5, atol=1e-5
         )
     # Already-converted files are not silently reinitialized or overwritten.
-    with pytest.raises(ValueError, match="missing candidate-river"):
+    with pytest.raises(ValueError, match="missing river attention"):
         initialize.initialize(output, tmp_path / "invalid.weights.h5", inputs)
 
 
@@ -192,7 +235,7 @@ def test_reused_suits_match_float32_gradient_accumulation(monkeypatch):
         )
 
 
-def test_retired_analysis_is_skipped_and_cached_inputs_are_ignored(monkeypatch):
+def test_retired_analysis_and_magnet_inputs_do_not_enter_encoder(monkeypatch):
     events = json.loads(
         pathlib.Path(
             "integration/fixtures/model/pass_speed_round.json"
@@ -219,8 +262,12 @@ def test_retired_analysis_is_skipped_and_cached_inputs_are_ignored(monkeypatch):
     board_model = tf.keras.Model(inputs, board)
     batch = {name: value[None] for name, value in packed.items()}
     expected = board_model(batch).numpy()
-    # Retired fields in cached records cannot influence the encoder.
-    for name in _native_collection.IGNORED_INPUTS:
+    # Retired fields and fixed-policy scoring never enter candidate learning.
+    for name in (
+        *_native_collection.IGNORED_INPUTS,
+        "magnet_win_value_range",
+        "magnet_win_value_valid",
+    ):
         batch[name] = numpy.ones_like(batch[name])
     numpy.testing.assert_array_equal(board_model(batch), expected)
 

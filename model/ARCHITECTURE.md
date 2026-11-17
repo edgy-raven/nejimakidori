@@ -45,7 +45,12 @@ Structural waits can be blocked by furiten or lack of yaku. Completion potential
 and route affinity therefore have different meanings from win probability.
 The candidate value-range inputs are also conditional completion bounds: they
 search available finishes from zero/one-shanten hands, without predicting how
-likely those finishes are.
+likely those finishes are. Dama uses undeclared scoring; declaration and
+already-accepted riichi use riichi scoring. The action-specific ron-valid
+flag is false for no-yaku dama. See the [native input contract](../log_dataset/native_collection/README.md#action-conditioned-win-values)
+for dataset regeneration requirements. Fixed-magnet scoring tensors are kept
+outside learned projections; training uses them only to preserve the released
+reference policy's decisions.
 
 Call forecasts condition on attempting the call, including preemption by
 competing claims. Accepted-call features describe the hypothetical candidate;
@@ -73,10 +78,29 @@ matches use exact final scores and ranks. Earlier hands use a fixed continuation
 model based on scores, remaining hands and scheduled dealerships. Its parameters
 are separate from the learned current-hand critic.
 
+The frozen four-parameter continuation was recalibrated on November 17 using
+80,000 completed games: six duplicate training matches and two standard South
+Mortal matches. Game-weighted placement likelihood improves on held-out seeds
+overall, but worsens on the production-v2/Mortal subset. This is a pooled-match
+calibration, with no opponent-strength or rules-format input.
+
 Root scoring computes settlement payoffs once per public position and reuses
 them across candidate actions. Only the settlement probabilities depend on the
 action. Payoff construction and action forecasts use bounded GPU chunks; the
 shared payoff tensor exists only for the current root batch.
+
+## Shared river self-attention
+
+After the per-stream convolutions, one residual self-attention block connects
+all 192 observed river events across opponents and pre/post-riichi streams.
+It uses width 64, four heads, pre-normalization, and learned stream and position
+embeddings. Invalid keys are masked, invalid query outputs remain zero, and
+a zero null key handles empty rivers. Its bias-free output projection starts
+at zero. The refined tokens feed both the pooled board representation (and
+therefore opponent beliefs) and candidate-to-river attention, reaching Q
+through both paths. No future events or hidden hands are attention inputs.
+
+This block is implemented but has not been strength- or Q-quality-tested.
 
 ## Candidate attention to rivers
 
@@ -94,7 +118,7 @@ training. The output projection starts at zero, preserving existing predictions
 when weights are explicitly transferred. Training must learn the new branch
 before it can change decisions. Input features and exported outputs are unchanged.
 
-To add this branch to otherwise matching weights, run:
+To add missing river attention branches to otherwise matching weights, run:
 
 ```sh
 CUDA_VISIBLE_DEVICES=-1 python -m model.initialize \

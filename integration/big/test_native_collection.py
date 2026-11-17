@@ -5,6 +5,8 @@ import json
 import pathlib
 
 import numpy
+import riichienv
+
 from integration import collection_reference, feature_reference
 from log_dataset import (
     _native_collection,
@@ -15,8 +17,6 @@ from log_dataset import (
 )
 from model import actions
 from training import self_play
-
-import riichienv
 
 
 def test_native_features_match_python_during_complete_games(monkeypatch):
@@ -285,7 +285,7 @@ def test_native_feature_parity_covers_riichi_kan_and_scoring():
                         ),
                     )
                 coverage.add(phase)
-                if expected["action_value_valid"].any():
+                if expected["action_win_value_valid"].any():
                     coverage.add("value_ranges")
                 if expected["riichi_push_count"].any():
                     coverage.add("riichi_push")

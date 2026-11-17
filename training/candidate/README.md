@@ -123,6 +123,9 @@ exposure/cohort counters, schedules, replay and TensorBoard start fresh in a
 new output directory. The previous-policy snapshot starts from the initializer.
 
 Initial weights and fixed-reference weights remain separate required paths.
+The v2.0 fixed magnet uses its original scoring tensors from the required
+`magnet_win_value_*` fields; candidate and mirror use corrected dama values.
+Rebuild datasets that lack this [input contract](../../log_dataset/native_collection/README.md#action-conditioned-win-values).
 `--seed` controls reproducibility. The saved plan includes the fixed recipe and
 capacity settings.
 

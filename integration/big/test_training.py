@@ -7,6 +7,7 @@ import types
 import numpy
 import pytest
 import tensorflow as tf
+
 from log_dataset import afk, replay, training_data
 from model import actions
 from model import actor as actor_layers
@@ -312,12 +313,17 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
         .read_text()
     )
     targets = training_data.game_targets(events + [{"type": "end_game"}])
-    observations = list(
-        replay.Replay(
-            "training-probe",
-            afk.retained_hands(events)[0],
+    observations = [
+        row
+        for row in replay.Replay(
+            "training-probe", afk.retained_hands(events)[0]
         ).observations()
-    )[:2]
+        if numpy.any(
+            row.features["action_win_value_range"]
+            != row.features["magnet_win_value_range"].astype(numpy.float32)
+            * 100
+        )
+    ][:2]
     raw = tf.constant(
         [
             training_data.serialize(row, targets[row.kyoku_id])
@@ -374,8 +380,12 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
         )
         # Compare the same compiled training forward: bfloat16 kernels can
         # round differently when no gradient recording is requested.
+        predictions = network.actor(inputs[0], training=False)
         expected, _ = beliefs.belief_loss_terms(
-            inputs[0], inputs[1], network.actor(inputs[0], training=False)
+            inputs[0], inputs[1], predictions
+        )
+        current = actor_layers.distribution(
+            predictions, batch["head"], batch["legal"]
         )
     assert (
         tf.linalg.global_norm(
@@ -390,6 +400,24 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
             )
         )
         > 0
+    )
+    fixed_inputs = {
+        **inputs[0],
+        "action_win_value_range": tf.cast(
+            inputs[0]["magnet_win_value_range"], tf.float32
+        )
+        * 100,
+        "action_win_value_valid": inputs[0]["magnet_win_value_valid"],
+    }
+    fixed = actor_layers.distribution(
+        reference.actor(fixed_inputs, training=False),
+        batch["head"],
+        batch["legal"],
+    )
+    numpy.testing.assert_allclose(
+        metrics["magnet_kl"],
+        actor_layers.policy_kl(fixed, current, reverse=True),
+        atol=1e-5,
     )
     assert float(metrics["risk_penalty_st3"]) >= 0
     for name, value in expected.items():

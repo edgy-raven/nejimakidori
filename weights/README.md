@@ -1,27 +1,27 @@
 # Model files
 
-Download [Nejimakidori v2.0](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2.0)
+Download [Nejimakidori v2 hotfix](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2-hotfix-20261117)
 and complete [source setup](../SETUP.md).
 
 The release contains two downloads:
 
 | Download | Contents |
 | --- | --- |
-| `nejimakidori-v2.0.tar.gz` | Model, training weights, source and evaluation results. |
+| `nejimakidori-v2-hotfix-20261117.tar.gz` | Model, training weights, source and evaluation results. |
 | `SHA256SUMS` | SHA-256 checksum for the archive. |
 
 ## Download and verify
 
 Download the archive and checksum from the
-[release](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2.0):
+[release](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2-hotfix-20261117):
 
 ```sh
 mkdir -p artifacts
 cd artifacts
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2.0/nejimakidori-v2.0.tar.gz
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2.0/SHA256SUMS
+curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2-hotfix-20261117/nejimakidori-v2-hotfix-20261117.tar.gz
+curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2-hotfix-20261117/SHA256SUMS
 sha256sum -c SHA256SUMS
-tar -xzf nejimakidori-v2.0.tar.gz
+tar -xzf nejimakidori-v2-hotfix-20261117.tar.gz
 cd ..
 ```
 
@@ -44,8 +44,7 @@ weights contain no optimizer state and require a compatible model architecture. 
 
 ## Evaluation
 
-The released checkpoint completed 10,000 games against the previous v2 release,
-with a mean difference of +1.4422 ST3 points/game (paired 95% bounds
--1.1501 to +4.1367). This comparison does not establish a strength advantage.
-The release contains the evaluated policy weights, before subsequent match-log
-critic fitting.
+The release evaluation compares the selected checkpoint against v2.0 using
+10,000 games. See `evaluation.json` in the archive for the final results and
+paired uncertainty bounds. The archive contains the exact evaluated weights,
+before subsequent match-log critic fitting.

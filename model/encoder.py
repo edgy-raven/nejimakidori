@@ -20,6 +20,8 @@ SCORING_INPUTS = frozenset(
         "riichi_extra_han",
         "call_open_points",
         "call_riichi_points",
+        "magnet_win_value_range",
+        "magnet_win_value_valid",
     }
 )
 
@@ -402,6 +404,57 @@ class HandBank(tf.keras.layers.Layer):
 
 
 @tf.keras.utils.register_keras_serializable(package="nejimakidori")
+class RiverSelfAttention(tf.keras.layers.Layer):
+    """Mix observed events across all opponent pre/post-riichi streams."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.stream = tf.keras.layers.Embedding(6, 64, dtype=self.dtype_policy)
+        self.position = tf.keras.layers.Embedding(
+            32, 64, dtype=self.dtype_policy
+        )
+        self.normalization = tf.keras.layers.LayerNormalization(
+            dtype=self.dtype_policy
+        )
+        self.attention = tf.keras.layers.MultiHeadAttention(
+            num_heads=4,
+            key_dim=16,
+            use_bias=False,
+            dtype=self.dtype_policy,
+        )
+        self.correction = tf.keras.layers.Dense(
+            64,
+            use_bias=False,
+            kernel_initializer="zeros",
+            dtype=self.dtype_policy,
+        )
+
+    def build(self, input_shape):
+        self.stream.build((192,))
+        self.position.build((192,))
+        self.normalization.build((None, 192, 64))
+        self.attention.build(
+            query_shape=(None, 192, 64), value_shape=(None, 193, 64)
+        )
+        self.correction.build((None, 192, 64))
+        super().build(input_shape)
+
+    def call(self, values):
+        tokens, valid = values
+        queries = self.normalization(
+            tokens
+            + self.stream(tf.range(192) // 32)[None]
+            + self.position(tf.range(192) % 32)[None]
+        )
+        keys = tf.concat([queries, tf.zeros_like(queries[:, :1])], axis=1)
+        mask = tf.concat([valid, tf.ones_like(valid[:, :1])], axis=1)
+        correction = self.correction(
+            self.attention(queries, keys, attention_mask=mask[:, None, :])
+        )
+        return tf.where(valid[..., None], tokens + correction, 0)
+
+
+@tf.keras.utils.register_keras_serializable(package="nejimakidori")
 class RiverEncoding(tf.keras.layers.Layer):
     """Encode separately padded pre/post-riichi rivers with shared weights."""
 
@@ -436,6 +489,7 @@ class RiverEncoding(tf.keras.layers.Layer):
         self.projection = tf.keras.layers.Dense(
             64, activation="gelu", dtype=self.dtype_policy
         )
+        self.river_attention = RiverSelfAttention(dtype=self.dtype_policy)
 
     def build(self, input_shape):
         self.embedding.build(input_shape["river_pre_tile_id"])
@@ -446,6 +500,7 @@ class RiverEncoding(tf.keras.layers.Layer):
             convolution.build((None, 32, 64))
             normalization.build((None, 32, 64))
         self.projection.build((None, 33 * 64))
+        self.river_attention.build([(None, 192, 64), (None, 192)])
         super().build(input_shape)
 
     def call(self, inputs):
@@ -490,6 +545,15 @@ class RiverEncoding(tf.keras.layers.Layer):
             values = (
                 tf.nn.gelu(normalization(values + convolution(values))) * mask
             )
+        values = tf.reshape(
+            self.river_attention(
+                [
+                    tf.reshape(values, (-1, 192, 64)),
+                    tf.reshape(mask > 0, (-1, 192)),
+                ]
+            ),
+            (-1, 32, 64),
+        )
         occupied = tf.reduce_any(mask > 0, axis=1)
         maximum = tf.where(
             occupied,
@@ -654,9 +718,11 @@ class DecisionCandidates(tf.keras.layers.Layer):
         structural = tf.concat(
             [
                 structural,
-                tf.reshape(inputs["action_value_range"], (batch, 295, 8)),
+                tf.reshape(inputs["action_win_value_range"], (batch, 295, 8)),
                 tf.cast(
-                    tf.reshape(inputs["action_value_valid"], (batch, 295, 4)),
+                    tf.reshape(
+                        inputs["action_win_value_valid"], (batch, 295, 4)
+                    ),
                     tf.float32,
                 ),
                 tf.cast(inputs["action_value_eligible"][..., None], tf.float32),

@@ -34,6 +34,30 @@ views of those rows.
 Self-shanten fields encode actual shanten + 1: 0 is complete, 1 is tenpai,
 and 2 is one away. Target samplers must account for that offset.
 
+### Action-conditioned win values
+
+`action_win_value_range` has axes `[295, closed/open, ron/tsumo, min/max]`;
+`action_win_value_valid` marks legal, available completions. Closed dama actions
+are scored without riichi. Declaration actions and actions after accepted
+riichi include it. No-yaku dama has zero ron range and a false ron-valid flag;
+its menzen-tsumo completion can still be legal. One-shanten searches preserve
+the action's declaration state rather than assuming a later riichi.
+
+These fields replace `action_value_range` and `action_value_valid`, which assumed
+riichi for every closed hand. Rebuild recorded datasets from source archives and
+collect fresh replay before training with this contract. Old TFRecords are
+rejected because the new required fields are absent; renaming old fields does
+not repair their values. Old exports retain their original input contract and
+must not be paired with this encoder. Warm-start weights require retraining
+and evaluation with the corrected features before publication.
+
+`magnet_win_value_range` stores the fixed reference policy's original scoring
+ranges as int16 hundreds of points, with `magnet_win_value_valid` as int8.
+Both use the same axes as the candidate fields. Closed-hand reference ranges
+include riichi, preserving the released magnet's inputs. The learned candidate
+encoder ignores these two fields; only fixed-magnet inference substitutes them
+(expanding ranges by 100). The previous-policy mirror uses corrected values.
+
 Collector requests also carry `opponent_shanten`, `opponent_ukeire` and
 `opponent_hand_counts` as separate training labels in actor-relative order.
 These match the recorded labels, including red-five categories and known meld

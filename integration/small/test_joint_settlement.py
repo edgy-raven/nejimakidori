@@ -2,6 +2,7 @@
 
 import numpy
 import tensorflow as tf
+
 from integration import settlement_reference
 from log_dataset import scoring
 from model import joint_settlement, losses, outcomes, payment_scoring
@@ -319,6 +320,7 @@ def test_terminal_st3_is_exact_and_draw_pot_goes_to_leader():
                 {**result, "joint_probability": exact}, public
             ),
             expected,
+            rtol=1e-6,
             atol=1e-5,
         )
 

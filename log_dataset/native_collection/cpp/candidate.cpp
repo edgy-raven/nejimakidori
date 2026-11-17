@@ -5,20 +5,31 @@ namespace feature {
 using namespace fields;
 void Ranges::merge(Ranges const &other) {
   eligible |= other.eligible;
-  for (int s = 0; s < 4; ++s)
-    if (other.valid[s]) {
-      values[s * 2] =
-          valid[s] ? std::min(values[s * 2], other.values[s * 2]) : other.values[s * 2];
-      values[s * 2 + 1] = valid[s] ? std::max(values[s * 2 + 1], other.values[s * 2 + 1])
-                                   : other.values[s * 2 + 1];
-      valid[s] = 1;
-    }
+  for (int bank = 0; bank < 2; ++bank) {
+    auto target_values = bank ? magnet_values : values;
+    auto target_valid = bank ? magnet_valid : valid;
+    auto source_values = bank ? other.magnet_values : other.values;
+    auto source_valid = bank ? other.magnet_valid : other.valid;
+    for (int s = 0; s < 4; ++s)
+      if (source_valid[s]) {
+        target_values[s * 2] = target_valid[s]
+            ? std::min(target_values[s * 2], source_values[s * 2])
+            : source_values[s * 2];
+        target_values[s * 2 + 1] = target_valid[s]
+            ? std::max(target_values[s * 2 + 1], source_values[s * 2 + 1])
+            : source_values[s * 2 + 1];
+        target_valid[s] = 1;
+      }
+  }
   for (int i = 0; i < 2; ++i)
     restricted[i] |= other.restricted[i];
 }
 void write(Row row, Ranges const &v, int action) {
-  row.put(action_value_range, action * 8, v.values, 8);
-  row.put(action_value_valid, action * 4, v.valid, 4);
+  row.put(action_win_value_range, action * 8, v.values, 8);
+  row.put(action_win_value_valid, action * 4, v.valid, 4);
+  for (int i = 0; i < 8; ++i)
+    row.set(magnet_win_value_range, action * 8 + i, v.magnet_values[i] / 100);
+  row.put(magnet_win_value_valid, action * 4, v.magnet_valid, 4);
   row.put(action_open_yaku_restricted, action * 2, v.restricted, 2);
   row.set(action_value_eligible, action, v.eligible);
 }
@@ -205,8 +216,12 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
       }
       write(row, v, cut);
       write(row, v, 37 + cut);
-      if (legal.riichi[cut])
-        write(row, v, 74 + cut);
+      if (legal.riichi[cut]) {
+        auto declared = v;
+        std::copy_n(v.magnet_values, 8, declared.values);
+        std::copy_n(v.magnet_valid, 4, declared.valid);
+        write(row, declared, 74 + cut);
+      }
       decline.merge(v);
       for (int seat = 0; seat < 4; ++seat)
         row.set(discard_retained_genbutsu, cut * 4 + seat,

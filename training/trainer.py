@@ -153,7 +153,21 @@ class Trainer:
             self.mirror(features, training=False), batch["head"], batch["legal"]
         )
         magnet = actor_layers.distribution(
-            self.magnet(features, training=False), batch["head"], batch["legal"]
+            self.magnet(
+                {
+                    **features,
+                    "action_win_value_range": tf.cast(
+                        features["magnet_win_value_range"], tf.float32
+                    )
+                    * 100,
+                    "action_win_value_valid": features[
+                        "magnet_win_value_valid"
+                    ],
+                },
+                training=False,
+            ),
+            batch["head"],
+            batch["legal"],
         )
         reference = actor_layers.greedy_choices(magnet, batch["head"])
         chosen_actions = critic.chosen_actions(

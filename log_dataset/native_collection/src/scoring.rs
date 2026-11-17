@@ -40,9 +40,11 @@ pub struct Context {
 
 #[derive(Clone, Default)]
 pub struct Ranges {
-    // Flattened [closed riichi / open][ron / tsumo][minimum / maximum].
+    // Flattened [closed / open][ron / tsumo][minimum / maximum].
     pub values: [f64; 8],
     pub valid: [u8; 4],
+    pub magnet_values: [f64; 8],
+    pub magnet_valid: [u8; 4],
     // Open completions lacking yaku, separately for ron and tsumo.
     pub restricted: [u8; 2],
     pub eligible: bool,
@@ -64,6 +66,14 @@ pub fn ready_ranges(
         || availability.own_discards & waits != 0
         || cut.is_some_and(|tile| waits & (1u64 << tile) != 0);
     let open = melds.iter().any(|meld| meld.opened);
+    let magnet = (!open && availability.riichi == 0).then(|| {
+        ready_ranges(
+            tiles.clone(), melds.clone(), ctx,
+            &crate::features::RangeContext {
+                riichi: 1, prior: 0, ..*availability
+            }, cut, waits,
+        )
+    });
     let mut result = Ranges {
         eligible: true,
         ..Ranges::default()
@@ -150,7 +160,7 @@ pub fn ready_ranges(
                     &ctx.dora,
                     &[],
                     Some(Conditions {
-                        riichi: !open,
+                        riichi: !open && availability.riichi != 0,
                         tsumo: is_tsumo,
                         player_wind: Wind::from(ctx.player_wind),
                         round_wind: Wind::from(ctx.round_wind),
@@ -192,6 +202,8 @@ pub fn ready_ranges(
             }
         }
     }
+    result.magnet_values = magnet.as_ref().map_or(result.values, |v| v.values);
+    result.magnet_valid = magnet.as_ref().map_or(result.valid, |v| v.valid);
     result
 }
 
@@ -409,7 +421,7 @@ mod tests {
         let values = ranges(&tiles, &[], &ctx, None);
         assert!(values.eligible);
         assert_eq!(values.valid, [1, 1, 0, 0]);
-        assert_eq!(values.values, [1300., 3900., 2000., 5200., 0., 0., 0., 0.]);
+        assert_eq!(values.values, [1000., 2000., 1100., 2700., 0., 0., 0., 0.]);
         // Exhausted 5s still makes later 5s/8s waits furiten. Retain it in
         // the shared structural mask even though it cannot be drawn.
         let mut exhausted = ctx.clone();
@@ -418,7 +430,7 @@ mod tests {
         exhausted.own_discards.push(22);
         assert_eq!(
             ranges(&tiles, &[], &exhausted, None).values,
-            [1300., 2600., 2000., 4000., 0., 0., 0., 0.],
+            [1300., 1300., 1100., 2000., 0., 0., 0., 0.],
         );
         tiles[10] = 96;
         ctx.unavailable[27] -= 1;
@@ -452,12 +464,12 @@ mod tests {
             round_wind: 0,
         };
         let values = ranges(&tiles, &[], &ctx, None);
-        assert_eq!(values.values, [2000., 2000., 2700., 2700., 0., 0., 0., 0.]);
+        assert_eq!(values.values, [1000., 1000., 1500., 1500., 0., 0., 0., 0.]);
         ctx.unavailable[22] = 4;
         ctx.own_discards.push(22);
         let values = ranges(&tiles, &[], &ctx, None);
         assert_eq!(values.valid, [0, 1, 0, 0]);
-        assert_eq!(&values.values[..4], &[0., 0., 2700., 2700.]);
+        assert_eq!(&values.values[..4], &[0., 0., 1500., 1500.]);
         ctx.unavailable[25] = 4;
         assert_eq!(ranges(&tiles, &[], &ctx, None).valid, [0; 4]);
     }

@@ -173,7 +173,7 @@ def categories(packed):
             # A reachable legal open ron is direct evidence even without a
             # pre-call shortest route, with no minimum-value threshold.
             viable = viable[:, None] | (
-                packed["action_value_range"][
+                packed["action_win_value_range"][
                     slice(112, 223) if kind == "chi" else slice(223, 260),
                     1,
                     0,

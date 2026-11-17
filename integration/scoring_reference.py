@@ -122,7 +122,23 @@ def yaku_path_fractions(packed):
     )
 
 
-def action_value_ranges(tiles, melds, context, cut=None):
+def action_value_ranges(tiles, melds, context, cut=None, *, riichi=False):
+    result = _action_value_ranges(
+        tiles=tiles, melds=melds, context=context, cut=cut, riichi=riichi
+    )
+    magnet = (
+        result
+        if riichi
+        else _action_value_ranges(
+            tiles=tiles, melds=melds, context=context, cut=cut, riichi=True
+        )
+    )
+    result["magnet_range"] = magnet["range"]
+    result["magnet_valid"] = magnet["valid"]
+    return result
+
+
+def _action_value_ranges(tiles, melds, context, cut=None, *, riichi=False):
     """Exact improving one-shanten paths; ranges are conditional on a legal win."""
     counts = numpy.bincount(numpy.asarray(tiles) // 4, minlength=34)
     distance, draws, _ = shanten.improving(counts)
@@ -143,7 +159,7 @@ def action_value_ranges(tiles, melds, context, cut=None):
         summary, _ = scoring.score_waits(tiles, melds, context)
         opened = any(meld.opened for meld in melds)
         for kind in range(2):
-            scenario = kind if opened else 2 + kind
+            scenario = kind + 2 * int(riichi and not opened)
             result["range"][int(opened), kind] = summary[scenario, 2:4]
             result["valid"][int(opened), kind] = summary[scenario, 1] > 0
         if opened:
@@ -204,11 +220,12 @@ def action_value_ranges(tiles, melds, context, cut=None):
                 if code in seen or analysis["shanten"][discarded // 4] != 0:
                     continue
                 seen.add(code)
-                candidate = action_value_ranges(
+                candidate = _action_value_ranges(
                     hand[:position] + hand[position + 1 :],
                     melds,
                     after,
                     discarded // 4,
+                    riichi=riichi,
                 )
                 merge_value_ranges(result, candidate)
     return result

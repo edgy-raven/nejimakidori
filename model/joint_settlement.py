@@ -624,14 +624,18 @@ def post_hand_forecast(scores, ranks, next_dealer, next_hand, terminal, pot):
 
 
 def continuation_values(scores, rounds, dealerships):
-    """Frozen seed-11 calibration from st3-continuation-20261003.
+    """Frozen all-match calibration from continuation-refit-20261117.
 
     Score location and diffusion were calibrated in 10,000-point units.
     Positive dealership drift and a + cT + dT² variance impose the agreed
-    monotonicity constraints. Constants are never training variables.
+    monotonicity constraints. Fit uses game-weighted placement likelihood on
+    six training and two Mortal matches. Constants are not training variables.
     """
     coefficient = tf.nn.softplus(
-        tf.constant([-3.6169434, -2.544114, -1.7547616, -5.1666236], tf.float32)
+        tf.constant(
+            [-2.9776038153, -3.0854067216, -2.0839146053, -4.2356537969],
+            tf.float32,
+        )
     )
     location = scores / 10000 + coefficient[0] * (
         dealerships - tf.reduce_mean(dealerships, -1, keepdims=True)

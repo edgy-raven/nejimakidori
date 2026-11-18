@@ -49,7 +49,7 @@ def test_attempted_calls_preserve_possible_preemption_outcomes():
     numpy.testing.assert_array_equal(
         public["deposit_required"][:, 0], [0, 0, 0, 1]
     )
-    model = critic.PaymentCritic(belief_offset=0)
+    model = critic.PaymentCritic(belief_offset=0, player_width=8)
     result = model.distributions(
         {
             **public,

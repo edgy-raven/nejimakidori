@@ -119,7 +119,7 @@ def test_bonus_prediction_uses_counts_without_bonus_type_heads():
     feature_reference.public_scoring_features(inputs)
     inputs = {name: tf.constant(value) for name, value in inputs.items()}
     public = critic.public_inputs(inputs, tf.constant([[0, 0]]))
-    predictor = critic.PaymentCritic(belief_offset=0)
+    predictor = critic.PaymentCritic(belief_offset=0, player_width=8)
     result = predictor.distributions(
         {
             **public,

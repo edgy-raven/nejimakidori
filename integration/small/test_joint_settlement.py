@@ -2,7 +2,6 @@
 
 import numpy
 import tensorflow as tf
-
 from integration import settlement_reference
 from log_dataset import scoring
 from model import joint_settlement, losses, outcomes, payment_scoring
@@ -494,7 +493,7 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
         ),
         -1,
     )
-    predictor = critic.PaymentCritic(belief_offset=0)
+    predictor = critic.PaymentCritic(belief_offset=0, player_width=8)
     predictor(public)
     # Partial chunks have a dynamic batch dimension. Their compiled loss
     # must stay stateless so replicas can execute the backward pass together.
@@ -784,7 +783,9 @@ def test_observed_hand_target_matches_critic_without_future_outcomes():
         hand_number=public["hand_number"],
         pot=public["pot"],
     )
-    numpy.testing.assert_allclose(observed[0, 0], payoffs[0, row, 2], atol=1e-5)
+    numpy.testing.assert_allclose(
+        observed[0, 0], payoffs[0, row, 2], rtol=1e-6, atol=1e-5
+    )
     numpy.testing.assert_allclose(
         joint_settlement.observed_payoffs(tf.constant(flat)),
         observed.reshape(-1),

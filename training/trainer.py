@@ -1,7 +1,6 @@
 """Hybrid expert/distill policy imitation and magnetic self-play policy improvement."""
 
 import tensorflow as tf
-
 from log_dataset import training_data
 from model import actions
 from model import actor as actor_layers
@@ -153,19 +152,7 @@ class Trainer:
             self.mirror(features, training=False), batch["head"], batch["legal"]
         )
         magnet = actor_layers.distribution(
-            self.magnet(
-                {
-                    **features,
-                    "action_win_value_range": tf.cast(
-                        features["magnet_win_value_range"], tf.float32
-                    )
-                    * 100,
-                    "action_win_value_valid": features[
-                        "magnet_win_value_valid"
-                    ],
-                },
-                training=False,
-            ),
+            self.magnet(features, training=False),
             batch["head"],
             batch["legal"],
         )

@@ -67,6 +67,38 @@ those into payments, handling dealer shares, honba, deposits and pot priority.
 Tsumo shares use one common hand value. Multiple ron claims are represented
 jointly; triple ron follows the simulator's abort rule.
 
+The critic applies shared player and claim projections rather than separate
+weights for each opponent/payment slot. Player descriptors combine public
+evidence with mean/max summaries of the shared river convolutions, before
+stream-specific attention. Wind descriptors expose dealer/double-wind status,
+known unavailable wind copies and dora multiplicity rather than wind identity.
+Scores and placement priority remain explicit public inputs. Our player token
+is distinguished because its hand and candidate action are known.
+Public meld tile counts and red counts retain observed meld identities. These
+are pre-action facts; the common candidate context supplies our proposed hand.
+Per-action descriptors add projected ordinary draws, eligibility by turn to
+chi the active discard, and the discard source. Draw projections share the
+actor's pass/call/kan continuation calculation and exclude rinshan. Chi turn
+eligibility is not a claim that the hidden hand can make the call.
+
+Every player receives the same common candidate context. Existing belief and
+completion predictions stay in that common context; separate learned opponent
+predictions are not added to the player-specific descriptors. Equal descriptors
+and outcome roles therefore produce equal scores at fixed common context.
+The unchanged common encoder still depends on seat ordering: this is not a
+claim of end-to-end invariance under arbitrary raw-input player permutations.
+
+Shared role pooling scores whole win and draw masks, retaining all49 event
+choices and16 conditional deposit masks. Nonlinear event and deposit scoring
+retain interactions rather than multiplying independent player probabilities.
+The existing factorization of simultaneous winners' hand-value likelihoods is
+unchanged. Sharing parameters does not remove that approximation.
+
+Changing these heads requires an explicit fitted checkpoint migration. The
+actor, belief heads, common critic projection and shared hand-value decoder
+can retain their weights; slot-specific event, deposit and claim projections
+cannot be copied into the new shared layers with exact prediction parity.
+
 [payment_scoring.py](payment_scoring.py) defines the score vocabulary and
 legality masks. [joint_settlement.py](joint_settlement.py) combines events,
 scores and deposits. Unsupported payments, including some responsibility and
@@ -78,11 +110,13 @@ matches use exact final scores and ranks. Earlier hands use a fixed continuation
 model based on scores, remaining hands and scheduled dealerships. Its parameters
 are separate from the learned current-hand critic.
 
-The frozen four-parameter continuation was recalibrated on November 17 using
-80,000 completed games: six duplicate training matches and two standard South
-Mortal matches. Game-weighted placement likelihood improves on held-out seeds
-overall, but worsens on the production-v2/Mortal subset. This is a pooled-match
-calibration, with no opponent-strength or rules-format input.
+The frozen four-parameter single-Gumbel continuation was recalibrated on
+November 17 using 100,000 completed games: seven duplicate training matches
+and three standard South Mortal matches. Its variance is a positive
+`a + c*T + d*T²` curve in scheduled hands remaining, with positive dealership
+drift. This is a pooled-match calibration, with no opponent-strength or
+rules-format input. The additional data do not establish a held-out improvement
+over the preceding 80,000-game calibration. Analytic mixtures remain experiments.
 
 Root scoring computes settlement payoffs once per public position and reuses
 them across candidate actions. Only the settlement probabilities depend on the

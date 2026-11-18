@@ -12,7 +12,9 @@ class JointPolicyPayment(tf.keras.Model):
     def __init__(self):
         super().__init__(autocast=False)
         tf.keras.mixed_precision.set_global_policy("mixed_bfloat16")
-        inputs, board, candidates, selected, structure = encoder.encode_inputs()
+        inputs, board, candidates, selected, structure, critic_rivers = (
+            encoder.encode_inputs()
+        )
         self.beliefs = beliefs.OpponentBeliefs(
             encoder=tf.keras.Model(
                 inputs, board, name="belief_encoder", autocast=False
@@ -29,6 +31,7 @@ class JointPolicyPayment(tf.keras.Model):
                 board=board,
                 selected=selected,
                 structure=structure,
+                critic_rivers=critic_rivers,
                 **belief_logits,
                 belief_context=tf.keras.layers.Concatenate(dtype="float32")(
                     [
@@ -53,7 +56,13 @@ class JointPolicyPayment(tf.keras.Model):
         tf.keras.mixed_precision.set_global_policy("float32")
         self.context = critic.HandContext(dtype="float32")
         self.public = critic.PublicContext(dtype="float32")
-        self.critic = critic.PaymentCritic(belief_offset=candidates.shape[-1])
+        self.player_context = critic.PlayerContext(dtype="float32")
+        self.critic = critic.PaymentCritic(
+            belief_offset=candidates.shape[-1],
+            player_width=self.player_context(
+                [inputs, critic_rivers, selected]
+            ).shape[-1],
+        )
 
         inputs = self.encoder.input
         encoded = self.encoder.output
@@ -175,6 +184,16 @@ class JointPolicyPayment(tf.keras.Model):
                         encoded["selected"][:, 0],
                     ),
                     (-1, 4 * 2 * len(payment_scoring.SCORES)),
+                ),
+                tf.reshape(
+                    self.player_context(
+                        [
+                            features,
+                            encoded["critic_rivers"],
+                            encoded["selected"],
+                        ]
+                    ),
+                    (-1, 4 * self.critic.player_width),
                 ),
             ],
             axis=-1,

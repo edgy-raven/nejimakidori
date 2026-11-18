@@ -80,7 +80,7 @@ def check_streamed_payment_backward_matches_one_and_two_replicas():
     for replicas in (1, 2):
         strategy = strategies[replicas]
         with strategy.scope():
-            model = critic.PaymentCritic(belief_offset=0)
+            model = critic.PaymentCritic(belief_offset=0, player_width=8)
             model(public)
             if replicas == 1:
                 weights = model.get_weights()

@@ -43,7 +43,7 @@ def test_downside_uses_loss_probability_and_below_mean_shortfall(monkeypatch):
         "settlement_states",
         lambda inputs: {"joint_scores": scores},
     )
-    network = critic.PaymentCritic(belief_offset=0)
+    network = critic.PaymentCritic(belief_offset=0, player_width=8)
     inputs = {"scores": tf.zeros([3, 1])}
     expected = [[60.0, 5.0], [60.0, 0.0], [60.0, numpy.sqrt(50.0)]]
     numpy.testing.assert_allclose(

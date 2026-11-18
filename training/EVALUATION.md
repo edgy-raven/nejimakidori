@@ -89,11 +89,10 @@ PY
 ```
 
 The Linux adapter runs in a separate process, using only each seat's private
-MJAI event stream. It follows the upstream
-[upstream agent flow](https://riichi.dev/docs/mortal): call `react()` for every
+MJAI event stream. It follows the upstream agent flow: call `react()` for every
 event from `obs.new_events()`, then map the response with
 `obs.select_action_from_mjai()`. A trailing delayed-dora announcement updates
-The distill policy's state without replacing the preceding decision response; successive
+the reference policy's state without replacing the preceding decision response; successive
 added kans can otherwise erase a valid rob-kan win. No action suppression or
 automatic pass substitution is applied. It loads both state dictionaries
 strictly, uses evaluation

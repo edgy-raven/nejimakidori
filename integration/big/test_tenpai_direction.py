@@ -1,59 +1,175 @@
-"""Settlement responds monotonically to readiness and candidate-tile waits."""
+"""Shared settlement heads preserve roles and train belief direction."""
 
 import numpy
 import tensorflow as tf
 from integration.small.test_joint_settlement import inputs
-from model import critic, joint_settlement
+from log_dataset import _native_collection, scoring
+from model import critic, encoder, joint_settlement
 
 
-def test_reversed_belief_effects_train_settlement_without_moving_beliefs():
+def test_unobserved_players_differ_only_through_public_wind_effects():
+    features = {
+        name: numpy.zeros((1, *spec["shape"]), spec["dtype"])
+        for name, spec in _native_collection.INPUTS.items()
+    }
+    features["seat_wind"][0] = [0, 1, 2, 3]
+    context = critic.PlayerContext(dtype="float32")
+    rivers = tf.zeros((1, 3, 256))
+    selected = tf.constant([[0, 0]])
+    original = context([features, rivers, selected]).numpy()
+    numpy.testing.assert_array_equal(original[:, 1], original[:, 2])
+    numpy.testing.assert_array_equal(original[:, 2], original[:, 3])
+    features["known_unavailable_counts"][0, 28] = 2
+    features["dora_multiplicity"][0, 29] = 1
+    changed = context([features, rivers, selected]).numpy()
+    numpy.testing.assert_array_equal(changed[:, 3], original[:, 3])
+    assert changed[0, 1, 261] == 0.5
+    numpy.testing.assert_allclose(changed[0, 2, 262], 0.2)
+    features["meld_tile_ids"][0, 1, 0, :3] = 4
+    features["meld_tile_valid"][0, 1, 0, :3] = 1
+    features["meld_tile_red"][0, 1, 0, 0] = 1
+    changed = context([features, rivers, selected]).numpy()
+    assert changed[0, 1, 427 + 4] == 0.75
+    numpy.testing.assert_allclose(changed[0, 1, 461], 1 / 3)
+
+    # A pass continues after the discarder; a call after us. A kan takes
+    # one live-wall tile for rinshan, excluded from ordinary draw counts.
+    features = {name: tf.constant(value) for name, value in features.items()}
+    features.update(
+        live_wall_count=tf.constant([5], tf.int8),
+        decision_phase=tf.constant([1], tf.int8),
+        trigger_source=tf.constant([2], tf.int8),
+    )
+    selected = tf.constant([[0, 111], [0, 112], [0, 261]])
+    changed = context([features, rivers, selected]).numpy()
+    numpy.testing.assert_allclose(
+        changed[..., 462] * 18,
+        [[1, 1, 1, 2], [1, 2, 1, 1], [1, 1, 1, 1]],
+    )
+    numpy.testing.assert_array_equal(changed[..., 463], [[0, 0, 0, 1]] * 3)
+    numpy.testing.assert_array_equal(changed[..., 464], [[0, 0, 1, 0]] * 3)
+    numpy.testing.assert_array_equal(
+        encoder.last_draw_context(features, selected)[:, 6:],
+        [[0, 0, 0, 1], [0, 1, 0, 0], [1, 0, 0, 0]],
+    )
+
+
+def test_shared_roles_preserve_joint_events_and_equivalent_players():
+    tf.keras.utils.set_random_seed(941)
+    model = critic.PaymentCritic(belief_offset=0, player_width=8)
+    public = inputs()
+    public.update(
+        has_meld=tf.zeros((1, 4), tf.bool),
+        opened=tf.zeros((1, 4), tf.bool),
+        riichi_required=tf.zeros((1, 4), tf.bool),
+        ippatsu_allowed=tf.ones((1, 4), tf.bool),
+        public_fu=tf.zeros((1, 4), tf.int32),
+        public_bonus=tf.zeros((1, 4), tf.int32),
+        yakuman_allowed=tf.ones((1, 4), tf.bool),
+    )
+    common = tf.random.normal((1, 512))
+    players = tf.random.normal((1, 4, 8))
+    permutation = [0, 2, 1, 3]
+
+    def permute_mask(mask):
+        return (
+            sum(
+                1 << permutation[seat]
+                for seat in range(4)
+                if mask & (1 << seat)
+            )
+            if mask < 16
+            else mask
+        )
+
+    event_order = [
+        joint_settlement.EVENTS.index(
+            (
+                kind,
+                permutation[source] if source >= 0 else source,
+                permute_mask(winners),
+                permute_mask(ready),
+            )
+        )
+        for kind, source, winners, ready in joint_settlement.EVENTS
+    ]
+    payment_order = [
+        scoring.CELLS.index((kind, permutation[source], permutation[winner]))
+        for kind, source, winner in scoring.CELLS[:24]
+    ]
+    deposit_order = [permute_mask(mask) for mask in range(16)]
+    for equal in (False, True):
+        if equal:
+            players = tf.concat(
+                [players[:, :1], tf.repeat(players[:, 1:2], 3, axis=1)], 1
+            )
+        public["state"] = tf.concat([common, tf.reshape(players, (1, 32))], -1)
+        outputs = model.distributions(public)
+        public["state"] = tf.concat(
+            [
+                common,
+                tf.reshape(tf.gather(players, permutation, axis=1), (1, 32)),
+            ],
+            -1,
+        )
+        swapped = model.distributions(public)
+        numpy.testing.assert_allclose(
+            outputs["event_logits"],
+            tf.gather(swapped["event_logits"], event_order, axis=1),
+            atol=2e-6,
+            rtol=2e-6,
+        )
+        numpy.testing.assert_allclose(
+            outputs["deposit_logits"],
+            tf.gather(
+                tf.gather(swapped["deposit_logits"], event_order, axis=1),
+                deposit_order,
+                axis=2,
+            ),
+            atol=2e-6,
+            rtol=2e-6,
+        )
+        numpy.testing.assert_allclose(
+            outputs["score_logits"],
+            tf.gather(swapped["score_logits"], payment_order, axis=1),
+            atol=2e-6,
+            rtol=2e-6,
+        )
+        if equal:
+            numpy.testing.assert_array_equal(
+                public["state"][:, -32:], tf.reshape(players, (1, 32))
+            )
+
+
+def test_belief_direction_uses_shared_event_path_without_moving_beliefs():
+    tf.keras.utils.set_random_seed(942)
     public = {
         name: tf.repeat(value, 2, axis=0) for name, value in inputs().items()
     }
     public["action_tile"] = tf.constant([31, 37])
     public["state"] = tf.Variable(
         tf.concat(
-            [tf.fill((2, 12), 0.25), tf.fill((2, 408), 0.5), tf.ones((2, 92))],
-            axis=1,
+            [
+                tf.fill((2, 12), 0.25),
+                tf.fill((2, 408), 0.5),
+                tf.ones((2, 92)),
+                tf.random.normal((2, 32)),
+            ],
+            -1,
         )
     )
-    model = critic.PaymentCritic(belief_offset=0)
-    model.event(model.state(public["state"]))
-    # Route opponent 1's tenpai and conditional tile-31 wait into one hidden
-    # feature, then make its winning/ready outcomes decrease as that grows.
-    state_kernel = numpy.zeros(model.state.kernel.shape, numpy.float32)
-    state_kernel[[0, 12 + 31], 0] = 1
-    model.state.kernel.assign(state_kernel)
-    model.state.bias.assign(tf.zeros_like(model.state.bias))
-    event_kernel = numpy.zeros(model.event.kernel.shape, numpy.float32)
-    event_kernel[0] = [
-        2
-        * bool(
-            (kind in (0, 1) and winners & 2 and winners.bit_count() < 3)
-            or (kind == 2 and ready & 2)
-        )
-        for kind, _, winners, ready in joint_settlement.EVENTS
-    ]
-    model.event.bias.assign(tf.zeros_like(model.event.bias))
-    for direction in (-1, 1):
-        model.event.kernel.assign(direction * event_kernel)
-        with tf.GradientTape(persistent=True) as tape:
-            penalties = model.direction_losses(public)
-            total = tf.reduce_sum(penalties)
-        assert tape.gradient(total, public["state"]) is None
-        assert float(penalties[1, 1]) == 0  # No candidate tile means no wait.
-        if direction < 0:
-            assert numpy.all(penalties.numpy()[:, 0] > 0)
-            assert float(penalties[0, 1]) > 0
-            for variables in (
-                model.state.trainable_variables,
-                model.event.trainable_variables,
-            ):
-                assert (
-                    float(
-                        tf.linalg.global_norm(tape.gradient(total, variables))
-                    )
-                    > 0
-                )
-        else:
-            numpy.testing.assert_allclose(penalties, 0, atol=1e-7)
+    model = critic.PaymentCritic(belief_offset=0, player_width=8)
+    with tf.GradientTape(persistent=True) as tape:
+        penalties = model.direction_losses(public)
+        total = tf.reduce_sum(penalties)
+    assert tape.gradient(total, public["state"]) is None
+    assert float(penalties[1, 1]) == 0
+    assert float(total) > 0
+    for variables in (
+        model.state.trainable_variables,
+        model.players.trainable_variables,
+        model.event.trainable_variables,
+    ):
+        gradients = tape.gradient(total, variables)
+        assert all(numpy.isfinite(value).all() for value in gradients)
+        assert float(tf.linalg.global_norm(gradients)) > 0

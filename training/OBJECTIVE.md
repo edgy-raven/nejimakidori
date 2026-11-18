@@ -118,15 +118,11 @@ implement an anchored policy objective optimized with gradient steps, not an
 exact tabular closed-form MMD update. Coefficients are initial settings, not
 newly strength-tuned values.
 
-The fixed v2.0 magnet retains its original scoring inputs. Producers supply
-`magnet_win_value_range` (int16 hundreds of points) and
-`magnet_win_value_valid` alongside corrected candidate features. These fields
-never enter candidate or mirror projections. Only fixed-magnet inference
-substitutes them for the candidate's win ranges and validity flags, restoring
-point units exactly. Reference choices for expert Q gaps use this same policy.
-This preserves the deployed magnet rather than changing its decisions when the
-candidate's dama features change. Verify policy parity with its frozen export
-when changing architecture or constraints. Match opponents retain frozen source.
+The fixed hotfix magnet uses the corrected action-conditioned scoring inputs,
+as do the candidate and mirror. Reference choices for expert Q gaps use this
+same policy. Dataset magnet sidebands do not enter learned projections or
+replace the scoring inputs. Verify policy parity with the frozen export when
+changing architecture or constraints. Match opponents retain frozen source.
 
 Batch size changes the number of optimizer steps in a frozen-policy window.
 Refreshing the mirror before every single gradient step would make its KL

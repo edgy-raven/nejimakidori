@@ -8,6 +8,7 @@ import itertools
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import scoring
 from model import losses, outcomes, payment_scoring
 
@@ -624,16 +625,17 @@ def post_hand_forecast(scores, ranks, next_dealer, next_hand, terminal, pot):
 
 
 def continuation_values(scores, rounds, dealerships):
-    """Frozen all-match calibration from continuation-refit-20261117.
+    """Single time-dependent Gumbel fit from single-gumbel-time-20261117.
 
     Score location and diffusion were calibrated in 10,000-point units.
     Positive dealership drift and a + cT + dT² variance impose the agreed
     monotonicity constraints. Fit uses game-weighted placement likelihood on
-    six training and two Mortal matches. Constants are not training variables.
+    seven training and three Mortal matches. Constants are not training
+    variables.
     """
     coefficient = tf.nn.softplus(
         tf.constant(
-            [-2.9776038153, -3.0854067216, -2.0839146053, -4.2356537969],
+            [-2.9851044578, -2.9903753151, -2.0806273807, -4.2473072284],
             tf.float32,
         )
     )

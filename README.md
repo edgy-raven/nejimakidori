@@ -1,13 +1,11 @@
-# Nejimakidori v2 hotfix
+# Nejimakidori v2
 
 Nejimakidori (ねじまき鳥) is a four-player riichi mahjong model.
 This repository contains its network, dataset tools, training and release weights.
 
-The v2 hotfix corrects action-conditioned hand-value features: closed dama
-hands no longer inherit riichi scoring, and no-yaku dama has no legal ron.
-It retains shared river encoding, candidate attention and current-hand
-settlement learning. The released checkpoint completed a recorded-policy
-training pass with Q-weighted imitation and a fixed production anchor.
+This release uses a shared player critic with joint current-hand settlement
+predictions and Q-weighted policy training. It includes the evaluated first
+mixed-training checkpoint.
 See the [architecture](model/ARCHITECTURE.md) and
 [training objective](training/OBJECTIVE.md) for the complete method.
 

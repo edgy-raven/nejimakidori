@@ -6,7 +6,6 @@ import pathlib
 import numpy
 import pytest
 import tensorflow as tf
-
 from log_dataset import _native_collection, features, replay, shanten
 from model import actions, encoder, export, initialize
 from training import self_play
@@ -28,7 +27,19 @@ def test_candidate_river_attention_learns_masked_action_specific_history():
         [4, 13, 22],
     )
     river = encoder.RiverEncoding(dtype="float32")
-    _, tokens, valid = river(inputs)
+    _, tokens, valid, local = river(inputs)
+    numpy.testing.assert_array_equal(local[1], 0)
+    permutation = [2, 0, 1]
+    numpy.testing.assert_allclose(
+        river(
+            {
+                name: tf.gather(value, permutation, axis=1)
+                for name, value in inputs.items()
+            }
+        )[3],
+        tf.gather(local, permutation, axis=1),
+        atol=1e-6,
+    )
     candidates = tf.random.normal((4, 384))
     selected = tf.constant([[0, 1], [0, 9], [1, 3], [2, 7]])
     attention = encoder.CandidateRiverAttention(dtype="float32")
@@ -258,7 +269,7 @@ def test_retired_analysis_and_magnet_inputs_do_not_enter_encoder(monkeypatch):
     for name in _native_collection.IGNORED_INPUTS:
         numpy.testing.assert_array_equal(fresh[name], 0)
     packed = fresh
-    inputs, board, _, _, _ = encoder.encode_inputs()
+    inputs, board, _, _, _, _ = encoder.encode_inputs()
     board_model = tf.keras.Model(inputs, board)
     batch = {name: value[None] for name, value in packed.items()}
     expected = board_model(batch).numpy()

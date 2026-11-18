@@ -3,7 +3,6 @@
 import math
 
 import tensorflow as tf
-
 from log_dataset import _native_collection
 from model import actions
 
@@ -545,6 +544,22 @@ class RiverEncoding(tf.keras.layers.Layer):
             values = (
                 tf.nn.gelu(normalization(values + convolution(values))) * mask
             )
+        # Shared local summaries precede stream-specific cross-river context.
+        # Empty rivers remain identical regardless of their storage slot.
+        local = tf.concat(
+            [
+                tf.math.divide_no_nan(
+                    tf.reduce_sum(values, axis=1),
+                    tf.reduce_sum(mask, axis=1),
+                ),
+                tf.where(
+                    tf.reduce_any(mask > 0, axis=1),
+                    tf.reduce_max(tf.where(mask > 0, values, -1e4), axis=1),
+                    tf.zeros_like(values[:, 0]),
+                ),
+            ],
+            axis=-1,
+        )
         values = tf.reshape(
             self.river_attention(
                 [
@@ -567,7 +582,37 @@ class RiverEncoding(tf.keras.layers.Layer):
             tf.reshape(encoded, (-1, 384)),
             tf.reshape(values, (-1, 192, 64)),
             tf.reshape(mask > 0, (-1, 192)),
+            tf.reshape(local, (-1, 3, 256)),
         )
+
+
+def projected_draws(inputs, selected):
+    """Ordinary draw counts and last drawer if this action takes effect."""
+    remaining = tf.cast(
+        tf.gather(inputs["live_wall_count"], selected[:, 0]), tf.int32
+    ) - tf.cast(selected[:, 1] >= 261, tf.int32)
+    source = tf.where(
+        (tf.gather(inputs["decision_phase"], selected[:, 0]) == 1)
+        & (selected[:, 1] == 111),
+        tf.cast(tf.gather(inputs["trigger_source"], selected[:, 0]), tf.int32),
+        0,
+    )
+    return tf.stack(
+        [
+            tf.cast(
+                (
+                    remaining[:, None]
+                    + 3
+                    - (tf.range(4)[None] - source[:, None] - 1) % 4
+                )
+                // 4,
+                tf.float32,
+            ),
+            tf.one_hot((source + remaining) % 4, 4)
+            * tf.cast(remaining > 0, tf.float32)[:, None],
+        ],
+        axis=-1,
+    )
 
 
 def last_draw_context(inputs, selected):
@@ -584,7 +629,6 @@ def last_draw_context(inputs, selected):
     source = tf.cast(
         tf.gather(inputs["trigger_source"], selected[:, 0]), tf.int32
     )
-    remaining = wall - tf.cast(selected[:, 1] >= 261, tf.int32)
     return tf.concat(
         [
             tf.cast(
@@ -609,15 +653,7 @@ def last_draw_context(inputs, selected):
             ),
             tf.one_hot((tf.where(response, source, 0) + wall) % 4, 4)
             * tf.cast(wall > 0, tf.float32)[:, None],
-            tf.one_hot(
-                (
-                    tf.where(response & (selected[:, 1] == 111), source, 0)
-                    + remaining
-                )
-                % 4,
-                4,
-            )
-            * tf.cast(remaining > 0, tf.float32)[:, None],
+            projected_draws(inputs, selected)[..., 1],
         ],
         axis=-1,
     )
@@ -873,9 +909,9 @@ def encode_inputs():
         for name, definition in _native_collection.INPUTS.items()
     }
     bank = HandBank(name="hand_bank")(inputs)
-    rivers, river_tokens, river_valid = RiverEncoding(name="river_encoder")(
-        inputs
-    )
+    rivers, river_tokens, river_valid, critic_rivers = RiverEncoding(
+        name="river_encoder"
+    )(inputs)
     encoded = [
         bank[:, 0],
         tf.keras.layers.GlobalAveragePooling1D()(bank),
@@ -940,4 +976,4 @@ def encode_inputs():
         dtype="float32",
         name="candidate_state_normalized",
     )(candidates)
-    return inputs, hidden, candidates, selected, structure
+    return inputs, hidden, candidates, selected, structure, critic_rivers

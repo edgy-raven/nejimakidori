@@ -530,6 +530,16 @@ class PaymentCritic(tf.keras.Model):
         self.belief_offset = belief_offset
         self.player_width = player_width
         self.state = tf.keras.layers.Dense(128, activation="gelu")
+        self.refinement = tf.keras.Sequential(
+            [
+                tf.keras.layers.LayerNormalization(dtype="float32"),
+                tf.keras.layers.Dense(512, activation="gelu", dtype="float32"),
+                tf.keras.layers.Dense(
+                    128, kernel_initializer="zeros", dtype="float32"
+                ),
+            ],
+            name="critic_refinement",
+        )
         self.players = tf.keras.layers.Dense(64, activation="gelu")
         self.cell_state = tf.keras.layers.Dense(64, activation="gelu")
         self.event_context = tf.keras.layers.Dense(16)
@@ -555,6 +565,7 @@ class PaymentCritic(tf.keras.Model):
 
     def context(self, state):
         hidden = self.state(state[:, : -4 * self.player_width])
+        hidden = hidden + self.refinement(hidden)
         players = self.players(
             tf.concat(
                 [
@@ -796,7 +807,7 @@ class PaymentCritic(tf.keras.Model):
         )
 
     def direction_losses(self, inputs):
-        """Train monotone response to belief odds, holding other inputs fixed."""
+        """Train monotone belief-odds responses with other inputs fixed."""
         state = tf.stop_gradient(inputs["state"])
         shanten = tf.reshape(
             state[:, self.belief_offset : self.belief_offset + 12], [-1, 3, 4]

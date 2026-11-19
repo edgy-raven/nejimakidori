@@ -20,7 +20,7 @@ See the [architecture](model/ARCHITECTURE.md) and
 | Train the current candidate | [Training](training/README.md) |
 | Export and compare models | [Evaluation](training/EVALUATION.md) |
 | Understand predictions and constraints | [Model](model/README.md) |
-| Explore every input and model component | [Model catalog](model/catalog/README.md) |
+| Explore every input and model component | [Model catalog](https://ogame.squareqrow.com/nejimakidori/catalog/) |
 
 ## Repository map
 

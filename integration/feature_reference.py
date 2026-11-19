@@ -543,7 +543,6 @@ def table_features(  # noqa: C901 - independent legacy parity oracle
                 "tile_id": tile,
                 "is_red": shanten.is_red(row["pai"]),
                 "tsumogiri": row["tsumogiri"],
-                "riichi": row["riichi"],
                 "valid": 1,
                 "origin": (
                     1
@@ -597,6 +596,8 @@ def table_features(  # noqa: C901 - independent legacy parity oracle
                     )
                     values["tedashi_gap"] = min(31, river_index - turn)
                 last_tedashi = (tile, river_index, row["event_index"])
+            if phase == "pre":
+                packed["river_pre_riichi"][relative - 1, index] = row["riichi"]
             for name, value in values.items():
                 packed["river_" + phase + "_" + name][
                     relative - 1, index

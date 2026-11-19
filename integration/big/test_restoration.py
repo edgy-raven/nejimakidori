@@ -56,6 +56,11 @@ def test_recorded_structures_restore_policy_and_beliefs():
     )
     assert numpy.isfinite(float(policy_loss))
     assert numpy.isfinite(float(belief_loss))
+    refinement_gradient = tape.gradient(
+        belief_loss, network.beliefs.refinement.layers[-1].kernel
+    )
+    assert numpy.isfinite(refinement_gradient).all()
+    assert tf.linalg.global_norm([refinement_gradient]) > 0
     for loss in (policy_loss, belief_loss):
         gradients = tape.gradient(loss, network.actor.trainable_variables)
         assert (

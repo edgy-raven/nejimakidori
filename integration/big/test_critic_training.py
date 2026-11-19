@@ -1,4 +1,4 @@
-"""Payment fitting updates shared features and critic, preserving actor heads."""
+"""Payment fitting updates shared features and critic, not policy heads."""
 
 import json
 import pathlib
@@ -58,6 +58,7 @@ def test_payment_fit_updates_encoder_and_critic_with_likelihood_constraints():
     )
     assert all(numpy.isfinite(float(value)) for value in metrics.values())
     assert numpy.any(network.critic.event.kernel.numpy() != critic_before)
+    assert numpy.any(network.critic.refinement.layers[-1].kernel.numpy())
     assert numpy.any(
         network.actor.get_layer("board_block_3_contract").kernel.numpy()
         != encoder_before

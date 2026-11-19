@@ -89,7 +89,6 @@ fields! {
     river_post_tedashi_relation: INT8 [3, 32],
     river_post_tedashi_gap: INT8 [3, 32],
     river_post_origin: INT8 [3, 32],
-    river_post_riichi: INT8 [3, 32],
     river_post_call_resolution: INT8 [3, 32],
     river_post_caller: INT8 [3, 32],
     river_post_event_age: FLOAT16 [3, 32],

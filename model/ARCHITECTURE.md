@@ -4,7 +4,7 @@ The current source implements a shared public-state encoder, a factorized
 legal-action policy, opponent belief marginals and an action-conditioned
 current-hand payment distribution. Four residual board blocks connect the
 encoder to the policy, beliefs and critic. [network.py](network.py) assembles
-the graph; the [interactive catalog](catalog/README.md) indexes its blocks,
+the graph; the [interactive catalog](https://ogame.squareqrow.com/nejimakidori/catalog/) indexes its blocks,
 operators, equations and phase-specific gradient paths.
 
 This document describes the source contract. Released checkpoints retain the
@@ -14,17 +14,29 @@ For commands, see [training and evaluation](../training/README.md). The
 [native interface](../log_dataset/native_collection/README.md) defines tensor
 encodings and packed transport.
 
-The network input contract contains 125 native tensors. Candidate-hand indices
+The network input contract contains 124 native tensors. Candidate-hand indices
 serve gathers only; they do not enter learned board projections. Dora indicator
 IDs and their mask are absent; `dora_multiplicity` supplies tile-value evidence.
-The board projection kernel is `[9055, 512]`. Removing dora fields also narrows
-the hand bank's board-conditioning projection. Earlier checkpoints require
+The board projection kernel is `[4630, 512]`. The four action-scoring tensors
+remain candidate-local and bypass global board and hand-bank conditioning.
+The constant `river_post_riichi` field is omitted from transport; the shared
+river encoder reconstructs its zero channel. Hand-bank board conditioning has
+shape `[10377, 128]`.
+
+Four board residual blocks use `512 → 1024 → 1024 → 512`, with GELU after each
+hidden transform. Separate belief `512 → 512 → 512` and critic
+`128 → 512 → 128` residual refinements precede their readouts. Both refinements
+use pre-normalization and a zero-initialized final projection, so each starts
+as an identity map. The board-block redesign is not identity-preserving.
+Relative to the preceding architecture, pruning the global scoring copies and
+constant river input while adding this capacity reduces the parameter count
+by 86,784. This budget accounting does not establish a quality improvement. Earlier checkpoints require
 explicit weight transfer and compatible exports. Removing learned input rows
 is not an output-preserving conversion. No runtime schema adapter is provided.
 
 ## Tensor signatures
 
-Both SavedModel signatures accept the same 125 named input tensors. The
+Both SavedModel signatures accept the same 124 named input tensors. The
 `policy` signature returns the five policy heads; `serving_default` returns
 17 tensors. Shapes below omit the leading row axis. Most rows are public
 positions; the last two outputs instead have one row per active candidate.

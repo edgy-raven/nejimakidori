@@ -17,10 +17,19 @@ SCORING_INPUTS = frozenset(
         "candidate_public_bonus",
     }
 )
+CANDIDATE_SCORING_INPUTS = frozenset(
+    {
+        "action_win_value_range",
+        "action_win_value_valid",
+        "action_value_eligible",
+        "action_open_yaku_restricted",
+    }
+)
 BOARD_INPUTS = {
     name: spec
     for name, spec in _native_collection.INPUTS.items()
     if name not in SCORING_INPUTS
+    and name not in CANDIDATE_SCORING_INPUTS
     and not name.startswith("river_")
     and name
     not in {
@@ -170,6 +179,7 @@ class HandBank(tf.keras.layers.Layer):
             )
             and name not in ("river_pre_tile_id", "river_post_tile_id")
             and name not in SCORING_INPUTS
+            and name not in CANDIDATE_SCORING_INPUTS
         )
         self.board_projection = tf.keras.layers.Dense(
             128, use_bias=False, dtype=self.dtype_policy
@@ -460,7 +470,14 @@ class RiverEncoding(tf.keras.layers.Layer):
     def encode(self, inputs):
         rivers = {
             name: tf.stack(
-                [inputs["river_pre_" + name], inputs["river_post_" + name]],
+                [
+                    inputs["river_pre_" + name],
+                    (
+                        tf.zeros_like(inputs["river_pre_riichi"])
+                        if name == "riichi"
+                        else inputs["river_post_" + name]
+                    ),
+                ],
                 axis=2,
             )
             for name in ("tile_id", "valid", *self.fields)
@@ -779,7 +796,10 @@ def encode_inputs():
             name=f"board_block_{block}_norm"
         )(hidden)
         residual = tf.keras.layers.Dense(
-            1536, activation="gelu", name=f"board_block_{block}_expand"
+            1024, activation="gelu", name=f"board_block_{block}_expand"
+        )(residual)
+        residual = tf.keras.layers.Dense(
+            1024, activation="gelu", name=f"board_block_{block}_hidden"
         )(residual)
         residual = tf.keras.layers.Dense(
             512, name=f"board_block_{block}_contract"

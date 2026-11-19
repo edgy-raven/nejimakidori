@@ -229,11 +229,10 @@ void pack_base(Row row, State const &s, feature::Analysis &a) {
       a.genbutsu[relative][t] = (riichi_safe[seat] >> t) & 1;
     int boundary = s.boundary[seat] < 0 ? size : s.boundary[seat];
     int prior = -1, turn = -1, prior_event = -1;
-    Field river_fields[15][2] = {
+    Field river_fields[14][2] = {
         {river_pre_tile_id, river_post_tile_id},
         {river_pre_is_red, river_post_is_red},
         {river_pre_tsumogiri, river_post_tsumogiri},
-        {river_pre_riichi, river_post_riichi},
         {river_pre_valid, river_post_valid},
         {river_pre_origin, river_post_origin},
         {river_pre_call_resolution, river_post_call_resolution},
@@ -263,6 +262,8 @@ void pack_base(Row row, State const &s, feature::Analysis &a) {
       if (32 + i < end)
         continue;
       int slot = (relative - 1) * 32 + 32 + i - end;
+      if (!phase)
+        row.set(river_pre_riichi, slot, cut.riichi);
       int origin = seat == s.oya && i == 0 ? 1
                    : cut.origin == 2       ? 4
                    : cut.origin == 3       ? 5
@@ -271,7 +272,6 @@ void pack_base(Row row, State const &s, feature::Analysis &a) {
       double values[] = {double(t),
                          double(cut.tile >= 34),
                          double(cut.tsumogiri),
-                         double(cut.riichi),
                          1.,
                          double(origin),
                          double(cut.resolution + 1),
@@ -288,16 +288,16 @@ void pack_base(Row row, State const &s, feature::Analysis &a) {
       if (!cut.tsumogiri) {
         if (prior >= 0) {
           int gap = std::abs(t - prior);
-          values[13] = t == prior                                 ? 1
+          values[12] = t == prior                                 ? 1
                        : t < 27 && t / 9 == prior / 9 && gap <= 2 ? gap + 1
                                                                   : 0;
-          values[14] = std::min(i - turn, 31);
+          values[13] = std::min(i - turn, 31);
         }
         prior = t;
         turn = i;
         prior_event = cut.event;
       }
-      for (int k = 0; k < 15; ++k)
+      for (int k = 0; k < 14; ++k)
         row.set(river_fields[k][phase], slot, values[k]);
     }
     row.put(genbutsu_to_seat, relative * 34, a.genbutsu[relative], 34);

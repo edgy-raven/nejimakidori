@@ -130,10 +130,10 @@ def test_native_inputs_exclude_retired_analysis(
         name.startswith("discard_completion_")
         or (name.startswith("discard_action_") and "_upgrade_" in name)
         or name.startswith("magnet_")
-        or name in {"dora_tile_id", "dora_valid"}
+        or name in {"dora_tile_id", "dora_valid", "river_post_riichi"}
         for name in packed
     )
-    inputs, board, _, _, _, _ = encoder.encode_inputs()
+    inputs, board, candidates, _, _, _ = encoder.encode_inputs()
     board_model = tf.keras.Model(inputs, board)
     batch = {name: value[None] for name, value in packed.items()}
     expected = board_model(batch).numpy()
@@ -146,6 +146,33 @@ def test_native_inputs_exclude_retired_analysis(
     ):
         batch[name] = (batch[name] + 1) % 96
     numpy.testing.assert_array_equal(board_model(batch), expected)
+    batch = {name: value[None] for name, value in packed.items()}
+    candidate_model = tf.keras.Model(inputs, candidates)
+    hand_model = tf.keras.Model(
+        inputs, board_model.get_layer("hand_bank").output
+    )
+    expected_candidates = candidate_model(batch).numpy()
+    expected_hands = hand_model(batch).numpy()
+    for name in encoder.CANDIDATE_SCORING_INPUTS:
+        batch[name] = batch[name] + 1
+    numpy.testing.assert_array_equal(board_model(batch), expected)
+    numpy.testing.assert_array_equal(hand_model(batch), expected_hands)
+    assert not numpy.allclose(candidate_model(batch), expected_candidates)
+    with tf.GradientTape() as tape:
+        loss = board_model(batch)[0, 0]
+    gradients = tape.gradient(
+        loss,
+        [
+            board_model.get_layer(f"board_block_{block}_hidden").kernel
+            for block in range(4)
+        ],
+    )
+    assert all(
+        gradient is not None
+        and numpy.isfinite(gradient).all()
+        and tf.linalg.global_norm([gradient]) > 0
+        for gradient in gradients
+    )
     # Exact candidate distances reach the learned board projection.
     batch["candidate_yaku_shanten"] = batch["candidate_yaku_shanten"] + 1
     assert not numpy.allclose(board_model(batch), expected)

@@ -2,6 +2,7 @@
 
 import numpy
 import tensorflow as tf
+
 from model import beliefs
 
 
@@ -116,7 +117,7 @@ def test_count_projection_respects_melds_reds_and_shared_ankou_blockers(
     # The detached constraint target still trains the raw shanten head.
     heads = beliefs.OpponentBeliefs(encoder=None)
     with tf.GradientTape() as tape:
-        outputs = heads(features, hidden=tf.zeros((1, 16)))
+        outputs = heads(features, hidden=tf.zeros((1, 512)))
         penalty = tf.reduce_sum(outputs["belief_constraint_loss"])
     probability = tf.nn.softmax(outputs[beliefs.BELIEF_HEADS[0]]).numpy()
     numpy.testing.assert_array_equal(probability[0, 1:], [[1, 0, 0, 0]] * 2)
@@ -139,7 +140,7 @@ def test_count_projection_respects_melds_reds_and_shared_ankou_blockers(
     hadaka["known_unavailable_counts"][0, 1:4] = 3
     assert hadaka["riichi_state"][0, 1] == 0
     with tf.GradientTape() as tape:
-        outputs = heads(hadaka, hidden=tf.zeros((1, 16)))
+        outputs = heads(hadaka, hidden=tf.zeros((1, 512)))
         penalty = tf.reduce_sum(outputs["belief_constraint_loss"])
     numpy.testing.assert_array_equal(
         tf.nn.softmax(outputs[beliefs.BELIEF_HEADS[0]])[0],
@@ -155,7 +156,7 @@ def test_count_projection_respects_melds_reds_and_shared_ankou_blockers(
 
     # Attention starts as an identity correction, then both blocks learn
     # through the existing count/wait objectives. Check weight round-tripping.
-    hidden = tf.zeros((1, 16))
+    hidden = tf.zeros((1, 512))
     initial = heads(features, hidden=hidden)
     numpy.testing.assert_array_equal(
         initial[beliefs.BELIEF_HEADS[1]],

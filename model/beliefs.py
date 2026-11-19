@@ -212,6 +212,16 @@ class OpponentBeliefs(tf.keras.Model):
     def __init__(self, encoder):
         super().__init__(name="opponent_beliefs", autocast=False)
         self.encoder = encoder
+        self.refinement = tf.keras.Sequential(
+            [
+                tf.keras.layers.LayerNormalization(dtype="float32"),
+                tf.keras.layers.Dense(512, activation="gelu", dtype="float32"),
+                tf.keras.layers.Dense(
+                    512, kernel_initializer="zeros", dtype="float32"
+                ),
+            ],
+            name="belief_refinement",
+        )
         self.heads = {
             name: tf.keras.layers.Dense(
                 math.prod(actions.ACTOR_OUTPUTS[name]),
@@ -225,6 +235,7 @@ class OpponentBeliefs(tf.keras.Model):
         self.count_projection = CountProjection(dtype="float32")
 
     def call(self, inputs, hidden):
+        hidden = hidden + self.refinement(hidden)
         outputs = {
             name: tf.reshape(
                 self.heads[name](hidden),

@@ -40,9 +40,12 @@ Dataset consumers check its schema and scoring definitions against
 `dataset_summary.json`. Rebuild in a new directory after a schema change;
 editing an old summary does not convert its records.
 
-The current feature schema has 127 tensors. It omits the eight
+The current feature schema has 125 tensors. It omits the eight
 `discard_action_{normal,all}_upgrade_` fields, two fixed-reference scoring
-tensors and five prior-only scoring tensors. Serialized feature maps and
+tensors, five prior-only scoring tensors, and the redundant dora-indicator
+IDs and validity mask. `dora_multiplicity` retains the visible tile-value
+information. Candidate-hand indices remain in records for gathers but do not
+enter learned board projections. Serialized feature maps and
 packed native rows are generated from this schema. TensorFlow parsing ignores
 extra serialized keys, but the dataset schema check does not accept an older
 summary as the current contract. Rebuild records rather than relabeling an old

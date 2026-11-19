@@ -31,22 +31,27 @@ explicitly converts them. Packed rows contain consecutive fields in declaration
 order, without alignment padding. `training.self_play.FEATURE_DTYPE` exposes NumPy
 views of those rows.
 
-The contract contains 127 tensors, 34,976 scalar elements and 43,368 bytes per
+The contract contains 125 tensors, 34,966 scalar elements and 43,358 bytes per
 packed row. The eight `discard_action_{normal,all}_upgrade_` fields
 (`valid`, `type_count`, `tile_count`, `weighted_gain`) are removed. They were
 unpopulated and excluded from learning by zero substitution. Extraction now
 omits them, and the encoder has no retired-input substitution path. Nyanten's
 explicit upgrade-analysis API is independent of the model input contract.
 
-This changes the board projection kernel by removing 296 input rows (151,552
-parameters). Previous checkpoints cannot be loaded strictly into this model.
-An explicit one-time conversion must remove the corresponding kernel rows;
-this input pruning alone leaves other learned tensor shapes unchanged. The
-separate removal of the learned `sakigiri_order` branch also changes actor
+The four `*_candidate_hand` tensors are gather indices, not learned numeric
+features. They remain in the transport contract. Dora indicator IDs and their
+validity mask are removed; `dora_multiplicity` remains for learned features and
+deterministic scoring. Removing those ten scalar inputs also changes the hand
+bank's board-conditioning projection. The main board projection is now
+`[9055, 512]`: 296 formerly zero upgrade rows and 229 index/dora rows have been
+removed from its original input layout.
+
+Previous checkpoints cannot be loaded strictly into this model. The index/dora
+pruning removes learned contributions, so weight transfer alone does not imply
+output parity. The separate removal of the learned `sakigiri_order` branch also changes actor
 weights; see [model compatibility](../../model/ARCHITECTURE.md#from-a-game-state-to-an-action).
-Re-export fixed reference policies with the 127-input signature, fixing the
-removed inputs to zero when retracing their original computation, and verify
-output parity before training.
+Reference policies require an explicit compatible export and validation before
+training; the current source exposes the 125-input signature.
 Existing exports keep their original signatures; the training runtime does not
 adapt between contracts. Rebuild datasets from source under the current schema.
 

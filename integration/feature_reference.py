@@ -222,9 +222,6 @@ def pack(
         )
     packed["rinshan_state"][...] = state.rinshan_actor == actor
     packed["dora_multiplicity"][:] = dora_counts(state.dora_markers)
-    for number, marker in enumerate(state.dora_markers):
-        packed["dora_tile_id"][number] = shanten.base_id(marker)
-        packed["dora_valid"][number] = 1
     visible = state.public_tiles()
     unavailable = counts + numpy.bincount(
         [shanten.base_id(tile) for tile in visible], minlength=34

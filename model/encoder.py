@@ -17,6 +17,23 @@ SCORING_INPUTS = frozenset(
         "candidate_public_bonus",
     }
 )
+BOARD_INPUTS = {
+    name: spec
+    for name, spec in _native_collection.INPUTS.items()
+    if name not in SCORING_INPUTS
+    and not name.startswith("river_")
+    and name
+    not in {
+        "candidate_hand_counts",
+        "candidate_hand_red",
+        "candidate_melds",
+        "candidate_hand_valid",
+        "discard_candidate_hand",
+        "chi_candidate_hand",
+        "pon_candidate_hand",
+        "kan_candidate_hand",
+    }
+}
 
 
 @tf.keras.utils.register_keras_serializable(package="nejimakidori")
@@ -27,19 +44,7 @@ class BoardProjection(tf.keras.layers.Layer):
         super().__init__(**kwargs)
         groups = {}
         offset = 1408
-        for name, spec in _native_collection.INPUTS.items():
-            if (
-                name in SCORING_INPUTS
-                or name.startswith("river_")
-                or name
-                in {
-                    "candidate_hand_counts",
-                    "candidate_hand_red",
-                    "candidate_melds",
-                    "candidate_hand_valid",
-                }
-            ):
-                continue
+        for name, spec in BOARD_INPUTS.items():
             size = math.prod(spec["shape"])
             if name.endswith(("yaku_possibility",)):
                 groups.setdefault(spec["shape"][-1], []).extend(
@@ -764,21 +769,7 @@ def encode_inputs():
         bank[:, 0],
         tf.keras.layers.GlobalAveragePooling1D()(bank),
         rivers,
-        numeric_features(
-            [
-                value
-                for name, value in inputs.items()
-                if name
-                not in {
-                    "candidate_hand_counts",
-                    "candidate_hand_red",
-                    "candidate_melds",
-                    "candidate_hand_valid",
-                }
-                and not name.startswith("river_")
-                and name not in SCORING_INPUTS
-            ]
-        ),
+        numeric_features([inputs[name] for name in BOARD_INPUTS]),
     ]
     hidden = BoardProjection(name="board_projection")(
         tf.keras.layers.Concatenate()(encoded)

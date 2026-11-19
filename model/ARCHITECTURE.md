@@ -14,15 +14,17 @@ For commands, see [training and evaluation](../training/README.md). The
 [native interface](../log_dataset/native_collection/README.md) defines tensor
 encodings and packed transport.
 
-The network input contract contains 127 native tensors. Retired discard-upgrade
-channels are absent from the producer and model signature. The board projection
-kernel is `[9284, 512]`, reduced from `[9580, 512]`; earlier checkpoints require
-explicit kernel-row conversion, and reference exports require retracing before
-use with this input contract. No runtime schema adapter is provided.
+The network input contract contains 125 native tensors. Candidate-hand indices
+serve gathers only; they do not enter learned board projections. Dora indicator
+IDs and their mask are absent; `dora_multiplicity` supplies tile-value evidence.
+The board projection kernel is `[9055, 512]`. Removing dora fields also narrows
+the hand bank's board-conditioning projection. Earlier checkpoints require
+explicit weight transfer and compatible exports. Removing learned input rows
+is not an output-preserving conversion. No runtime schema adapter is provided.
 
 ## Tensor signatures
 
-Both SavedModel signatures accept the same 127 named input tensors. The
+Both SavedModel signatures accept the same 125 named input tensors. The
 `policy` signature returns the five policy heads; `serving_default` returns
 17 tensors. Shapes below omit the leading row axis. Most rows are public
 positions; the last two outputs instead have one row per active candidate.

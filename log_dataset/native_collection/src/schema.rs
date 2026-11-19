@@ -115,8 +115,6 @@ fields! {
     closed_hand: INT8 [],
     self_efficiency: FLOAT32 [3],
     self_yaku_possibility: INT8 [19],
-    dora_tile_id: INT8 [5],
-    dora_valid: INT8 [5],
     dora_multiplicity: INT8 [34],
     public_visible_red_counts: INT8 [3],
     known_unavailable_counts: INT8 [34],

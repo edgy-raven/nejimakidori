@@ -57,8 +57,6 @@ void pack_base(Row row, State const &s, feature::Analysis &a) {
                : t < 31 ? 27 + (t - 26) % 4
                         : 31 + (t - 30) % 3;
     ++a.dora_counts[next];
-    row.set(dora_tile_id, i, t);
-    row.set(dora_valid, i, 1);
   }
   row.put(dora_multiplicity, 0, a.dora_counts, 34);
   std::copy_n(a.counts, 34, a.unavailable);

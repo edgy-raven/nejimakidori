@@ -74,22 +74,22 @@
     },
     "discard_candidate_hand": {
       "group": "hand-bank",
-      "description": "Gather indices from 37 discard actions into the deduplicated candidate-hand bank.",
+      "description": "Gather indices from 37 discard actions into the deduplicated candidate-hand bank. Routing only; excluded from the learned board projection.",
       "encoding": "Integer index into the 96-slot hand bank. Action legality masks determine which entries are meaningful."
     },
     "chi_candidate_hand": {
       "group": "hand-bank",
-      "description": "Gather indices from the chi-pattern × follow-up-discard action grid into the candidate-hand bank.",
+      "description": "Gather indices from the chi-pattern × follow-up-discard action grid into the candidate-hand bank. Routing only; excluded from the learned board projection.",
       "encoding": "Integer index into the 96-slot hand bank. Action legality masks determine which entries are meaningful."
     },
     "pon_candidate_hand": {
       "group": "hand-bank",
-      "description": "Gather indices from the pon × follow-up-discard action grid into the candidate-hand bank.",
+      "description": "Gather indices from the pon × follow-up-discard action grid into the candidate-hand bank. Routing only; excluded from the learned board projection.",
       "encoding": "Integer index into the 96-slot hand bank. Action legality masks determine which entries are meaningful."
     },
     "kan_candidate_hand": {
       "group": "hand-bank",
-      "description": "Gather indices from tile-specific kan candidates into the candidate-hand bank.",
+      "description": "Gather indices from tile-specific kan candidates into the candidate-hand bank. Routing only; excluded from the learned board projection.",
       "encoding": "Integer index into the 96-slot hand bank. Action legality masks determine which entries are meaningful."
     },
     "meld_type": {
@@ -177,20 +177,10 @@
       "description": "Nineteen binary public structural-feasibility channels for the current self hand.",
       "encoding": "Last axis (boolean public feasibility, not win probability): 0 tanyao, 1 haku, 2 hatsu, 3 chun, 4 round wind, 5 seat wind, 6 honitsu, 7 chinitsu, 8 toitoi, 9 chiitoitsu, 10 shousangen, 11 daisangen, 12 tsuuiisou, 13 chinroutou, 14 honroutou, 15 kokushi, 16 chanta, 17 junchan, 18 iipeikou."
     },
-    "dora_tile_id": {
-      "group": "table",
-      "description": "Ordinary tile-type IDs of the visible dora indicators, padded to five slots.",
-      "encoding": "Shapes exclude batch; seats are actor-relative (self 0, opponents 1–3). Masks use 0/1."
-    },
-    "dora_valid": {
-      "group": "table",
-      "description": "Binary occupancy mask for the visible dora-indicator axis.",
-      "encoding": "Shapes exclude batch; seats are actor-relative (self 0, opponents 1–3). Masks use 0/1."
-    },
     "dora_multiplicity": {
       "group": "table",
       "description": "Per-ordinary-tile integer multiplicity induced by visible dora indicators.",
-      "encoding": "Shapes exclude batch; seats are actor-relative (self 0, opponents 1–3). Masks use 0/1."
+      "encoding": "34 ordinary tile types; each count records how many visible indicators award dora to that tile type."
     },
     "public_visible_red_counts": {
       "group": "table",
@@ -696,7 +686,7 @@
         "kind": "input",
         "summary": "Actor-relative native feature tensors and deterministic post-action hand indices.",
         "dimensions": [
-          "127 native fields",
+          "125 native fields",
           "Shapes exclude batch",
           "34 ordinary / 37 red-aware tile classes",
           "96 candidate hand slots"
@@ -1059,7 +1049,7 @@
         "summary": "Actor-relative tensor schema, with no hidden opponent labels in inference inputs.",
         "dimensions": [
           "B positions",
-          "127 named tensors",
+          "125 named tensors",
           "96 candidate slots"
         ],
         "sharing": "Deterministic schema",
@@ -1825,7 +1815,7 @@
         "summary": "Concatenate current hand, mean hand bank, six river embeddings and public numeric channels.",
         "dimensions": [
           "512 + 512 + 384 + D_numeric",
-          "9284 → 512 after grouped bases"
+          "9055 → 512 after grouped bases"
         ],
         "sharing": "One parameter set for this block",
         "residual": "None",
@@ -1868,7 +1858,7 @@
             "title": "Dense + GELU",
             "description": "Concatenate retained channels and projected yaku axes; project to the common board width.",
             "dimensions": [
-              "9284 → 512"
+              "9055 → 512"
             ],
             "residual": "None",
             "sharing": "Within this block",

@@ -108,6 +108,29 @@ def build():
             )
         )
     )
+    board_inputs = eval(
+        compile(
+            ast.Expression(
+                next(
+                    node.value
+                    for node in ast.parse(sources["model/encoder.py"]).body
+                    if isinstance(node, ast.Assign)
+                    and any(
+                        isinstance(target, ast.Name)
+                        and target.id == "BOARD_INPUTS"
+                        for target in node.targets
+                    )
+                )
+            ),
+            "model/encoder.py",
+            "eval",
+        ),
+        {
+            "__builtins__": {},
+            "_native_collection": _native_collection,
+            "SCORING_INPUTS": scoring_inputs,
+        },
+    )
     features = []
     offset = 0
     named_consumers = {name: [] for name in declared}
@@ -137,12 +160,18 @@ def build():
                     "role": "Shared river stream",
                 }
             )
-        elif name not in scoring_inputs and name not in {
-            "candidate_hand_counts",
-            "candidate_hand_red",
-            "candidate_melds",
-            "candidate_hand_valid",
-        }:
+        elif name.endswith("_candidate_hand"):
+            consumers.append(
+                {
+                    **reference(
+                        "model/actions.py",
+                        "def candidate_hand_indices",
+                        sources,
+                    ),
+                    "role": "Hand-bank gather routing only",
+                }
+            )
+        elif name in board_inputs:
             consumers.append(
                 {
                     **reference(
@@ -274,9 +303,11 @@ def build():
                     "gradient": True,
                     "mathml": latex2mathml.converter.convert(
                         (
-                            r"\frac{\partial\operatorname{stop}(x)}{\partial x}=0"
+                            r"\frac{\partial\operatorname{stop}(x)}"
+                            r"{\partial x}=0"
                             if edge["kind"] == "stop"
-                            else r"\bar{x}_{\mathrm{path}}=J_f(x)^{\mathsf T}\bar{y}"
+                            else r"\bar{x}_{\mathrm{path}}="
+                            r"J_f(x)^{\mathsf T}\bar{y}"
                         ),
                         display="block",
                     ),

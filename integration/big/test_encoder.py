@@ -130,12 +130,22 @@ def test_native_inputs_exclude_retired_analysis(
         name.startswith("discard_completion_")
         or (name.startswith("discard_action_") and "_upgrade_" in name)
         or name.startswith("magnet_")
+        or name in {"dora_tile_id", "dora_valid"}
         for name in packed
     )
     inputs, board, _, _, _, _ = encoder.encode_inputs()
     board_model = tf.keras.Model(inputs, board)
     batch = {name: value[None] for name, value in packed.items()}
     expected = board_model(batch).numpy()
+    # Hand-bank addresses are routing metadata, not board evidence.
+    for name in (
+        "discard_candidate_hand",
+        "chi_candidate_hand",
+        "pon_candidate_hand",
+        "kan_candidate_hand",
+    ):
+        batch[name] = (batch[name] + 1) % 96
+    numpy.testing.assert_array_equal(board_model(batch), expected)
     # Exact candidate distances reach the learned board projection.
     batch["candidate_yaku_shanten"] = batch["candidate_yaku_shanten"] + 1
     assert not numpy.allclose(board_model(batch), expected)

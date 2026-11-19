@@ -27,6 +27,9 @@ shapes and dtypes against the installed `_native_collection.INPUTS`. Every field
 must have a description, encoding and group. Removed fields are absent from the current schema and catalog.
 Field references include exact native producer and
 Python consumer locations; dynamic board/river routing is identified explicitly.
+The four candidate-hand index tensors are gather routes, excluded from learned
+board covariates. Dora is represented by tile multiplicities; indicator-slot
+IDs and their validity mask are not input fields.
 Named references are source references, not proof of an independent learned
 projection. Hidden-hand targets are excluded from the inference feature list.
 
@@ -47,7 +50,7 @@ separate entries for each independently parameterized depth. Each operator
 records shapes, residual connections, parameter sharing and a source location
 scoped to the owning class or function. The four-player critic remains one
 shared descriptor projection; future queued designs are not displayed as
-implemented layers. The current board input projection has shape 9284 × 512.
+implemented layers. The current board input projection has shape 9055 × 512.
 Edges cite their implementation and distinguish states, input features, logits,
 constraints and the initial-belief residual connection. The graph preserves
 parallel actor heads and critic factors rather than chaining a module inventory.

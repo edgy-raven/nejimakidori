@@ -18,6 +18,7 @@ import numpy
 import tensorboard.compat.proto.event_pb2 as event_proto
 import tensorboard.compat.proto.summary_pb2 as summary_proto
 import tensorboard.summary.writer.event_file_writer as event_writer
+
 from model import outcomes
 
 WORKER_POLICIES = {}
@@ -136,9 +137,9 @@ def start_worker(root, devices, batch_games):
     device = devices.get()
     for name in ("new", "old"):
         if (root / name / "checkpoint").exists():
-            from training import distill_policy
+            from training import mortal_policy
 
-            WORKER_POLICIES[name] = distill_policy.DistillPolicy(
+            WORKER_POLICIES[name] = mortal_policy.MortalPolicy(
                 root / name, device=device, capacity=batch_games * 3
             )
         else:
@@ -154,7 +155,7 @@ def play_games(tasks):
     import riichienv
 
     for policy in WORKER_POLICIES.values():
-        policy.reset()
+        policy.reset([seed for _, seed, _ in tasks])
     rule = riichienv.GameRule.default_tenhou()
     match_format = json.loads((tasks[0][0] / "evaluation.json").read_text())[
         "format"
@@ -273,33 +274,45 @@ def run(args):
     manifest = {
         "format": (
             "riichienv_standard_south"
-            if args.distill_source is not None
+            if args.mortal_source is not None
             else "riichienv_duplicate_south"
         ),
         "seed": args.seed,
         "games": args.games,
+        "frozen_policy_randomness": "wall_actor_event_phase",
+        "saved_models": {
+            name: {
+                str(path.relative_to(model_path)): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in sorted(pathlib.Path(model_path).rglob("*"))
+                if path.is_file()
+            }
+            for name, model_path in (("new", args.new), ("old", args.old))
+            if name == "new" or args.mortal_source is None
+        },
     }
-    if args.distill_source is not None:
-        distill_files = {
+    if args.mortal_source is not None:
+        mortal_files = {
             "checkpoint": pathlib.Path(args.old),
             "source/libriichi.so": pathlib.Path(
                 importlib.util.find_spec("libriichi").origin
             ),
             **{
-                f"source/{name}": pathlib.Path(args.distill_source)
+                f"source/{name}": pathlib.Path(args.mortal_source)
                 / "mortal"
                 / name
                 for name in ("model.py", "engine.py")
             },
             **{
                 f"adapter/training/{name}": pathlib.Path(__file__).parent / name
-                for name in ("distill_policy.py", "frozen_policy.py")
+                for name in ("mortal_policy.py", "frozen_policy.py")
             },
         }
-        manifest["distill"] = {}
-        for name, path in distill_files.items():
+        manifest["mortal"] = {}
+        for name, path in mortal_files.items():
             with path.open("rb") as stream:
-                manifest["distill"][name] = hashlib.file_digest(
+                manifest["mortal"][name] = hashlib.file_digest(
                     stream, "sha256"
                 ).hexdigest()
     manifest_path = root / "evaluation.json"
@@ -323,21 +336,18 @@ def run(args):
     for name, model_path in (("new", args.new), ("old", args.old)):
         path = root / name
         if not path.exists():
-            if name == "old" and args.distill_source is not None:
-                for filename, source in distill_files.items():
+            if name == "old" and args.mortal_source is not None:
+                for filename, source in mortal_files.items():
                     (path / filename).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, path / filename)
                 continue
             source = frozen_policy.source_directory(model_path)
-            frozen_policy.freeze_source(
-                source.parent, path / "source", include_native=True
-            )
+            frozen_policy.freeze_source(source.parent, path / "source")
             # Retained production bundles put dataset helpers beside source/.
             if (source.parent.parent / "log_dataset").is_dir():
                 frozen_policy.freeze_source(
                     source.parent.parent / "log_dataset",
                     path / "log_dataset",
-                    include_native=True,
                 )
             frozen_policy.freeze_source(
                 pathlib.Path(model_path), path / "saved_model"
@@ -394,8 +404,8 @@ def main():
     parser.add_argument("--new", required=True)
     parser.add_argument("--old", required=True)
     parser.add_argument(
-        "--distill-source",
-        help="distill policy checkout; --old is its .pth or ZIP",
+        "--mortal-source",
+        help="Mortal policy checkout; --old is its .pth or ZIP",
     )
     parser.add_argument("--output", required=True)
     parser.add_argument(

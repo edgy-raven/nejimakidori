@@ -8,12 +8,8 @@ import shutil
 
 import numpy
 import tensorflow as tf
-from log_dataset import (
-    _native_collection,
-    focus_sampling,
-    scoring,
-    training_data,
-)
+
+from log_dataset import _native_collection, scoring, training_data
 from model import actions, critic, joint_settlement
 from model import network as joint_network
 from model import outcomes
@@ -33,35 +29,14 @@ class ServingModel(tf.Module):
 
     @tf.function
     def serve(self, **features):
-        return self._serve(features)
-
-    @tf.function
-    def root_evaluation(self, **features):
-        """Training-only action utilities from one actor evaluation."""
-        outputs = self._serve(features, chunk_size=32, root_only=True)
-        return {
-            name: outputs[name]
-            for name in (
-                "critic_action_indices",
-                "critic_projected_st3",
-                "discard_policy_logits",
-            )
-        }
-
-    def _serve(self, features, chunk_size=4, root_only=False):
+        chunk_size = 4
         outputs = self.network.actor(features, training=False)
         encoded, state = self.network.candidate_context(features, outputs)
         active = critic.active_candidates(features, encoded["selected"])
         selected = tf.boolean_mask(encoded["selected"], active)
         state = tf.boolean_mask(state, active)
-        wait = tf.boolean_mask(encoded["structural_wait"], active)
         public = joint_settlement.public_inputs(features)
         candidate_public = critic.public_inputs(features, selected)
-        if root_only:
-            payoffs = joint_settlement.gather_position_payoffs(
-                {**public, "dealer": features["dealer_relative_seat"]},
-                tf.range(tf.shape(features["decision_phase"])[0]),
-            )
         probability = tf.TensorArray(
             tf.float32,
             size=0,
@@ -74,12 +49,6 @@ class ServingModel(tf.Module):
         )
         review_outcomes = tf.TensorArray(
             tf.float32, size=0, dynamic_size=True, element_shape=[None, 7]
-        )
-        ranks = tf.TensorArray(
-            tf.float32, size=0, dynamic_size=True, element_shape=[None, 4, 4]
-        )
-        utility = tf.TensorArray(
-            tf.float32, size=0, dynamic_size=True, element_shape=[None]
         )
         final_ranks = tf.TensorArray(
             tf.float32, size=0, dynamic_size=True, element_shape=[None, 4]
@@ -105,50 +74,14 @@ class ServingModel(tf.Module):
                     for name, value in candidate_public.items()
                 }
             )
-            if root_only:
-                # Keep the compiled critic shape fixed, including the tail.
-                inputs = {
-                    name: tf.gather(
-                        value,
-                        tf.minimum(
-                            tf.range(chunk_size), tf.shape(value)[0] - 1
-                        ),
-                    )
-                    for name, value in inputs.items()
-                }
-                utility = utility.write(
-                    begin // chunk_size,
-                    self.network.critic.projected_mean_downside(
-                        inputs,
-                        tf.gather(
-                            payoffs,
-                            tf.gather(
-                                rows,
-                                tf.minimum(
-                                    tf.range(chunk_size), tf.shape(rows)[0] - 1
-                                ),
-                            ),
-                        ),
-                    )[
-                        : tf.minimum(chunk_size, tf.shape(selected)[0] - begin),
-                        0,
-                    ],
-                )
-                continue
             forecast = self.network.critic.joint_distributions(inputs)
-            payoff, final_probability = joint_settlement.continuation_forecast(
+            _, final_probability = joint_settlement.continuation_forecast(
                 scores=forecast["joint_scores"],
                 ranks=forecast["joint_ranks"],
                 support=forecast["joint_support"],
                 dealer=inputs["dealer"],
                 hand_number=inputs["hand_number"],
                 pot=inputs["pot"],
-            )
-            utility = utility.write(
-                begin // chunk_size,
-                joint_settlement.expectation(
-                    forecast["joint_probability"], payoff
-                )[: tf.minimum(chunk_size, tf.shape(selected)[0] - begin)],
             )
             # Mutually exclusive endings from the actor's perspective.
             categories = tf.constant(
@@ -193,9 +126,6 @@ class ServingModel(tf.Module):
             probability = probability.write(
                 begin // chunk_size, forecast["payment_probability"]
             )
-            ranks = ranks.write(
-                begin // chunk_size, tf.exp(forecast["round_placement_logits"])
-            )
             final_ranks = final_ranks.write(
                 begin // chunk_size,
                 joint_settlement.expectation(
@@ -213,12 +143,6 @@ class ServingModel(tf.Module):
                 begin // chunk_size,
                 tf.stack(joint_settlement.settlement_moments(forecast), axis=1),
             )
-        if root_only:
-            return {
-                "critic_action_indices": selected,
-                "critic_projected_st3": utility.concat(),
-                "discard_policy_logits": outputs["discard_policy_logits"],
-            }
         probability = probability.concat()
         weights = tf.gather_nd(
             critic.candidate_probabilities(features, outputs), selected
@@ -236,17 +160,7 @@ class ServingModel(tf.Module):
             settlement.concat() * weights[:, None, None], selected[:, 0], count
         )
         return {
-            **{name: outputs[name] for name in actions.ACTOR_OUTPUTS},
-            "round_placement_logits": tf.math.log(
-                tf.maximum(
-                    tf.math.unsorted_segment_sum(
-                        ranks.concat() * weights[:, None, None],
-                        selected[:, 0],
-                        count,
-                    ),
-                    1e-30,
-                )
-            ),
+            **{name: outputs[name] for name in actions.SERVING_ACTOR_OUTPUTS},
             "payment_values": joint_settlement.payment_values(public),
             "final_placement_probabilities": tf.math.unsorted_segment_sum(
                 final_ranks.concat() * weights[:, None], selected[:, 0], count
@@ -260,7 +174,6 @@ class ServingModel(tf.Module):
             "settlement_variance": tf.maximum(
                 moments[:, 1] - moments[:, 0] ** 2, 0
             ),
-            "critic_projected_st3": utility.concat(),
             "critic_expected_points": points.concat(),
             "terminal_payment_probabilities": tf.einsum(
                 "ncv,ctpr->ntprv",
@@ -278,12 +191,11 @@ class ServingModel(tf.Module):
             ]
             * tf.one_hot(1, len(outcomes.PAYMENT_VALUES) + 4),
             "critic_action_indices": selected,
-            "critic_payment_probabilities": probability,
-            "critic_structural_wait_probabilities": wait,
         }
 
 
-def load_network(weights, inputs):
+def build_network(inputs):
+    """Build every actor and critic variable before strict weight loading."""
     network = joint_network.JointPolicyPayment()
     outputs = network.actor(inputs, training=False)
     encoded, state = network.candidate_context(inputs, outputs)
@@ -300,6 +212,11 @@ def load_network(weights, inputs):
         }
     )
     network.built = True
+    return network
+
+
+def load_network(weights, inputs):
+    network = build_network(inputs)
     network.load_weights(weights)
     network.compile_training()
     return network
@@ -318,10 +235,8 @@ def run(args):
                 iter(
                     training_data.dataset(
                         root=args.data,
-                        sampling=focus_sampling.Sampling.NATURAL,
                         partition="train",
                         batch_size=8,
-                        repeat=False,
                     )
                 )
             )
@@ -367,7 +282,6 @@ def run(args):
         )
     for name in (
         "terminal_payment_probabilities",
-        "critic_payment_probabilities",
         "review_outcome_probabilities",
         "final_placement_probabilities",
     ):
@@ -401,7 +315,6 @@ def run(args):
         frozen_policy.freeze_source(
             pathlib.Path(__file__).parents[1] / name,
             pending / "source" / name,
-            include_native=True,
         )
     shutil.copy2(
         pathlib.Path(__file__).parents[1] / "requirements.txt",

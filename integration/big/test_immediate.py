@@ -4,7 +4,9 @@ import json
 import pathlib
 
 import numpy
+import riichienv
 import tensorflow as tf
+
 from integration import feature_reference
 from log_dataset import (
     _native_collection,
@@ -13,9 +15,7 @@ from log_dataset import (
     scoring,
     training_targets,
 )
-from model import actions, critic
-
-import riichienv
+from model import critic
 
 
 def test_attempted_calls_preserve_possible_preemption_outcomes():
@@ -49,7 +49,7 @@ def test_attempted_calls_preserve_possible_preemption_outcomes():
     numpy.testing.assert_array_equal(
         public["deposit_required"][:, 0], [0, 0, 0, 1]
     )
-    model = critic.PaymentCritic(belief_offset=0)
+    model = critic.PaymentCritic(belief_offset=0, player_width=8)
     result = model.distributions(
         {
             **public,

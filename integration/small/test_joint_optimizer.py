@@ -1,16 +1,16 @@
-"""Joint training uses dense AdamW updates and detached imitation weights."""
+"""Joint training uses dense AdamW updates and rejects nonfinite gradients."""
 
 import numpy
 import pytest
 import tensorflow as tf
-from model import actor as actor_layers
+
 from training import trainer
 
 
 def test_repeated_tiles_match_dense_adamw_updates():
     table = tf.Variable(tf.reshape(tf.range(544, dtype=tf.float32), (34, 16)))
     reference = tf.Variable(table)
-    optimizer = tf.keras.optimizers.AdamW(
+    optimizer = trainer.AdamW(
         learning_rate=0.01, weight_decay=0.1, clipnorm=1.0
     )
     reference_optimizer = tf.keras.optimizers.AdamW(
@@ -30,7 +30,7 @@ def test_repeated_tiles_match_dense_adamw_updates():
             )
         gradient = tape.gradient(loss, reference)
         numpy.testing.assert_allclose(
-            metrics["gradient/local_norm"], tf.linalg.norm(gradient)
+            metrics["gradient/global_norm"], tf.linalg.norm(gradient)
         )
         reference_optimizer.apply_gradients([(gradient, reference)])
         for actual, expected in zip(
@@ -42,42 +42,9 @@ def test_repeated_tiles_match_dense_adamw_updates():
             )
 
 
-def test_imitation_ess_matches_weights_and_survives_tiny_q_gaps():
-    for values in (
-        numpy.array([-200.0, 0.0, 200.0, 1000.0]) / 200.0,
-        numpy.log([1.0, 2.0, 100.0, 1e10]),
-        numpy.array([-1000.0, -1001.0, -1002.0, 0.0]),
-    ):
-        nll = tf.Variable([1.0, 2.0, 4.0, 100.0])
-        advantages = tf.Variable(values, dtype=tf.float32)
-        with tf.GradientTape(persistent=True) as tape:
-            terms = actor_layers.weighted_imitation_terms(
-                nll=nll,
-                advantages=advantages,
-                eligible=tf.constant([True, True, True, False]),
-            )
-        weights = numpy.exp(
-            numpy.minimum(values[:3], numpy.log(20))
-            - numpy.minimum(values[:3], numpy.log(20)).max()
-        )
-        weights /= weights.sum()
-        numpy.testing.assert_allclose(
-            terms["loss"], weights @ [1, 2, 4], rtol=1e-6
-        )
-        numpy.testing.assert_allclose(
-            terms["effective_sample_fraction"],
-            1 / (3 * numpy.square(weights).sum()),
-            rtol=1e-6,
-        )
-        numpy.testing.assert_allclose(
-            tape.gradient(terms["loss"], nll), [*weights, 0], rtol=1e-6
-        )
-        assert tape.gradient(terms["loss"], advantages) is None
-
-
 def test_nonfinite_gradients_fail_before_optimizer_mutation():
     value = tf.Variable(1.0)
-    optimizer = tf.keras.optimizers.AdamW(0.01, clipnorm=1.0)
+    optimizer = trainer.AdamW(0.01, clipnorm=1.0)
     optimizer.build([value])
 
     @tf.function
@@ -87,7 +54,7 @@ def test_nonfinite_gradients_fail_before_optimizer_mutation():
         return trainer.apply_gradients(optimizer, tape, loss, [value])
 
     with pytest.raises(
-        tf.errors.InvalidArgumentError, match="Non-finite local gradient norm"
+        tf.errors.InvalidArgumentError, match="Non-finite global gradient norm"
     ):
         update()
     assert float(value) == 1.0

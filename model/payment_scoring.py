@@ -426,48 +426,6 @@ def masked_score_logits(
     )
 
 
-def score_payments(probability, dealer):
-    """Push legal score probabilities for leading canonical payment cells."""
-    matches = (
-        payment_amounts()[:, : probability.shape[1], :, None]
-        == outcomes.PAYMENT_VALUES
-    )
-    mapped = tf.gather(
-        tf.constant(matches.argmax(-1), tf.int64), tf.cast(dealer, tf.int64)
-    )
-    # Sparse pushforward avoids a dense score-state x payment-class matrix
-    # multiplication for every scoring scenario.
-    # Some int32 arithmetic kernels require host memory; keep these expanded
-    # indices on device through both the pushforward and its gradient.
-    count = (
-        tf.shape(probability, out_type=tf.int64)[0]
-        * tf.shape(probability, out_type=tf.int64)[1]
-    )
-    indices = tf.reshape(mapped, (count, len(SCORES))) + tf.range(count)[
-        :, None
-    ] * len(outcomes.PAYMENT_VALUES)
-    payments = tf.math.unsorted_segment_sum(
-        tf.reshape(
-            tf.transpose(probability, [0, 1, 3, 2]),
-            (-1, tf.shape(probability)[2]),
-        ),
-        tf.reshape(indices, (-1,)),
-        count * len(outcomes.PAYMENT_VALUES),
-    )
-    return tf.transpose(
-        tf.reshape(
-            payments,
-            (
-                tf.shape(probability)[0],
-                tf.shape(probability)[1],
-                len(outcomes.PAYMENT_VALUES),
-                tf.shape(probability)[2],
-            ),
-        ),
-        [0, 1, 3, 2],
-    )
-
-
 class CompletionScoreMask(tf.keras.layers.Layer):
     def call(self, values):
         logits, inputs = values

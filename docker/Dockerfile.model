@@ -39,4 +39,4 @@ COPY log_dataset /workspace/log_dataset
 COPY --from=native /tmp/nejimakidori/log_dataset/_native_collection.so /workspace/log_dataset/
 COPY docker /workspace/docker
 RUN python -c "from log_dataset import shanten; shanten.native()"
-CMD ["python", "-m", "training.candidate", "--help"]
+CMD ["python", "-m", "training.corrections", "--help"]

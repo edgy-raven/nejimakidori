@@ -1,4 +1,4 @@
-# Match-log critic records
+# Match records for critic fitting and MMD
 
 ## Build
 
@@ -17,19 +17,16 @@ Keep generated records outside the source repository.
 
 ## Positions and targets
 
-- Include every recoverable policy decision from all four seats.
+- Include every recoverable policy decision from all four seats, including
+  Mortal's. Match MMD uses these as off-policy experience, not imitation labels.
 - Do not apply AFK exclusions, focused sampling or training partitions.
 - Share the recorded-action mapping with the expert replay reader.
 - Keep censored call intentions excluded; an unrecorded losing claim is not
   evidence of a pass. Forced actions remain outside the decision contract.
 - Supervise recorded current-hand payments, including accepted riichi
   deposits, with the same relative-seat contract as ordinary replay.
-- Store the observed current-hand continuation state for projected-ST3
-  diagnostics. Later game results are not a critic target.
-- Reconstruct decision-time opponent shanten, improving tiles and hand counts
-  as separate hidden-state labels for validation. They never enter public
-  model inputs; the Q-fit phase still uses only settlement supervision.
-- Leave unused hindsight score, bonus and ron labels unknown.
+- Later game results are not a critic target.
+- Leave unused hidden-hand, hindsight score, bonus and ron labels unknown.
   Conversion never reconstructs counterfactual scores from a winning hand.
 
 These records use the existing numeric training-record schema. They do not
@@ -44,13 +41,9 @@ pass and retains the final partial batch. Each batch contains:
 | --- | --- |
 | `features` | Decision-time model inputs |
 | `chosen` | Canonical critic action ID |
+| `head`, `legal` | Active policy head and legal action mask for MMD |
 | `payment_points` | Observed relative-seat payment cells |
-| `projected_st3` | Realized current-hand projected ST3, in raw ST3 points |
-
-`decode_records(raw)` also exposes the `beliefs` labels for validation. The
-Q-fit batch iterator omits them so its input pipeline does not decode unused
-labels.
 
 The trainer owns padding masks, optimizer state and the number of passes.
-There are no actor-objective source labels in this consumer: match decisions
-are critic observations, not expert imitation targets.
+There are no imitation targets in this consumer. Match MMD uses detached
+critic action values and KL penalties.

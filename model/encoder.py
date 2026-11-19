@@ -3,22 +3,18 @@
 import math
 
 import tensorflow as tf
+
 from log_dataset import _native_collection
 from model import actions
 
 HAND_BATCH_BUCKET = 512
-# Scoring constraints and objective priors bypass learned projections.
+# Deterministic scoring constraints bypass learned projections.
 SCORING_INPUTS = frozenset(
     {
         "public_fu",
         "public_bonus",
         "candidate_public_fu",
         "candidate_public_bonus",
-        "policy_prior_no_threat",
-        "riichi_dama_points",
-        "riichi_extra_han",
-        "call_open_points",
-        "call_riichi_points",
     }
 )
 
@@ -489,6 +485,22 @@ class RiverEncoding(tf.keras.layers.Layer):
             values = (
                 tf.nn.gelu(normalization(values + convolution(values))) * mask
             )
+        # Shared summaries retain each opponent's pre/post-riichi history.
+        # Empty rivers remain identical regardless of their storage slot.
+        local = tf.concat(
+            [
+                tf.math.divide_no_nan(
+                    tf.reduce_sum(values, axis=1),
+                    tf.reduce_sum(mask, axis=1),
+                ),
+                tf.where(
+                    tf.reduce_any(mask > 0, axis=1),
+                    tf.reduce_max(tf.where(mask > 0, values, -1e4), axis=1),
+                    tf.zeros_like(values[:, 0]),
+                ),
+            ],
+            axis=-1,
+        )
         occupied = tf.reduce_any(mask > 0, axis=1)
         maximum = tf.where(
             occupied,
@@ -498,7 +510,39 @@ class RiverEncoding(tf.keras.layers.Layer):
         encoded = self.projection(
             tf.concat([tf.reshape(values, (-1, 32 * 64)), maximum], axis=-1)
         ) * tf.cast(occupied, self.compute_dtype)
-        return tf.reshape(encoded, (-1, 384))
+        return (
+            tf.reshape(encoded, (-1, 384)),
+            tf.reshape(local, (-1, 3, 256)),
+        )
+
+
+def projected_draws(inputs, selected):
+    """Ordinary draw counts and last drawer if this action takes effect."""
+    remaining = tf.cast(
+        tf.gather(inputs["live_wall_count"], selected[:, 0]), tf.int32
+    ) - tf.cast(selected[:, 1] >= 261, tf.int32)
+    source = tf.where(
+        (tf.gather(inputs["decision_phase"], selected[:, 0]) == 1)
+        & (selected[:, 1] == 111),
+        tf.cast(tf.gather(inputs["trigger_source"], selected[:, 0]), tf.int32),
+        0,
+    )
+    return tf.stack(
+        [
+            tf.cast(
+                (
+                    remaining[:, None]
+                    + 3
+                    - (tf.range(4)[None] - source[:, None] - 1) % 4
+                )
+                // 4,
+                tf.float32,
+            ),
+            tf.one_hot((source + remaining) % 4, 4)
+            * tf.cast(remaining > 0, tf.float32)[:, None],
+        ],
+        axis=-1,
+    )
 
 
 def last_draw_context(inputs, selected):
@@ -515,7 +559,6 @@ def last_draw_context(inputs, selected):
     source = tf.cast(
         tf.gather(inputs["trigger_source"], selected[:, 0]), tf.int32
     )
-    remaining = wall - tf.cast(selected[:, 1] >= 261, tf.int32)
     return tf.concat(
         [
             tf.cast(
@@ -540,15 +583,7 @@ def last_draw_context(inputs, selected):
             ),
             tf.one_hot((tf.where(response, source, 0) + wall) % 4, 4)
             * tf.cast(wall > 0, tf.float32)[:, None],
-            tf.one_hot(
-                (
-                    tf.where(response & (selected[:, 1] == 111), source, 0)
-                    + remaining
-                )
-                % 4,
-                4,
-            )
-            * tf.cast(remaining > 0, tf.float32)[:, None],
+            projected_draws(inputs, selected)[..., 1],
         ],
         axis=-1,
     )
@@ -649,9 +684,11 @@ class DecisionCandidates(tf.keras.layers.Layer):
         structural = tf.concat(
             [
                 structural,
-                tf.reshape(inputs["action_value_range"], (batch, 295, 8)),
+                tf.reshape(inputs["action_win_value_range"], (batch, 295, 8)),
                 tf.cast(
-                    tf.reshape(inputs["action_value_valid"], (batch, 295, 4)),
+                    tf.reshape(
+                        inputs["action_win_value_valid"], (batch, 295, 4)
+                    ),
                     tf.float32,
                 ),
                 tf.cast(inputs["action_value_eligible"][..., None], tf.float32),
@@ -722,18 +759,14 @@ def encode_inputs():
         for name, definition in _native_collection.INPUTS.items()
     }
     bank = HandBank(name="hand_bank")(inputs)
+    rivers, critic_rivers = RiverEncoding(name="river_encoder")(inputs)
     encoded = [
         bank[:, 0],
         tf.keras.layers.GlobalAveragePooling1D()(bank),
-        RiverEncoding(name="river_encoder")(inputs),
+        rivers,
         numeric_features(
             [
-                # Ignore retired inputs, including values in cached records.
-                (
-                    tf.keras.ops.zeros_like(value)
-                    if name in _native_collection.IGNORED_INPUTS
-                    else value
-                )
+                value
                 for name, value in inputs.items()
                 if name
                 not in {
@@ -783,4 +816,4 @@ def encode_inputs():
         dtype="float32",
         name="candidate_state_normalized",
     )(candidates)
-    return inputs, hidden, candidates, selected, structure
+    return inputs, hidden, candidates, selected, structure, critic_rivers

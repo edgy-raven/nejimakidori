@@ -80,21 +80,21 @@ def test_reachable_ranges_follow_each_discard_and_riichi_slot():
     packed = features.pack(state, 1, "DISCARD")
     # East reaches tenpai; cutting 7s instead searches a one-shanten hand.
     numpy.testing.assert_array_equal(
-        packed["action_value_range"][27, 0], [[2000, 3900], [2700, 5200]]
+        packed["action_win_value_range"][27, 0], [[1000, 2000], [1500, 2700]]
     )
     numpy.testing.assert_array_equal(
-        packed["action_value_range"][24, 0], [[1300, 3900], [2000, 5200]]
+        packed["action_win_value_range"][24, 0], [[1000, 2000], [1100, 2700]]
     )
     for cut in (24, 27):
         assert packed["action_value_eligible"][cut]
         numpy.testing.assert_array_equal(
-            packed["action_value_range"][37 + cut],
-            packed["action_value_range"][cut],
+            packed["action_win_value_range"][37 + cut],
+            packed["action_win_value_range"][cut],
         )
-        assert not packed["action_value_valid"][cut, 1].any()
+        assert not packed["action_win_value_valid"][cut, 1].any()
     numpy.testing.assert_array_equal(
-        packed["action_value_range"][74 + 27],
-        packed["action_value_range"][27],
+        packed["action_win_value_range"][74 + 27, 0],
+        [[2000, 3900], [2700, 5200]],
     )
     assert not packed["action_value_eligible"][74 + 24]
 
@@ -131,3 +131,44 @@ def test_reported_public_safety_features_reach_native_inputs():
                 packed["last_tedashi_tile"],
                 numpy.eye(37, dtype=numpy.int8)[[32, 15, 1, 2]],
             )
+
+
+def test_hatsu_pair_dama_cannot_ron_but_riichi_can():
+    # East 2, 1 honba: 234345m 123p red-56s FFF, dora 3m.
+    start = dict(
+        type="start_kyoku",
+        bakaze="E",
+        dora_marker="2m",
+        honba=1,
+        kyoku=2,
+        kyotaku=0,
+        oya=1,
+        scores=[25000] * 4,
+        tehais=[["?"] * 13 for _ in range(4)],
+    )
+    start["tehais"][0] = "2m 3m 4m 3m 4m 5m 1p 2p 3p 5sr 6s F F".split()
+    state = replay.Replay.from_start("hatsu-dama", start)
+    state.apply(dict(type="tsumo", actor=0, pai="F"))
+    packed = features.pack(state, 0, "RIICHI")
+    assert (
+        packed["candidate_hand_counts"][
+            packed["discard_candidate_hand"][32], 32
+        ]
+        == 2
+    )
+    numpy.testing.assert_array_equal(
+        packed["action_win_value_valid"][[69, 106], 0], [[0, 1], [1, 1]]
+    )
+    numpy.testing.assert_array_equal(
+        packed["action_win_value_range"][[69, 106], 0],
+        [[[0, 0], [7900, 7900]], [[8000, 8000], [8000, 8000]]],
+    )
+    state.apply(dict(type="reach", actor=0))
+    state.apply(dict(type="dahai", actor=0, pai="F", tsumogiri=True))
+    state.apply(dict(type="reach_accepted", actor=0))
+    state.apply(dict(type="tsumo", actor=0, pai="9m"))
+    accepted = features.pack(state, 0, "DISCARD")
+    numpy.testing.assert_array_equal(
+        accepted["action_win_value_range"][8, 0],
+        packed["action_win_value_range"][106, 0],
+    )

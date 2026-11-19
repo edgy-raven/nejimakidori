@@ -122,8 +122,8 @@ def yaku_path_fractions(packed):
     )
 
 
-def action_value_ranges(tiles, melds, context, cut=None):
-    """Exact improving one-shanten paths; ranges are conditional on a legal win."""
+def action_value_ranges(tiles, melds, context, cut=None, *, riichi=False):
+    """Score improving one-shanten paths conditional on a legal win."""
     counts = numpy.bincount(numpy.asarray(tiles) // 4, minlength=34)
     distance, draws, _ = shanten.improving(counts)
     result = {
@@ -143,7 +143,7 @@ def action_value_ranges(tiles, melds, context, cut=None):
         summary, _ = scoring.score_waits(tiles, melds, context)
         opened = any(meld.opened for meld in melds)
         for kind in range(2):
-            scenario = kind if opened else 2 + kind
+            scenario = kind + 2 * int(riichi and not opened)
             result["range"][int(opened), kind] = summary[scenario, 2:4]
             result["valid"][int(opened), kind] = summary[scenario, 1] > 0
         if opened:
@@ -209,6 +209,7 @@ def action_value_ranges(tiles, melds, context, cut=None):
                     melds,
                     after,
                     discarded // 4,
+                    riichi=riichi,
                 )
                 merge_value_ranges(result, candidate)
     return result

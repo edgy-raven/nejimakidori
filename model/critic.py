@@ -2,8 +2,16 @@
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import scoring
-from model import actions, joint_settlement, losses, outcomes, payment_scoring
+from model import (
+    actions,
+    encoder,
+    joint_settlement,
+    losses,
+    outcomes,
+    payment_scoring,
+)
 
 STATISTICS_CHUNK = 512
 
@@ -395,6 +403,121 @@ class HandContext(tf.keras.layers.Layer):
         )
 
 
+class PlayerContext(tf.keras.layers.Layer):
+    """Public player descriptors, without learned opponent-slot predictions."""
+
+    def call(self, values):
+        inputs, rivers, selected = values
+        players = tf.concat(
+            [
+                tf.broadcast_to(
+                    tf.constant([1.0, 0.0, 0.0, 0.0])[None, :, None],
+                    (tf.shape(rivers)[0], 4, 1),
+                ),
+                tf.concat(
+                    [tf.zeros_like(rivers[:, :1]), tf.cast(rivers, tf.float32)],
+                    axis=1,
+                ),
+                tf.cast(inputs["seat_context"], tf.float32),
+                # Wind identity is not a player ID. Expose its scoring and
+                # tile-availability consequences instead.
+                tf.stack(
+                    [
+                        tf.cast(inputs["seat_wind"] == 0, tf.float32),
+                        tf.cast(
+                            inputs["seat_wind"]
+                            == inputs["prevailing_wind"][:, None],
+                            tf.float32,
+                        ),
+                        *[
+                            tf.cast(
+                                tf.gather(
+                                    inputs[name],
+                                    tf.cast(inputs["seat_wind"], tf.int32) + 27,
+                                    axis=1,
+                                    batch_dims=1,
+                                ),
+                                tf.float32,
+                            )
+                            / scale
+                            for name, scale in (
+                                ("known_unavailable_counts", 4),
+                                ("dora_multiplicity", 5),
+                            )
+                        ],
+                    ],
+                    axis=-1,
+                ),
+                *[
+                    tf.cast(inputs[name], tf.float32)[..., None] / scale
+                    for name, scale in (
+                        ("riichi_state", 2),
+                        ("ippatsu_alive", 1),
+                        ("opponent_called_tile_count", 16),
+                        ("opponent_discard_count", 24),
+                    )
+                ],
+                *[
+                    tf.math.asinh(tf.cast(inputs[name], tf.float32))
+                    for name in (
+                        "last_tedashi_tile",
+                        "open_opponent_yaku_possibility",
+                        "genbutsu_to_seat",
+                        "passed_unchanged_to_seat",
+                        "sotogawa_earliest_turn_to_seat",
+                        "meld_valid",
+                        "meld_type",
+                    )
+                ],
+                tf.reduce_sum(
+                    tf.one_hot(tf.cast(inputs["meld_tile_ids"], tf.int32), 34)
+                    * tf.cast(inputs["meld_tile_valid"], tf.float32)[..., None],
+                    axis=(2, 3),
+                )
+                / 4,
+                tf.reduce_sum(
+                    tf.cast(inputs["meld_tile_red"], tf.float32)
+                    * tf.cast(inputs["meld_tile_valid"], tf.float32),
+                    axis=(2, 3),
+                )[..., None]
+                / 3,
+            ],
+            axis=-1,
+        )
+        response = tf.gather(inputs["decision_phase"], selected[:, 0]) == 1
+        source = tf.where(
+            response,
+            tf.cast(
+                tf.gather(inputs["trigger_source"], selected[:, 0]), tf.int32
+            ),
+            0,
+        )
+        active_discard = response | (
+            actions.discard_decisions(inputs, selected) & ~response
+        )
+        return tf.concat(
+            [
+                tf.gather(players, selected[:, 0]),
+                encoder.projected_draws(inputs, selected)[..., :1] / 18,
+                tf.cast(
+                    active_discard[:, None]
+                    & (
+                        tf.gather(inputs["live_wall_count"], selected[:, 0]) > 0
+                    )[:, None]
+                    & (tf.range(4)[None] == (source[:, None] + 1) % 4)
+                    & (tf.gather(inputs["riichi_state"], selected[:, 0]) == 0),
+                    tf.float32,
+                )[..., None],
+                tf.cast(
+                    active_discard[:, None]
+                    & (tf.range(4)[None] == source[:, None]),
+                    tf.float32,
+                )[..., None],
+            ],
+            axis=-1,
+        )
+
+
 class PaymentCritic(tf.keras.Model):
     """Sparse action states in; payment distributions and derived values out.
 
@@ -402,17 +525,22 @@ class PaymentCritic(tf.keras.Model):
     learned scalar value or state-payment predictor in this model.
     """
 
-    def __init__(self, belief_offset):
+    def __init__(self, belief_offset, player_width):
         super().__init__(autocast=False)
         self.belief_offset = belief_offset
+        self.player_width = player_width
         self.state = tf.keras.layers.Dense(128, activation="gelu")
-        self.cell_state = tf.keras.layers.Dense(16 * 64, activation="gelu")
-        self.deposit = tf.keras.layers.Dense(
-            len(joint_settlement.EVENTS) * 16, dtype="float32"
-        )
-        self.event = tf.keras.layers.Dense(
-            len(joint_settlement.EVENTS), dtype="float32"
-        )
+        self.players = tf.keras.layers.Dense(64, activation="gelu")
+        self.cell_state = tf.keras.layers.Dense(64, activation="gelu")
+        self.event_context = tf.keras.layers.Dense(16)
+        self.event_roles = [tf.keras.layers.Dense(16) for _ in range(3)]
+        self.event_kind = tf.keras.layers.Embedding(4, 16)
+        self.event_kind.build((len(joint_settlement.EVENTS),))
+        self.event = tf.keras.layers.Dense(1, dtype="float32")
+        self.deposit_context = tf.keras.layers.Dense(8)
+        self.deposit_players = tf.keras.layers.Dense(8)
+        self.deposit_roles = tf.keras.layers.Dense(8)
+        self.deposit = tf.keras.layers.Dense(1, dtype="float32")
         self.bonus = tf.keras.layers.Dense(
             len(scoring.BONUS_HAN), dtype="float32"
         )
@@ -425,14 +553,74 @@ class PaymentCritic(tf.keras.Model):
             len(payment_scoring.SCORES), dtype="float32"
         )
 
+    def context(self, state):
+        hidden = self.state(state[:, : -4 * self.player_width])
+        players = self.players(
+            tf.concat(
+                [
+                    tf.reshape(
+                        state[:, -4 * self.player_width :],
+                        (-1, 4, self.player_width),
+                    ),
+                    tf.broadcast_to(
+                        hidden[:, None], (tf.shape(state)[0], 4, 128)
+                    ),
+                ],
+                axis=-1,
+            )
+        )
+        return hidden, players
+
+    def event_contexts(self, hidden, players):
+        # Joint masks remain whole events. Shared role pooling is followed by
+        # a nonlinearity, not a product of independent player probabilities.
+        roles = tf.constant(
+            [
+                [
+                    [
+                        float(bool(winners & (1 << seat))),
+                        float(source == seat),
+                        float(bool(ready & (1 << seat))),
+                    ]
+                    for seat in range(4)
+                ]
+                for _, source, winners, ready in joint_settlement.EVENTS
+            ],
+            tf.float32,
+        )
+        return (
+            tf.nn.gelu(
+                self.event_context(hidden)[:, None]
+                + tf.linalg.matmul(
+                    tf.one_hot([row[0] for row in joint_settlement.EVENTS], 4),
+                    self.event_kind.embeddings,
+                )[None]
+                + tf.add_n(
+                    [
+                        tf.einsum(
+                            "es,nsh->neh",
+                            roles[..., role],
+                            projection(players),
+                        )
+                        for role, projection in enumerate(self.event_roles)
+                    ]
+                )
+            ),
+            roles,
+        )
+
+    def event_logits(self, state):
+        hidden, players = self.context(state)
+        event, _ = self.event_contexts(hidden, players)
+        return self.event(event)[..., 0]
+
     def distributions(self, inputs):
         """Scored ron/tsumo events, exhaustive masks, abort and bank deposits.
 
         Twelve ron claimant slots plus four tsumo winners. All three tsumo
         payer shares use exactly the same score state and added-han count.
         """
-        hidden = self.state(inputs["state"])
-        cells = tf.reshape(self.cell_state(hidden), (-1, 16, 64))
+        hidden, players = self.context(inputs["state"])
         winning = tuple(range(12)) + tuple(
             next(
                 i
@@ -445,6 +633,32 @@ class PaymentCritic(tf.keras.Model):
             cell if cell < 12 else 12 + row[2]
             for cell, row in enumerate(scoring.CELLS[:24])
         ]
+        cells = self.cell_state(
+            tf.concat(
+                [
+                    tf.gather(
+                        players,
+                        [scoring.CELLS[cell][2] for cell in winning],
+                        axis=1,
+                    ),
+                    tf.gather(
+                        players,
+                        [scoring.CELLS[cell][1] for cell in winning],
+                        axis=1,
+                    )
+                    * tf.constant([cell < 12 for cell in winning], tf.float32)[
+                        None, :, None
+                    ],
+                    tf.broadcast_to(
+                        tf.one_hot(
+                            [scoring.CELLS[cell][0] for cell in winning], 2
+                        )[None],
+                        (tf.shape(players)[0], 16, 2),
+                    ),
+                ],
+                axis=-1,
+            )
+        )
         bonus_logits = self.bonus(cells[:, : len(winning)])
         opened = tf.gather(
             inputs["opened"],
@@ -494,6 +708,20 @@ class PaymentCritic(tf.keras.Model):
             bonus=inputs["public_bonus"],
             yakuman=inputs["yakuman_allowed"],
         )
+        event, roles = self.event_contexts(hidden, players)
+        deposit = tf.nn.gelu(
+            self.deposit_context(event)[:, :, None]
+            + tf.einsum(
+                "ds,nsh->ndh",
+                tf.constant(joint_settlement.DEPOSITS),
+                self.deposit_players(players),
+            )[:, None]
+            + self.deposit_roles(
+                tf.einsum(
+                    "ds,esr->edr", tf.constant(joint_settlement.DEPOSITS), roles
+                )
+            )[None]
+        )
         result = {
             "score_logits": score_logits,
             "score_probability": tf.reduce_sum(
@@ -502,10 +730,8 @@ class PaymentCritic(tf.keras.Model):
                 axis=2,
             ),
             "bonus_logits": bonus_logits,
-            "event_logits": self.event(hidden),
-            "deposit_logits": tf.reshape(
-                self.deposit(hidden), (-1, len(joint_settlement.EVENTS), 16)
-            ),
+            "event_logits": self.event(event)[..., 0],
+            "deposit_logits": self.deposit(deposit)[..., 0],
         }
 
         _, _, legal = joint_settlement.event_probabilities({**inputs, **result})
@@ -550,37 +776,6 @@ class PaymentCritic(tf.keras.Model):
         result["payment_probability"] = joint_settlement.marginals(result)
         return result
 
-    def projected_mean_downside(self, inputs, payoff=None, outputs=None):
-        """Mean ST3 and below-mean shortfall on net losing-hand outcomes."""
-        if payoff is None:
-            payoff = joint_settlement.position_payoffs(inputs)
-        if outputs is None:
-            outputs = PaymentCritic.distributions(self, inputs)
-        probability, _ = joint_settlement.probabilities({**inputs, **outputs})
-        mean = joint_settlement.expectation(probability, payoff)
-        losing = (
-            joint_settlement.settlement_states(inputs)["joint_scores"][..., 0]
-            < inputs["scores"][:, None, None, 0]
-        )
-        return tf.stack(
-            [
-                mean,
-                tf.sqrt(
-                    joint_settlement.expectation(
-                        probability,
-                        tf.where(
-                            losing,
-                            tf.square(
-                                tf.minimum(payoff - mean[:, None, None], 0.0)
-                            ),
-                            0.0,
-                        ),
-                    )
-                ),
-            ],
-            axis=1,
-        )
-
     def candidate_chunk(self, inputs, payoff, weights, integer_fields):
         """Bounded, detached forecasts for actor objectives."""
         inputs = {
@@ -593,8 +788,11 @@ class PaymentCritic(tf.keras.Model):
             state_mapping=zip(self.trainable_variables, weights)
         ):
             outputs = PaymentCritic.distributions(self, inputs)
+            probability, _ = joint_settlement.probabilities(
+                {**inputs, **outputs}
+            )
         return tf.stop_gradient(
-            self.projected_mean_downside(inputs, payoff, outputs)
+            joint_settlement.expectation(probability, payoff)
         )
 
     def direction_losses(self, inputs):
@@ -679,7 +877,7 @@ class PaymentCritic(tf.keras.Model):
                 axis=1,
             )
             logits = tf.reshape(
-                self.event(self.state(probe)),
+                self.event_logits(probe),
                 [-1, 3, 2, len(joint_settlement.EVENTS)],
             )
             probability = tf.nn.softmax(
@@ -955,17 +1153,6 @@ CRITIC_METRICS = (
     "tenpai_direction_loss",
     "wait_direction_loss",
 )
-
-
-def settlement_metrics(statistics, mean=losses.mean_valid):
-    return {
-        name: mean(
-            tf.math.divide_no_nan(statistics[index, 0], statistics[index, 1]),
-            statistics[index, 1] > 0,
-            statistics[index, 1],
-        )
-        for index, name in enumerate(CRITIC_METRICS)
-    }
 
 
 def settlement_objective(metrics):

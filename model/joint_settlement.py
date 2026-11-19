@@ -8,6 +8,7 @@ import itertools
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import scoring
 from model import losses, outcomes, payment_scoring
 
@@ -185,7 +186,7 @@ def bank_transfers(collectors, pot):
 
 
 def score_likelihood(score_probability, heads, values):
-    """Multiply active claims after combining score states with equal payouts."""
+    """Multiply claim masses after combining states with equal payouts."""
     base_probability = tf.reduce_sum(
         tf.where(
             tf.constant(SCORE_TO_BASE, tf.bool),
@@ -347,36 +348,10 @@ def probabilities(inputs):
 
 def decode(inputs):
     """Rule-derived transfers, ranks and diagnostics for serving."""
-    probability, legal = probabilities(inputs)
-    log_probability = tf.where(
-        probability > 0, tf.math.log(tf.maximum(probability, 1e-30)), -1e30
-    )
-    indices = dealer_indices(inputs["dealer"])
-    states = settlement_states(inputs)
-    rank_probability = tf.reduce_sum(
-        tf.reduce_sum(
-            probability[..., None, None] * tf.one_hot(states["joint_ranks"], 4),
-            axis=2,
-        ),
-        axis=1,
-    )
-    rank_probability /= tf.reduce_sum(rank_probability, axis=-1, keepdims=True)
+    probability, _ = probabilities(inputs)
     return {
         "joint_probability": probability,
-        "joint_log_probability": log_probability,
-        "joint_legal_deposits": legal,
-        **states,
-        "round_placement_logits": tf.math.log(
-            tf.maximum(rank_probability, 1e-30)
-        ),
-        "expected_points": expectation(
-            probability,
-            tf.gather(
-                tf.constant(TRANSFERS @ COEFFICIENTS, tf.float32), indices
-            )[:, :, None]
-            + states["joint_bank"],
-        )
-        / 10000,
+        **settlement_states(inputs),
     }
 
 
@@ -488,9 +463,9 @@ def expectation(probability, values):
 
 @tf.function(jit_compile=True)
 def position_payoffs(inputs):
-    """Project public settlement states once for all actions in a position."""
+    """Project settlement states to normalized J once per position."""
     states = settlement_states(inputs)
-    return continuation_payoffs(
+    st3, probability = continuation_forecast(
         scores=states["joint_scores"],
         ranks=states["joint_ranks"],
         support=states["joint_support"],
@@ -498,14 +473,16 @@ def position_payoffs(inputs):
         hand_number=inputs["hand_number"],
         pot=inputs["pot"],
     )
+    return policy_objective(st3, probability)
 
 
 def gather_position_payoffs(inputs, positions):
     """Project each requested position once in bounded, fixed-size chunks."""
+    shape = [len(SUPPORT) // 4, 16]
     payoffs = tf.TensorArray(
         tf.float32,
         size=(tf.shape(positions)[0] + 31) // 32,
-        element_shape=[32, len(SUPPORT) // 4, 16],
+        element_shape=[32, *shape],
     )
     for begin in tf.range(0, tf.shape(positions)[0], 32):
         rows = tf.gather(
@@ -515,24 +492,13 @@ def gather_position_payoffs(inputs, positions):
         payoffs = payoffs.write(
             begin // 32,
             position_payoffs(
-                {name: tf.gather(value, rows) for name, value in inputs.items()}
+                {
+                    name: tf.gather(value, rows)
+                    for name, value in inputs.items()
+                },
             ),
         )
-    return tf.reshape(payoffs.stack(), [-1, len(SUPPORT) // 4, 16])[
-        : tf.shape(positions)[0]
-    ]
-
-
-@tf.function(jit_compile=True)
-def continuation_payoffs(scores, ranks, support, dealer, hand_number, pot):
-    return continuation_forecast(
-        scores=scores,
-        ranks=ranks,
-        support=support,
-        dealer=dealer,
-        hand_number=hand_number,
-        pot=pot,
-    )[0]
+    return tf.reshape(payoffs.stack(), [-1, *shape])[: tf.shape(positions)[0]]
 
 
 @tf.function(jit_compile=True)
@@ -585,20 +551,17 @@ def continuation_forecast(scores, ranks, support, dealer, hand_number, pot):
     )
 
 
-def observed_payoffs(settlements):
-    """Project observed current-hand settlements into match utility."""
-    return post_hand_forecast(
-        scores=tf.cast(settlements[:, :4], tf.float32),
-        ranks=tf.cast(settlements[:, 4:8], tf.int64),
-        next_dealer=tf.cast(settlements[:, 8], tf.int64),
-        next_hand=tf.cast(settlements[:, 9], tf.int32),
-        terminal=tf.cast(settlements[:, 10], tf.bool),
-        pot=tf.cast(settlements[:, 11], tf.float32),
-    )[0]
+def policy_objective(st3, probability):
+    """Normalized ST3 plus first-place reward and fourth-place penalty."""
+    return (
+        st3 / outcomes.OBJECTIVE_ST3_SCALE
+        + probability[..., 0]
+        - probability[..., 3]
+    )
 
 
 def post_hand_forecast(scores, ranks, next_dealer, next_hand, terminal, pot):
-    """Common observed/predicted hand settlement plus fixed continuation."""
+    """Forecast match outcomes from a post-hand state."""
     rounds = tf.cast(tf.maximum(8 - next_hand, 0), tf.float32)
     future = tf.range(8, dtype=tf.int64)
     dealerships = tf.reduce_sum(
@@ -624,14 +587,19 @@ def post_hand_forecast(scores, ranks, next_dealer, next_hand, terminal, pot):
 
 
 def continuation_values(scores, rounds, dealerships):
-    """Frozen seed-11 calibration from st3-continuation-20261003.
+    """Single time-dependent Gumbel fit from single-gumbel-time-20261117.
 
     Score location and diffusion were calibrated in 10,000-point units.
     Positive dealership drift and a + cT + dT² variance impose the agreed
-    monotonicity constraints. Constants are never training variables.
+    monotonicity constraints. Fit uses game-weighted placement likelihood on
+    seven training and three Mortal matches. Constants are not training
+    variables.
     """
     coefficient = tf.nn.softplus(
-        tf.constant([-3.6169434, -2.544114, -1.7547616, -5.1666236], tf.float32)
+        tf.constant(
+            [-2.9851044578, -2.9903753151, -2.0806273807, -4.2473072284],
+            tf.float32,
+        )
     )
     location = scores / 10000 + coefficient[0] * (
         dealerships - tf.reduce_mean(dealerships, -1, keepdims=True)

@@ -46,16 +46,10 @@ struct Branch {
 struct Legal {
   uint8_t discards[37], riichi[37], calls[4][37];
 };
-struct Focus {
-  uint8_t routes[3], fast, threat, phase;
-  int yakuhai;
-};
 struct Ranges {
   double values[8];
-  uint8_t valid[4], restricted[2], eligible;
-  int dama_points;
-  uint8_t extra_han;
-  int riichi_points;
+  uint8_t valid[4];
+  uint8_t restricted[2], eligible;
   void merge(Ranges const &other);
 };
 struct RangeContext {
@@ -63,7 +57,7 @@ struct RangeContext {
   int missed_agari;
   uint8_t unavailable[34];
   int unavailable_red[3];
-  uint8_t prior;
+  uint8_t riichi;
 };
 using Score = void (*)(void *, Hand const *, RangeContext const *, int, uint64_t,
                        Ranges *);
@@ -121,6 +115,6 @@ void public_values(Meld const *melds, int size, int const *dora, int &fu, int &b
 void pack_base(Row row, State const &state, Analysis &analysis);
 void pack_candidates(Row row, State const &state, Analysis const &analysis,
                      Branch const *branches, size_t branch_count, Legal &legal,
-                     Focus &focus, RangeContext const &availability, void *context,
+                     RangeContext const &availability, void *context,
                      Score score);
 } // namespace feature

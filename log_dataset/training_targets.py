@@ -3,16 +3,15 @@
 import types
 
 import numpy
+import riichienv
+
 from log_dataset import (
     _native_collection,
     features,
-    sakigiri_regret,
     scoring,
     shanten,
 )
 from model import outcomes, payment_scoring
-
-import riichienv
 
 
 def ron_labels(state, actor, phase):
@@ -175,8 +174,6 @@ def ron_labels(state, actor, phase):
 def round_targets(state, events):
     length = len(events)
     ready = numpy.zeros((length, 4), bool)
-    hand_yaku_focus = numpy.zeros(4, numpy.int8)
-    dangers = numpy.zeros((length, 4, 37), numpy.float32)
     completion = numpy.full((length, 4, 2, len(scoring.NAMES)), -1, numpy.int8)
     completion_score = numpy.full((length, 4, 2), -1, numpy.int16)
     for index, event in enumerate(events):
@@ -187,24 +184,6 @@ def round_targets(state, events):
             if counts.sum() % 3 != 1:
                 continue
             ready[index, actor] = shanten.calculate_shanten(counts) == 0
-            if index == 0 or (
-                event.get("actor") == actor
-                and event["type"] in {"dahai", "ankan", "kakan", "daiminkan"}
-            ):
-                if ready[index, actor] and not hand_yaku_focus[actor]:
-                    hand_yaku_focus[actor] = any(
-                        flag > 0 and name in scoring.FOCUSED_NAMES
-                        for name, flag in zip(
-                            scoring.NAMES,
-                            scoring.completion_flags(
-                                tiles=state.legal_observation(actor).hand,
-                                melds=state.melds[actor],
-                                player_wind=(actor - state.start["oya"]) % 4,
-                                round_wind="ESWN".index(state.start["bakaze"]),
-                                require_all=False,
-                            ),
-                        )
-                    )
             if not ready[index, actor]:
                 continue
             observation = state.legal_observation(actor)
@@ -256,13 +235,6 @@ def round_targets(state, events):
                             best["yakuman"],
                         )
                     )
-            for wait in waits:
-                dangers[index, actor, wait["tile"]] = (
-                    wait["values"][2 if state.accepted[actor] else 0]["points"]
-                    / 10000
-                    if wait["unseen"] > 0
-                    else 0
-                )
         if event["type"] == "hora":
             ready[index, event["actor"]] = True
     # Forecast the next recorded tenpai shape, never a maximum over future
@@ -274,10 +246,6 @@ def round_targets(state, events):
     return {
         "completion": completion,
         "completion_score": completion_score,
-        "hand_yaku_focus": hand_yaku_focus,
-        "sakigiri_pairs": sakigiri_regret.round_pairs(state.game_id, events),
-        "tenpai_reached": ready.any(axis=0).astype(numpy.int8),
-        "danger": dangers,
         "payments": outcomes.terminal_payments(events),
     }
 
@@ -361,7 +329,7 @@ def attach_beliefs(observation, state):
             observation.opponent_ukeire[relative, improving] = 1
 
 
-def attach(observation, state, index, action_index):
+def attach(observation, state, index):
     actor = observation.actor
     order = [(actor + offset) % 4 for offset in range(4)]
     observation.candidate_yaku_affinity = candidate_yaku_affinity(
@@ -377,173 +345,3 @@ def attach(observation, state, index, action_index):
     observation.round_completion_score = state.targets["completion_score"][
         index, order
     ]
-    observation.hand_yaku_focus = state.targets["hand_yaku_focus"][actor]
-    observation.sakigiri_weight = 0.0
-    if (
-        observation.features["decision_phase"] == 0
-        and observation.discard_action >= 0
-        and action_index in state.targets["sakigiri_pairs"]
-    ):
-        pair, weight = state.targets["sakigiri_pairs"][action_index]
-        observation.sakigiri_pair = numpy.array(pair, numpy.int8)
-        observation.sakigiri_weight = weight
-    if (
-        state.targets["tenpai_reached"][actor]
-        and state.events[action_index]["type"] == "dahai"
-        and state.draws[actor] is not None
-        and not state.accepted[actor]
-        and not any(state.declared[seat] for seat in order[1:])
-        and not state.targets["danger"][index, order[1:]].any()
-        and not any(high_value(state, seat) for seat in order[1:])
-    ):
-        counts = observation.features["candidate_hand_counts"][0].astype(
-            numpy.int32
-        )
-        distance, improving, _ = shanten.improving(
-            counts - (numpy.arange(34) == shanten.base_id(state.draws[actor])),
-            observation.features["known_unavailable_counts"],
-        )
-        retained_ukeire = shanten.improving(
-            counts
-            - (
-                numpy.arange(34)
-                == shanten.base_id(state.events[action_index]["pai"])
-            ),
-            observation.features["known_unavailable_counts"],
-        )[1]
-        missed_draws = []
-        for event in state.events[action_index + 1 :]:
-            if event.get("actor") != actor:
-                continue
-            if event["type"] in {
-                "chi",
-                "pon",
-                "daiminkan",
-                "ankan",
-                "kakan",
-            } or (event["type"] == "dahai" and not event["tsumogiri"]):
-                break
-            if event["type"] == "tsumo":
-                draw = shanten.base_id(event["pai"])
-                if draw in improving:
-                    missed_draws.append(draw)
-                # Include the draw that changes the retained hand's progress,
-                # then end attribution to the old shape. Tsumogiri alone
-                # does not end the window; passive visibility is not a change
-                # in the hand's structural improving-tile set.
-                if draw in retained_ukeire:
-                    break
-        if missed_draws:
-            for cut in numpy.flatnonzero(
-                observation.features["discard_action_legal"]
-            ):
-                after = counts - (numpy.arange(34) == shanten.base_id(cut))
-                if shanten.calculate_shanten(after) == distance:
-                    observation.discard_regret[cut] = numpy.mean(
-                        ~numpy.isin(
-                            missed_draws,
-                            shanten.improving(
-                                after,
-                                observation.features[
-                                    "known_unavailable_counts"
-                                ],
-                            )[1],
-                        )
-                    )
-            if (
-                numpy.unique(
-                    observation.discard_regret[observation.discard_regret >= 0]
-                ).size
-                < 2
-            ):
-                observation.discard_regret[:] = -1
-
-
-def high_value(state, actor):
-    observation = state.legal_observation(actor)
-    counts = state.concealed_counts(actor)
-    if counts.sum() % 3 != 1 or shanten.calculate_shanten(counts) > 1:
-        return False
-    visible = state.public_tiles()
-    unavailable = counts + numpy.bincount(
-        [shanten.base_id(tile) for tile in visible], minlength=34
-    )
-    context = {
-        "own_discards": [
-            shanten.base_id(row["pai"]) for row in state.rivers[actor]
-        ],
-        "missed_agari": state.missed_agari(actor),
-        "unavailable_counts": unavailable,
-        "unavailable_red": [
-            observation.hand.count(tile) + visible.count(name)
-            for tile, name in zip((16, 52, 88), ("5mr", "5pr", "5sr"))
-        ],
-        "dora_indicators": observation.dora_indicators,
-        "player_wind": (actor - state.start["oya"]) % 4,
-        "round_wind": "ESWN".index(state.start["bakaze"]),
-    }
-    if shanten.calculate_shanten(counts) == 0:
-        return any(
-            row["unseen"] > 0 and row["values"][0]["points"] >= 7700
-            for row in scoring.score_waits(
-                observation.hand, state.melds[actor], context
-            )[1]
-        )
-    improving = shanten.improving(counts, unavailable)[1]
-    occupied = {
-        *observation.hand,
-        *(tile for meld in state.melds[actor] for tile in meld.tiles),
-    }
-    for draw in range(37):
-        base = shanten.base_id(draw)
-        if base not in improving:
-            continue
-        unseen = (
-            1 - context["unavailable_red"][draw - 34]
-            if draw >= 34
-            else 4
-            - unavailable[base]
-            - (
-                1 - context["unavailable_red"][base // 9]
-                if base in (4, 13, 22)
-                else 0
-            )
-        )
-        if unseen <= 0:
-            continue
-        hand = list(observation.hand) + [
-            next(
-                tile
-                for tile in range(base * 4, base * 4 + 4)
-                if tile not in occupied
-                and features.native_tile_code(tile) == draw
-            )
-        ]
-        after_draw = counts + (numpy.arange(34) == base)
-        for cut in numpy.flatnonzero(after_draw):
-            if shanten.calculate_shanten(
-                after_draw - (numpy.arange(34) == cut)
-            ):
-                continue
-            retained = list(hand)
-            # A retained red copy cannot reduce the best reachable value.
-            retained.remove(max(tile for tile in retained if tile // 4 == cut))
-            _, waits = scoring.score_waits(
-                retained,
-                state.melds[actor],
-                {
-                    **context,
-                    "missed_agari": False,
-                    "own_discards": context["own_discards"] + [int(cut)],
-                    "unavailable_counts": unavailable
-                    + (numpy.arange(34) == base),
-                    "unavailable_red": numpy.asarray(context["unavailable_red"])
-                    + (numpy.arange(34, 37) == draw),
-                },
-            )
-            if any(
-                row["unseen"] > 0 and row["values"][0]["points"] >= 7700
-                for row in waits
-            ):
-                return True
-    return False

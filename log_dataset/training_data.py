@@ -13,22 +13,21 @@ import time
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import (
     _native_collection,
     afk,
     archives,
-    focus_sampling,
     records,
     replay,
     scoring,
     shanten,
 )
-from model import critic, joint_settlement, outcomes, payment_scoring
+from model import critic, joint_settlement, payment_scoring
 
 AUXILIARY = {
     "bonus": [24],
     "score": [24, len(scoring.BONUS_HAN)],
-    "settlement": [12],
 }
 
 
@@ -39,28 +38,10 @@ VALIDATION_SAMPLE = {
 }
 
 
-def game_targets(events):
-    """Scoring labels and observed continuation states from a complete game."""
-    targets = scoring.round_labels(events)
-    for target, settlement in zip(
-        targets.values(), outcomes.hand_continuation_states(events), strict=True
-    ):
-        target["settlement"] = settlement
-    return targets
-
-
 def serialize(observation, target):
-    category, late, gap = observation.focus
     example = tf.train.Example.FromString(
-        records.serialize_observation(observation, category > 0)
+        records.serialize_observation(observation)
     )
-    example.features.feature["meta/focus_categories"].int64_list.value[:] = [
-        category
-    ]
-    for name, value in (("late_placement", late), ("placement_gap", gap)):
-        example.features.feature["meta/" + name].int64_list.value[:] = [
-            int(value)
-        ]
     example.features.feature["critic/partition"].int64_list.value[:] = [
         records.game_partition(observation.game_id)
     ]
@@ -71,14 +52,11 @@ def serialize(observation, target):
         target["payment"][:2, order][:, :, order],
     )
     for name in AUXILIARY:
-        if name == "settlement":
-            value = target[name][observation.actor]
-        else:
-            value = target[name][:, order][:, :, order][
-                cells[:, 0], cells[:, 1], cells[:, 2]
-            ]
+        value = target[name][:, order][:, :, order][
+            cells[:, 0], cells[:, 1], cells[:, 2]
+        ]
         example.features.feature["critic/" + name].bytes_list.value[:] = [
-            value.astype("int32" if name == "settlement" else "int16").tobytes()
+            value.astype("int16").tobytes()
         ]
     return example.SerializeToString()
 
@@ -91,20 +69,17 @@ def parse_batch(raw):
                 name: tf.io.FixedLenFeature([], tf.string)
                 for name in records.FIELDS
             },
-            "meta/sample_weight": tf.io.FixedLenFeature([], tf.float32),
             "critic/score": tf.io.FixedLenFeature([], tf.string),
             "critic/bonus": tf.io.FixedLenFeature([], tf.string),
-            "critic/settlement": tf.io.FixedLenFeature([], tf.string),
-            "meta/focused": tf.io.FixedLenFeature([], tf.int64),
         },
     )
-    features, labels, _ = records.decode_batch(parsed)
+    features, labels = records.decode_batch(parsed)
     auxiliary = {
         name: tf.cast(
             tf.reshape(
                 tf.io.decode_raw(
                     parsed["critic/" + name],
-                    tf.int32 if name == "settlement" else tf.int16,
+                    tf.int16,
                 ),
                 [-1, *shape],
             ),
@@ -112,9 +87,6 @@ def parse_batch(raw):
         )
         for name, shape in AUXILIARY.items()
     }
-    auxiliary["projected_st3"] = joint_settlement.observed_payoffs(
-        auxiliary.pop("settlement")
-    )
     cells = numpy.asarray(scoring.CELLS)
     payments = tf.gather(
         tf.reshape(labels["terminal_payment"], [-1, 64]),
@@ -126,24 +98,7 @@ def parse_batch(raw):
         {
             **critic.public_inputs(features),
             **public,
-            "focused": tf.cast(
-                (parsed["meta/focused"] > 0)
-                | (features["decision_phase"] == 1)
-                | (features["decision_phase"] == 2),
-                tf.int32,
-            ),
             **joint_settlement.payment_labels(payments, public),
-            "points": tf.reduce_sum(
-                tf.cast(payments, tf.float32)
-                / 10000
-                * tf.constant(
-                    (cells[:, 2] == 0).astype(float)
-                    - (cells[:, 1] == 0)
-                    + ((cells[:, 0] == 3) & (cells[:, 1] == 0)),
-                    tf.float32,
-                ),
-                axis=1,
-            ),
         }
     )
     return features, labels, auxiliary
@@ -167,7 +122,7 @@ class PackedBatch:
             for dtype in sorted({spec.dtype.name for spec in self.specs})
         }
 
-    def pack(self, *inputs):
+    def pack(self, inputs):
         values = tf.nest.flatten(inputs)
         batch = tf.shape(values[0])[0]
         packed = {}
@@ -190,7 +145,7 @@ class PackedBatch:
             packed[dtype] = tf.concat(parts, axis=1)
         return packed
 
-    def pack_numpy(self, *inputs):
+    def pack_numpy(self, inputs):
         """Pack CPU arrays without constructing a tensor for every field."""
         values = tf.nest.flatten(inputs)
         batch = values[0].shape[0]
@@ -271,8 +226,7 @@ def process_shard(task):
     if shutil.disk_usage(root).free < 15 * 1024**3:
         raise OSError("Corpus rebuild requires at least 15 GiB free space")
     validation_count = 0
-    counts = numpy.zeros((10, 2), numpy.int64)
-    focus_counts = numpy.zeros((10, 64), numpy.int64)
+    counts = numpy.zeros(10, numpy.int64)
     with contextlib.ExitStack() as stack:
         source_archives = {
             path: archives.open_archive(path)
@@ -291,19 +245,15 @@ def process_shard(task):
             if raw.startswith(b"\x1f\x8b"):
                 raw = gzip.decompress(raw)
             events = [json.loads(line) for line in raw.splitlines()]
-            if "riichilab" in events[0]:
-                outcomes.normalize_draw_payments(events)
             seats = events[0]["player_ranks"]["retained_seats"]
             if not seats:
                 continue
-            targets = game_targets(events)
+            targets = scoring.round_labels(events)
             partition = records.game_partition(game.game_id)
             for round_events in afk.retained_hands(events):
                 state = replay.Replay(game.game_id, round_events)
                 for observation in state.observations(actors=seats):
                     raw = serialize(observation, targets[observation.kyoku_id])
-                    category = observation.focus[0]
-                    focus_counts[partition, category] += 1
                     writer.write(raw)
                     if partition == VALIDATION_SAMPLE["partition"] and (
                         int.from_bytes(
@@ -321,8 +271,7 @@ def process_shard(task):
                     ):
                         validation_writer.write(raw)
                         validation_count += 1
-                    counts[partition, 0] += 1
-                    counts[partition, 1] += category > 0
+                    counts[partition] += 1
     pathlib.Path(str(path) + ".partial").replace(path)
     pathlib.Path(str(validation_path) + ".partial").replace(validation_path)
     summary = {
@@ -332,58 +281,14 @@ def process_shard(task):
         "validation_bytes": validation_path.stat().st_size,
         "games": len(games),
         "counts": counts.tolist(),
-        "focus_counts": focus_counts.tolist(),
         "bytes": path.stat().st_size,
     }
     write_json(summary_path, summary)
     return summary
 
 
-def dataset(
-    root,
-    sampling,
-    partition,
-    batch_size,
-    repeat,
-    seed=941,
-    *,
-    drop_remainder=None,
-):
-    sampling = focus_sampling.Sampling(sampling)
-    if drop_remainder is None:
-        drop_remainder = partition != "validation"
-    if sampling == focus_sampling.Sampling.MIXED:
-        width = sum(share for _, share in focus_sampling.MIXTURE)
-        assert batch_size % width == 0
-        streams = [
-            dataset(
-                root=root,
-                sampling=kind,
-                partition=partition,
-                batch_size=batch_size * share // width,
-                repeat=repeat,
-                seed=seed + index,
-            )
-            for index, (kind, share) in enumerate(focus_sampling.MIXTURE)
-        ]
-        return (
-            tf.data.Dataset.zip(tuple(streams))
-            .map(
-                lambda natural, focused, placement: tf.reshape(
-                    tf.concat(
-                        [
-                            tf.reshape(natural, [-1, 2]),
-                            focused[:, None],
-                            placement[:, None],
-                        ],
-                        axis=1,
-                    ),
-                    [batch_size],
-                ),
-                num_parallel_calls=1,
-            )
-            .prefetch(2)
-        )
+def dataset(root, partition, batch_size):
+    """Read one complete natural partition, retaining its final partial batch."""
     summary = json.loads(
         (pathlib.Path(root) / "dataset_summary.json").read_text()
     )
@@ -402,79 +307,25 @@ def dataset(
         for row in summary["shard_manifest"]
     ]
     stream = tf.data.Dataset.from_tensor_slices(paths)
-    if repeat:
-        stream = stream.shuffle(len(paths), seed=seed).repeat()
-
     stream = stream.interleave(
         lambda path: tf.data.TFRecordDataset(path, compression_type="GZIP"),
         cycle_length=min(8, len(paths)),
-        block_length=64 if repeat else 1,
+        block_length=1,
         num_parallel_calls=min(8, len(paths)),
         deterministic=True,
     )
 
     def select(raw):
-        metadata = tf.io.parse_example(
-            raw,
-            {
-                "critic/partition": tf.io.FixedLenFeature([], tf.int64),
-                "meta/focus_categories": tf.io.FixedLenFeature([], tf.int64),
-                "meta/late_placement": tf.io.FixedLenFeature([], tf.int64),
-                "meta/placement_gap": tf.io.FixedLenFeature([], tf.int64),
-                "feature/decision_phase": tf.io.FixedLenFeature([], tf.string),
-            },
-        )
-        selected = (
-            metadata["critic/partition"] < 7
-            if partition == "train"
-            else metadata["critic/partition"] == 7
-        )
-        if sampling in (
-            focus_sampling.Sampling.FOCUSED,
-            focus_sampling.Sampling.PLACEMENT_GAP,
-        ):
-            late = metadata["meta/late_placement"] > 0
-            gap = metadata["meta/placement_gap"] > 0
-            phase = tf.io.decode_raw(
-                metadata["feature/decision_phase"], tf.int8, fixed_length=1
-            )[:, 0]
-            # Stored fast-call metadata is descriptive. Sampling includes
-            # every response/kan opportunity, as targeted self play does.
-            categories = tf.bitwise.bitwise_or(
-                metadata["meta/focus_categories"],
-                tf.cast((phase == 1) | (phase == 2), tf.int64),
-            )
-            priorities = (
-                tf.cast(gap, tf.int32)
-                if sampling == focus_sampling.Sampling.PLACEMENT_GAP
-                else tf.gather(
-                    tf.constant(focus_sampling.PRIORITIES),
-                    tf.bitwise.bitwise_and(
-                        categories,
-                        ~int(focus_sampling.Category.PLACEMENT),
-                    )
-                    + int(focus_sampling.Category.PLACEMENT)
-                    * tf.cast(late, tf.int64),
-                )
-            )
-            return tf.repeat(
-                raw,
-                tf.where(selected, priorities, 0),
-            )
-        return tf.nest.map_structure(
-            lambda value: tf.boolean_mask(value, selected), raw
-        )
+        partitions = tf.io.parse_example(
+            raw, {"critic/partition": tf.io.FixedLenFeature([], tf.int64)}
+        )["critic/partition"]
+        selected = partitions < 7 if partition == "train" else partitions == 7
+        return tf.boolean_mask(raw, selected)
 
     stream = stream.batch(1024).map(select, num_parallel_calls=2).unbatch()
-    if repeat:
-        stream = stream.shuffle(4096, seed=seed)
     options = tf.data.Options()
     options.threading.private_threadpool_size = 12
-    return (
-        stream.batch(batch_size, drop_remainder=drop_remainder)
-        .with_options(options)
-        .prefetch(2)
-    )
+    return stream.batch(batch_size).with_options(options).prefetch(2)
 
 
 def write_json(path, value):
@@ -555,9 +406,7 @@ def run(args):
                     "stage": "building",
                     "shards": len(results),
                     "total_shards": len(tasks),
-                    "rows": sum(
-                        sum(c[0] for c in r["counts"]) for r in results
-                    ),
+                    "rows": sum(sum(r["counts"]) for r in results),
                     "elapsed_seconds": time.monotonic() - started,
                 }
                 write_json(root / "status.json", status)
@@ -568,37 +417,18 @@ def run(args):
                         )
                 writer.flush()
                 print(status, flush=True)
-        focus_counts = numpy.sum(
-            [row["focus_counts"] for row in results], axis=0
-        )
-        category_counts = numpy.array(
-            [
-                focus_counts[:7, numpy.arange(64) & (1 << bit) > 0].sum()
-                for bit in range(6)
-            ]
-        )
-        category_mass = category_counts * focus_sampling.EMPHASIS
         write_json(
             root / "dataset_summary.json",
             {
                 **plan,
                 "shard_manifest": results,
-                "focus_counts": focus_counts.tolist(),
-                "focus_metadata_category_shares": dict(
-                    zip(
-                        focus_sampling.NAMES,
-                        (category_mass / category_mass.sum()).tolist(),
-                    )
-                ),
                 "partition_counts": numpy.sum(
                     [row["counts"] for row in results], axis=0
                 ).tolist(),
                 "validation_examples": sum(
                     row["validation_count"] for row in results
                 ),
-                "examples": sum(
-                    sum(c[0] for c in row["counts"]) for row in results
-                ),
+                "examples": sum(sum(row["counts"]) for row in results),
             },
         )
         write_json(root / "status.json", {**status, "stage": "complete"})

@@ -3,11 +3,11 @@
 import json
 
 import numpy
-from integration import focus_reference, scoring_reference
-from log_dataset import _native_collection, amend_riichi_prior, shanten
-from model import outcomes
-
 import riichienv
+
+from integration import scoring_reference
+from log_dataset import _native_collection, shanten
+from model import outcomes
 
 PHASES = {"DISCARD": 0, "RESPONSE": 1, "KAN": 2, "RIICHI": 3, "WIN": 4}
 OUTSIDE = ((), (0,), (0, 1), (1, 2), (2, 6), (6, 7), (7, 8), (8,), ())
@@ -182,8 +182,6 @@ def pack(
             name: numpy.zeros(spec["shape"], spec["dtype"])
             for name, spec in _native_collection.INPUTS.items()
         }
-    for name in _native_collection.IGNORED_INPUTS:
-        packed[name].fill(0)
     own = legal_observation.hand
     counts = numpy.bincount([tile // 4 for tile in own], minlength=34)
     reds = numpy.array([own.count(tile) for tile in (16, 52, 88)])
@@ -306,12 +304,6 @@ def pack(
         ) % 4
     candidate_features(packed, state, actor, legal_observation, stage=stage)
     public_scoring_features(packed)
-    # Cross-check runtime prior facts through the recorded-data amendment path.
-    packed.update(
-        amend_riichi_prior.prior_values(
-            packed, focus_reference.visible_opponent_threat(packed)
-        )
-    )
     return packed
 
 
@@ -615,8 +607,8 @@ def table_features(  # noqa: C901 - independent legacy parity oracle
 
 
 def store_value_ranges(packed, action, values):
-    packed["action_value_range"][action] = values["range"]
-    packed["action_value_valid"][action] = values["valid"]
+    packed["action_win_value_range"][action] = values["range"]
+    packed["action_win_value_valid"][action] = values["valid"]
     packed["action_open_yaku_restricted"][action] = values["restricted"]
     packed["action_value_eligible"][action] = values["eligible"]
 
@@ -704,8 +696,8 @@ def candidate_features(packed, state, actor, legal_observation, *, stage="all"):
     cuts = numpy.flatnonzero(packed["discard_action_legal"])
     if len(cuts):
         decline = {
-            "range": packed["action_value_range"][260],
-            "valid": packed["action_value_valid"][260],
+            "range": packed["action_win_value_range"][260],
+            "valid": packed["action_win_value_valid"][260],
             "restricted": packed["action_open_yaku_restricted"][260],
             "eligible": 0,
         }
@@ -766,12 +758,26 @@ def candidate_features(packed, state, actor, legal_observation, *, stage="all"):
                     )
             if stage in {"all", "scoring"}:
                 values = scoring_reference.action_value_ranges(
-                    hand, state.melds[actor], context, base
+                    tiles=hand,
+                    melds=state.melds[actor],
+                    context=context,
+                    cut=base,
+                    riichi=packed["riichi_state"][0] == 2,
                 )
                 store_value_ranges(packed, code, values)
                 store_value_ranges(packed, 37 + code, values)
                 if packed["riichi_discard_legal_mask"][code]:
-                    store_value_ranges(packed, 74 + code, values)
+                    store_value_ranges(
+                        packed,
+                        74 + code,
+                        scoring_reference.action_value_ranges(
+                            tiles=hand,
+                            melds=state.melds[actor],
+                            context=context,
+                            cut=base,
+                            riichi=True,
+                        ),
+                    )
                 scoring_reference.merge_value_ranges(decline, values)
             packed["discard_retained_genbutsu"][code] = packed[
                 "genbutsu_to_seat"
@@ -805,7 +811,10 @@ def candidate_features(packed, state, actor, legal_observation, *, stage="all"):
             ]
         if stage in {"all", "scoring"}:
             values = scoring_reference.action_value_ranges(
-                own, state.melds[actor], context
+                own,
+                state.melds[actor],
+                context,
+                riichi=packed["riichi_state"][0] == 2,
             )
             store_value_ranges(packed, 111, values)
             store_value_ranges(packed, 260, values)
@@ -853,7 +862,10 @@ def call_features(packed, state, actor, context, add_hand, *, stage="all"):
                     packed,
                     261 + action.tile // 4,
                     scoring_reference.action_value_ranges(
-                        hand, env.melds[actor], context
+                        hand,
+                        env.melds[actor],
+                        context,
+                        riichi=packed["riichi_state"][0] == 2,
                     ),
                 )
             if stage in {"all", "analysis"}:

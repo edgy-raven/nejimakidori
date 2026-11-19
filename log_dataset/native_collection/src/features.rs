@@ -1,5 +1,5 @@
 //! Typed engine snapshots for the shared C++ feature calculator.
-use crate::{candidate, focus, history::PublicHistory, packed::Row, scoring};
+use crate::{candidate, history::PublicHistory, packed::Row, scoring};
 use riichienv_core::{
     action::ActionType,
     observation::Observation,
@@ -158,23 +158,12 @@ struct Legal {
     calls: [[u8; 37]; 4],
 }
 #[repr(C)]
-struct Focus {
-    routes: [u8; 3],
-    fast: u8,
-    threat: u8,
-    phase: u8,
-    yakuhai: i32,
-}
-#[repr(C)]
 #[derive(Default)]
 pub struct Ranges {
     pub values: [f64; 8],
     pub valid: [u8; 4],
     pub restricted: [u8; 2],
     pub eligible: u8,
-    pub dama_points: i32,
-    pub extra_han: u8,
-    pub riichi_points: i32,
 }
 #[repr(C)]
 pub struct RangeContext {
@@ -182,7 +171,7 @@ pub struct RangeContext {
     pub missed_agari: i32,
     pub unavailable: [u8; 34],
     pub unavailable_red: [i32; 3],
-    pub prior: u8,
+    pub riichi: u8,
 }
 impl RangeContext {
     pub fn new(ctx: &scoring::Context) -> Self {
@@ -191,7 +180,7 @@ impl RangeContext {
             missed_agari: ctx.missed_agari as i32,
             unavailable: ctx.unavailable,
             unavailable_red: ctx.unavailable_red,
-            prior: 0,
+            riichi: 0,
         }
     }
     pub fn available_tiles(&self, base: u8) -> impl Iterator<Item = (u8, bool)> {
@@ -231,7 +220,6 @@ unsafe extern "C" {
         branches: *const Branch,
         size: usize,
         legal: *mut Legal,
-        focus: *mut Focus,
         availability: *const RangeContext,
         context: *mut std::ffi::c_void,
         score: Score,
@@ -278,9 +266,6 @@ unsafe extern "C" fn score(
             valid: result.valid,
             restricted: result.restricted,
             eligible: result.eligible as u8,
-            dama_points: result.dama_points,
-            extra_han: result.extra_han,
-            riichi_points: result.riichi_points,
         };
     }
 }
@@ -318,9 +303,6 @@ pub fn ranges(
         valid: out.valid,
         restricted: out.restricted,
         eligible: out.eligible != 0,
-        dama_points: out.dama_points,
-        extra_han: out.extra_han,
-        riichi_points: out.riichi_points,
     }
 }
 // This is a public observation snapshot, not hidden opponent hand data.
@@ -351,8 +333,7 @@ pub fn pack(
     actor: usize,
     phase: u8,
     east_only: bool,
-    include_focus: bool,
-) -> (candidate::Legal, focus::Focus) {
+) -> candidate::Legal {
     let rivers: [Vec<NativeRiver>; 4] = std::array::from_fn(|seat| {
         history.rivers[seat]
             .iter()
@@ -440,35 +421,6 @@ pub fn pack(
     unsafe {
         feature_pack_base(row.bytes.as_mut_ptr(), &state, &mut analysis);
     }
-    let base_analysis = focus::Analysis {
-        counts: analysis.counts,
-        unavailable: analysis.unavailable,
-        distance: analysis.distance,
-        wind: analysis.wind as usize,
-        kyoku: analysis.kyoku as usize,
-        oya: analysis.oya as usize,
-        remaining: analysis.remaining as usize,
-        order: analysis.order.map(|x| x as usize),
-    };
-    let mut sampling = if include_focus {
-        focus::Focus::analyze(history, obs, actor, phase, &base_analysis)
-    } else {
-        focus::Focus::default()
-    };
-    row.set(
-        "policy_prior_no_threat",
-        0,
-        f64::from(
-            (phase == 3 || phase == 1) && !focus::visible_threat(history, actor, &base_analysis),
-        ),
-    );
-    let mut focus = Focus {
-        routes: sampling.routes.map(u8::from),
-        fast: sampling.fast as u8,
-        threat: sampling.threat as u8,
-        phase: sampling.phase,
-        yakuhai: focus::yakuhai(history, actor, &base_analysis, true) as i32,
-    };
     let mut legal = Legal {
         discards: [0; 37],
         riichi: [0; 37],
@@ -555,22 +507,19 @@ pub fn pack(
             branches.as_ptr(),
             branches.len(),
             &mut legal,
-            &mut focus,
-            &RangeContext::new(&ctx),
+            &RangeContext {
+                riichi: state.accepted[actor] as u8,
+                ..RangeContext::new(&ctx)
+            },
             &mut ctx as *mut _ as *mut std::ffi::c_void,
             score,
         );
     }
-    sampling.fast = focus.fast != 0;
-    sampling.threat = focus.threat != 0;
-    (
-        candidate::Legal {
-            discards: legal.discards.map(|v| v != 0),
-            riichi: legal.riichi.map(|v| v != 0),
-            calls: legal.calls.map(|v| v.map(|x| x != 0)),
-        },
-        sampling,
-    )
+    candidate::Legal {
+        discards: legal.discards.map(|v| v != 0),
+        riichi: legal.riichi.map(|v| v != 0),
+        calls: legal.calls.map(|v| v.map(|x| x != 0)),
+    }
 }
 
 #[cfg(test)]
@@ -636,7 +585,7 @@ mod tests {
         unsafe extern "C" {
             fn feature_layout(out: *mut usize);
         }
-        let mut layout = [0usize; 16];
+        let mut layout = [0usize; 14];
         unsafe {
             feature_layout(layout.as_mut_ptr());
         }
@@ -650,14 +599,12 @@ mod tests {
                 size_of::<Analysis>(),
                 size_of::<Branch>(),
                 size_of::<Legal>(),
-                size_of::<Focus>(),
                 size_of::<Ranges>(),
                 size_of::<RangeContext>(),
                 size_of::<Bank>(),
                 offset_of!(State, rivers),
                 offset_of!(State, exposed),
                 offset_of!(Analysis, genbutsu),
-                offset_of!(Focus, yakuhai),
                 offset_of!(RangeContext, unavailable_red)
             ]
         );

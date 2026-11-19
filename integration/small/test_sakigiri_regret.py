@@ -5,7 +5,7 @@ import pathlib
 
 import numpy
 
-from log_dataset import records, replay, sakigiri_regret, shanten
+from log_dataset import sakigiri_regret, shanten
 
 
 def test_exchange_keeps_completion_without_phantom_or_reacquired_tiles():
@@ -109,7 +109,7 @@ def test_exchange_tracks_red_identity_across_intermediate_discards():
     assert not sakigiri_regret.preserves_completion(steps, before, 34)
 
 
-def test_verified_order_labels_reach_only_the_early_discard_records():
+def test_verified_order_witnesses_identify_early_discard_roots():
     # Public log 2024050601gm-00a9-0000-ce829462, E4-1. North first,
     # then 6s deals in at first tenpai; 6s first preserves the same live hand.
     events = json.loads(
@@ -123,21 +123,3 @@ def test_verified_order_labels_reach_only_the_early_discard_records():
         30: ([23, 30], 1 / 3),
         38: ([23, 30], 1 / 3),
     }
-    rows = list(replay.Replay("swap", events).observations())
-    selected = [row for row in rows if row.sakigiri_weight > 0]
-    assert len(selected) == 3
-    for row in selected:
-        assert row.features["decision_phase"] == 0
-        assert row.discard_action == row.sakigiri_pair[1]
-        assert row.features["discard_action_legal"][row.sakigiri_pair].all()
-    assert numpy.isclose(sum(row.sakigiri_weight for row in selected), 1)
-    for row in rows:
-        if row.sakigiri_weight == 0:
-            numpy.testing.assert_array_equal(row.sakigiri_pair, [-1, -1])
-    parsed = records.parse_batch(
-        [records.serialize_observation(row, False) for row in selected]
-    )
-    numpy.testing.assert_array_equal(
-        parsed[1]["sakigiri_pair"], [row.sakigiri_pair for row in selected]
-    )
-    numpy.testing.assert_allclose(parsed[1]["sakigiri_weight"], 1 / 3)

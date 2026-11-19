@@ -2,8 +2,8 @@ mod actions;
 mod candidate;
 mod collector;
 mod features;
-mod focus;
 mod history;
+#[cfg(test)]
 mod nyanten;
 mod packed;
 mod schema;
@@ -53,34 +53,28 @@ impl FeatureReplay {
         }
         Ok(())
     }
-    #[pyo3(signature=(actor,phase,east_only=false,include_focus=false))]
+    #[pyo3(signature=(actor,phase,east_only=false))]
     fn pack<'py>(
         &mut self,
         py: Python<'py>,
         actor: usize,
         phase: u8,
         east_only: bool,
-        include_focus: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let (row, metadata) = py.detach(|| {
+        let row = py.detach(|| {
             let obs = self.history.legal_observation(actor);
             let mut row = Row::new();
-            let (_, focus) = features::pack(
+            features::pack(
                 &mut row,
                 &mut self.history,
                 &obs,
                 actor,
                 phase,
                 east_only,
-                include_focus,
             );
-            (row, focus.metadata())
+            row
         });
-        let output = columns(py, &[&row])?;
-        if include_focus {
-            output.set_item("focus", metadata)?;
-        }
-        Ok(output)
+        columns(py, &[&row])
     }
 }
 #[pymodule]
@@ -93,18 +87,7 @@ fn _native_collection(m: &Bound<'_, PyModule>) -> PyResult<()> {
         inputs.set_item(field.name, spec)?;
     }
     m.add("INPUTS", inputs)?;
-    m.add(
-        "IGNORED_INPUTS",
-        FIELDS
-            .iter()
-            .filter(|field| {
-                field.name.starts_with("discard_action_") && field.name.contains("_upgrade_")
-            })
-            .map(|field| field.name)
-            .collect::<Vec<_>>(),
-    )?;
     m.add_function(wrap_pyfunction!(scoring::score_hand, m)?)?;
-    m.add_function(wrap_pyfunction!(scoring::policy_prior_values, m)?)?;
     m.add_class::<FeatureReplay>()?;
     m.add_class::<collector::NativeCollector>()?;
     m.add_class::<collector::NativeRoot>()?;

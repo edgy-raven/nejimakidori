@@ -5,7 +5,8 @@ import pathlib
 
 import numpy
 import tensorflow as tf
-from log_dataset import _native_collection, replay, training_data
+
+from log_dataset import _native_collection, replay, scoring, training_data
 from model import actions
 from model import actor as actor_layers
 from model import critic, network
@@ -23,12 +24,6 @@ def test_efficiency_ranking_decay_masking_and_override():
             ),
             "discard_action_all_ukeire_count": tf.constant(
                 [[20, 30, 30, 100, 100] + [0] * 32] * 4, tf.int16
-            ),
-            "discard_action_all_upgrade_weighted_gain": tf.constant(
-                [[0, 0, 1360, 0, 0] + [0] * 32] * 4, tf.int16
-            ),
-            "discard_action_all_upgrade_valid": tf.constant(
-                [[1] * 37] * 3 + [[0] * 37], tf.int8
             ),
             "opponent_discard_count": tf.constant(
                 [[0, 0, 0, 0], [0, 2, 1, 1], [0, 5, 4, 4], [0, 0, 0, 0]],
@@ -211,7 +206,7 @@ def test_recorded_win_head_learns_both_choices():
             "integration/fixtures/model/payment_dealer_90fu.json"
         ).read_text()
     )
-    targets = training_data.game_targets(events + [{"type": "end_game"}])
+    targets = scoring.round_labels(events + [{"type": "end_game"}])
     wins = [
         row
         for row in replay.Replay("win-policy", events).observations()
@@ -235,16 +230,6 @@ def test_recorded_win_head_learns_both_choices():
         with tf.GradientTape(persistent=True) as tape:
             outputs = model.actor(inputs[0])
             imitation = actor_layers.policy_loss(labels, outputs)
-            current = tf.nn.log_softmax(outputs["win_decision_logits"])
-            awr = actor_layers.weighted_imitation_terms(
-                nll=-current[:, target],
-                advantages=tf.ones(1),
-                eligible=tf.ones(1, tf.bool),
-            )["loss"]
-        numpy.testing.assert_allclose(
-            tape.gradient(imitation, head.bias),
-            tape.gradient(awr, head.bias),
-        )
         assert (
             float(
                 tf.linalg.global_norm(

@@ -64,7 +64,6 @@ YAKU_IDS = {
     "chinitsu": 29,
 }
 
-FOCUSED_NAMES = tuple(YAKU_IDS)
 YAKU_BITS = {value: 1 << NAMES.index(name) for name, value in YAKU_IDS.items()}
 
 

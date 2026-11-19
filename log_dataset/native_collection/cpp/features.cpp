@@ -337,14 +337,12 @@ extern "C" void feature_layout(size_t *out) {
                      sizeof(feature::Analysis),
                      sizeof(Branch),
                      sizeof(Legal),
-                     sizeof(Focus),
                      sizeof(Ranges),
                      sizeof(RangeContext),
                      sizeof(Bank),
                      offsetof(State, rivers),
                      offsetof(State, exposed),
                      offsetof(feature::Analysis, genbutsu),
-                     offsetof(Focus, yakuhai),
                      offsetof(RangeContext, unavailable_red)};
-  std::copy_n(layout, 16, out);
+  std::copy_n(layout, 14, out);
 }

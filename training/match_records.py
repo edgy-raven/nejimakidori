@@ -9,15 +9,10 @@ import pathlib
 
 import numpy
 import tensorflow as tf
-from log_dataset import (
-    features,
-    records,
-    replay,
-    scoring,
-    training_data,
-    training_targets,
-)
+
+from log_dataset import features, records, replay, scoring, training_data
 from model import critic, outcomes
+from training import restoration
 
 
 def game_records(path):
@@ -26,20 +21,16 @@ def game_records(path):
     with gzip.open(path, "rt") as stream:
         events = [json.loads(line) for line in stream]
     outcomes.normalize_draw_payments(events)
-    settlements = outcomes.hand_continuation_states(events)
     starts = [
         index
         for index, event in enumerate(events)
         if event["type"] == "start_kyoku"
     ]
-    for hand, (start, end) in enumerate(
-        zip(starts, starts[1:] + [len(events)])
-    ):
+    for start, end in zip(starts, starts[1:] + [len(events)]):
         state = replay.Replay(path.stem, events[start:end])
         payments = outcomes.terminal_payments(events[start:end])
         target = {
             "payment": payments,
-            "settlement": settlements[hand],
             "bonus": numpy.full((4, 4, 4), -1, numpy.int16),
             "score": numpy.full(
                 (4, 4, 4, len(scoring.BONUS_HAN)), -1, numpy.int16
@@ -58,8 +49,6 @@ def game_records(path):
                 decision_index=state.decision_index,
                 actor=actor,
                 features=features.pack(state, actor, phase),
-                focus=(0, 0, 0),
-                hand_yaku_focus=0,
             )
             for name, definition in records.LABELS.items():
                 setattr(
@@ -67,13 +56,11 @@ def game_records(path):
                     name,
                     numpy.full(definition["shape"], -1, definition["dtype"]),
                 )
-            training_targets.attach_beliefs(observation, state)
             observation.terminal_payment = outcomes.relative_payments(
                 payments, actor, state.accepted
             )
             state.recorded_action(
                 observation=observation,
-                index=index,
                 phase=phase,
                 next_index=next_index,
                 win_choices=win_choices,
@@ -96,24 +83,18 @@ def write_shard(task):
 
 def decode_records(raw):
     """Chosen critic action and observed payments, with no actor targets."""
-    features, labels, auxiliary = training_data.parse_batch(raw)
+    features, labels = records.parse_batch(raw)
+    head, _, legal = restoration.policy_choices(features, labels)
     return {
+        "head": head,
+        "legal": legal,
         "features": features,
         "chosen": critic.chosen_actions(features, labels),
-        "beliefs": {
-            name: labels[name]
-            for name in (
-                "opponent_shanten",
-                "opponent_ukeire",
-                "opponent_hand_counts",
-            )
-        },
         "payment_points": tf.gather(
             tf.reshape(labels["terminal_payment"], [-1, 64]),
             numpy.ravel_multi_index(numpy.asarray(scoring.CELLS).T, (4, 4, 4)),
             axis=1,
         ),
-        "projected_st3": auxiliary["projected_st3"],
     }
 
 
@@ -135,14 +116,7 @@ def batches(output, batch_size, seed):
         )
         .shuffle(8192, seed=seed)
         .batch(batch_size)
-        .map(
-            lambda raw: {
-                name: value
-                for name, value in decode_records(raw).items()
-                if name != "beliefs"
-            },
-            num_parallel_calls=2,
-        )
+        .map(decode_records, num_parallel_calls=2)
         .prefetch(2)
     )
 
@@ -193,6 +167,10 @@ if __name__ == "__main__":
     arguments = parser.parse_args()
     print(
         json.dumps(
-            build(arguments.matches, arguments.output, arguments.workers)
+            build(
+                arguments.matches,
+                arguments.output,
+                arguments.workers,
+            )
         )
     )

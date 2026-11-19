@@ -4,6 +4,7 @@ import numpy
 
 PAYMENT_TYPES = ("ron", "tsumo", "draw", "bank")
 SAINT3_JADE_SOUTH_OFFSETS = (125, 60, -5, -255)
+OBJECTIVE_ST3_SCALE = 100.0
 PAYMENT_CELLS = numpy.array(
     [
         [
@@ -196,51 +197,6 @@ def terminal_scores(events):
             minlength=4,
         )
     )
-
-
-def hand_continuation_states(events):
-    """One observed settlement per hand and actor in a completed game.
-
-    Columns: four scores, four zero-based ranks, next relative dealer,
-    next zero-based hand number, terminal flag, outstanding deposit points.
-    Future hands supply only the immediately following round/dealer identity.
-    """
-    assert events[-1]["type"] == "end_game"
-    starts = [
-        i for i, event in enumerate(events) if event["type"] == "start_kyoku"
-    ]
-    first_dealer = (
-        events[starts[0]]["oya"] - events[starts[0]]["kyoku"] + 1
-    ) % 4
-    states = []
-    for hand, start in enumerate(starts):
-        terminal = hand + 1 == len(starts)
-        end = len(events) if terminal else starts[hand + 1]
-        scores = terminal_scores(events[start:end])
-        ranks = numpy.asarray(score_ranks(scores, first_dealer)) - 1
-        following = events[start] if terminal else events[end]
-        next_hand = (
-            4 * "ESWN".index(following["bakaze"]) + following["kyoku"] - 1
-        )
-        pot = (
-            sum(events[start]["scores"])
-            + 1000 * events[start]["kyotaku"]
-            - scores.sum()
-        )
-        states.append(
-            [
-                numpy.r_[
-                    scores[(seat + numpy.arange(4)) % 4],
-                    ranks[(seat + numpy.arange(4)) % 4],
-                    (following["oya"] - seat) % 4,
-                    next_hand,
-                    int(terminal),
-                    pot,
-                ]
-                for seat in range(4)
-            ]
-        )
-    return numpy.asarray(states, numpy.int32)
 
 
 def payment_classes(payments):

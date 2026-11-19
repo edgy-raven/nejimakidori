@@ -5,18 +5,12 @@ import json
 import pathlib
 
 import numpy
+import riichienv
+
 from integration import collection_reference, feature_reference
-from log_dataset import (
-    _native_collection,
-    features,
-    replay,
-    shanten,
-    training_targets,
-)
+from log_dataset import _native_collection, features, replay
 from model import actions
 from training import self_play
-
-import riichienv
 
 
 def test_native_features_match_python_during_complete_games(monkeypatch):
@@ -80,88 +74,6 @@ def test_native_features_match_python_during_complete_games(monkeypatch):
     assert {"DISCARD", "RESPONSE", "red", "meld"} <= coverage
 
 
-def test_native_belief_and_ron_labels_match_recorded_state():
-    collector = _native_collection.NativeCollector(2, 13)
-    contexts = [
-        dict(cursor=0, state=None, pending={}, hand=-1) for _ in range(2)
-    ]
-    statistics = self_play.collection_counts()
-    generator = numpy.random.default_rng(13)
-    checked = winning_targets = 0
-    while (request := collector.next()) is not None:
-        for ctx, events in zip(contexts, map(json.loads, collector.logs())):
-            collection_reference.advance(
-                ctx, events[ctx["cursor"] :], statistics
-            )
-        for position, game in enumerate(request["game"]):
-            state = contexts[game]["state"]
-            phase = list(features.PHASES)[
-                numpy.frombuffer(request["features"], self_play.FEATURE_DTYPE)[
-                    "decision_phase"
-                ][position]
-            ]
-            if phase in ("DISCARD", "RIICHI", "KAN"):
-                expected = training_targets.ron_labels(
-                    state, request["seat"][position], phase
-                )
-                numpy.testing.assert_array_equal(
-                    request["ron_legal"][position], expected["ron_legal"]
-                )
-                winning_targets += numpy.count_nonzero(
-                    expected["ron_payments"] > 0
-                )
-                known = expected["ron_payments"] >= 0
-                numpy.testing.assert_array_equal(
-                    numpy.asarray(request["ron_payments"][position])[known],
-                    expected["ron_payments"][known],
-                )
-            else:
-                for name in ("ron_legal", "ron_payments"):
-                    numpy.testing.assert_array_equal(
-                        request[name][position], -1
-                    )
-            for relative in range(3):
-                seat = (request["seat"][position] + relative + 1) % 4
-                hand = state.legal_observation(seat).hand
-                counts = numpy.bincount(
-                    [
-                        features.native_tile_code(tile)
-                        for tile in hand
-                        + [
-                            tile
-                            for meld in state.melds[seat]
-                            for tile in meld.tiles
-                        ]
-                    ],
-                    minlength=37,
-                )
-                numpy.testing.assert_array_equal(
-                    request["opponent_hand_counts"][position][relative], counts
-                )
-                waits = numpy.full(34, -1, numpy.int8)
-                distance = -1
-                if len(hand) % 3 == 1:
-                    distance, improving, _ = shanten.improving(
-                        state.concealed_counts(seat)
-                    )
-                    waits[:] = 0
-                    waits[improving] = 1
-                assert request["opponent_shanten"][position][relative] == min(
-                    3, distance
-                )
-                numpy.testing.assert_array_equal(
-                    request["opponent_ukeire"][position][relative], waits
-                )
-            checked += 1
-        legal = numpy.frombuffer(request["legal"], numpy.bool_).reshape(-1, 150)
-        collector.submit(
-            [int(generator.choice(numpy.flatnonzero(row))) for row in legal]
-        )
-    assert checked > 100
-    assert winning_targets > 0
-    assert collector.finish()[1]["games"] == 2
-
-
 def test_native_collector_features_and_counters_match_recorded_play():
     collector = _native_collection.NativeCollector(2, 13)
     contexts = [
@@ -171,6 +83,15 @@ def test_native_collector_features_and_counters_match_recorded_play():
     generator = numpy.random.default_rng(13)
     checked = 0
     while (request := collector.next()) is not None:
+        assert set(request) == {
+            "features",
+            "head",
+            "game",
+            "hand",
+            "seat",
+            "event",
+            "legal",
+        }
         logs = [json.loads(events) for events in collector.logs()]
         assert request["event"] == [len(logs[game]) for game in request["game"]]
         for ctx, events in zip(contexts, logs):
@@ -285,7 +206,7 @@ def test_native_feature_parity_covers_riichi_kan_and_scoring():
                         ),
                     )
                 coverage.add(phase)
-                if expected["action_value_valid"].any():
+                if expected["action_win_value_valid"].any():
                     coverage.add("value_ranges")
                 if expected["riichi_push_count"].any():
                     coverage.add("riichi_push")

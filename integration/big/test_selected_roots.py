@@ -4,6 +4,7 @@ import json
 
 import numpy
 import pytest
+
 from log_dataset import _native_collection
 from model import actions
 from training import self_play
@@ -116,204 +117,78 @@ def test_training_rows_from_roots_exclude_prefix_and_keep_behavior():
         numpy.exp(batch["behavior"]).sum(1), 1, atol=1e-5
     )
     assert batch["features"]["live_wall_count"][0] <= 16
-    assert numpy.isfinite(batch["settlement"]).all()
+    assert numpy.isfinite(batch["payment_points"]).all()
 
 
-@pytest.mark.parametrize(
-    "focus,workers",
-    [
-        ("keiten", 1),
-        ("tenpai", 1),
-        ("calls", 2),
-        ("disagreement", 2),
-        ("targeted", 2),
-    ],
-)
-def test_focused_worker_collection_keeps_natural_rows(workers, focus):
-    scored_rows = []
-
-    def predict(features):
-        outputs = {
-            name: numpy.broadcast_to(
-                numpy.arange(
-                    actions.ACTOR_OUTPUTS[name][0], dtype=numpy.float32
-                ),
-                (
-                    len(features["decision_phase"]),
-                    actions.ACTOR_OUTPUTS[name][0],
-                ),
-            ).copy()
-            for name in actions.TRAIN_POLICY_HEADS
-        }
-        outputs[actions.TRAIN_POLICY_HEADS[0]] = (
-            -1000 * features["discard_action_all_shanten"].astype(numpy.float32)
-            + features["discard_action_all_ukeire_count"]
-        )
-        return outputs
-
-    def score_roots(features):
-        scored_rows.append(len(features["decision_phase"]))
-        if focus not in ("disagreement", "targeted"):
-            pytest.fail("Q/policy pairing must only score disagreement roots")
-        pairs = numpy.full(
-            (len(features["decision_phase"]), 2), -1, numpy.int32
-        )
-        legal = actions.legal_choices(features)
-        for row, phase in enumerate(features["decision_phase"]):
-            name = actions.TRAIN_POLICY_HEADS[[0, 2, 3, 1, 4][phase]]
-            codes = numpy.flatnonzero(legal[name][row])
-            if len(codes) > 1:
-                pairs[row] = codes[[0, -1]]
-        return {
-            "priority": numpy.full(len(pairs), 4, numpy.float32),
-            "actions": pairs,
-        }
-
-    with self_play.Collector(
-        predict,
-        workers,
-        focus=focus,
-        root_evaluate=score_roots,
-    ) as collector:
-        batch = collector.collect(2, 941)
-        assert 0 < collector.metrics["selected_roots"] <= 2
-        assert collector.metrics["root_continuations"] == (
-            2 * collector.metrics["selected_roots"]
-        )
-        assert collector.metrics["games"] == (
-            2 + collector.metrics["root_continuations"]
-        )
-        assert collector.metrics["root_evaluation_rows"] == sum(scored_rows)
-        assert (collector.metrics["root_evaluation_seconds"] > 0) == bool(
-            scored_rows
-        )
-    assert len(batch["features"]["decision_phase"]) == len(batch["chosen"])
-    numpy.testing.assert_allclose(
-        numpy.exp(batch["behavior"]).sum(1), 1, atol=1e-5
-    )
-    assert batch["features"]["live_wall_count"].max() > 16
-    numpy.testing.assert_array_equal(
-        batch["root_path"] > 0, batch["paired_root"]
-    )
-    if focus in ("keiten", "tenpai"):
-        rows = numpy.flatnonzero(batch["paired_root"])
-        distance = batch["features"]["discard_action_all_shanten"][rows]
-        best = numpy.where(
-            batch["legal"][rows], distance[:, numpy.arange(150) % 37], 100
-        ).min(axis=1)
-        selected_distance = distance[
-            numpy.arange(len(rows)), batch["chosen"][rows] % 37
-        ]
-        assert numpy.count_nonzero(selected_distance == best) * 2 == len(rows)
-    paths = batch["root_path"][batch["paired_root"]]
-    if focus != "targeted":
-        numpy.testing.assert_array_equal(
-            paths,
-            numpy.full(
-                len(paths),
-                {
-                    "keiten": 1,
-                    "tenpai": 2,
-                    "calls": 4,
-                    "disagreement": 8,
-                }[focus],
-            ),
-        )
-
-
-def test_disagreement_compares_max_q_with_policy_choice(monkeypatch):
+def test_root_scoring_keeps_legal_values_across_padded_chunks(monkeypatch):
     import types
 
     import tensorflow as tf
-    from training.candidate import collection
 
-    outputs = {
-        "critic_projected_st3": tf.Variable([10.0, 0.0, 5.0, 5.0]),
-        actions.TRAIN_POLICY_HEADS[0]: tf.Variable(
-            [[0.0, numpy.log(9.0)], [0.0, 0.0]]
-        ),
-    }
+    from training.corrections import collection
 
-    def score(**inputs):
-        rows = tf.cast(inputs["live_wall_count"], tf.int32)
+    def actor(features, training):
+        count = tf.shape(features["decision_phase"])[0]
         return {
-            "critic_action_indices": tf.stack(
-                [
-                    tf.repeat(tf.range(tf.shape(rows)[0]), 2),
-                    tf.tile(tf.constant([0, 1]), [tf.shape(rows)[0]]),
-                ],
+            "selected": tf.stack(
+                [tf.repeat(tf.range(count), 2), tf.tile([0, 36], [count])],
                 axis=1,
-            ),
-            "critic_projected_st3": tf.reshape(
-                tf.gather(
-                    tf.reshape(outputs["critic_projected_st3"], [2, 2]), rows
-                ),
-                [-1],
-            ),
-            actions.TRAIN_POLICY_HEADS[0]: tf.gather(
-                outputs[actions.TRAIN_POLICY_HEADS[0]], rows
-            ),
+            )
         }
 
-    monkeypatch.setattr(
-        collection.export,
-        "ServingModel",
-        lambda network: types.SimpleNamespace(
-            root_evaluation=types.SimpleNamespace(
-                get_concrete_function=lambda **kwargs: score,
-            )
-        ),
-    )
-
-    def repeated_actor(*args, **kwargs):
-        pytest.fail(
-            "Root scoring must reuse the policy from its actor forward pass"
+    def values(*, network, features, selected, state, chunk_size):
+        assert chunk_size == 32
+        rows = tf.cast(features["live_wall_count"], tf.float32)
+        return tf.scatter_nd(
+            selected,
+            tf.reshape(tf.stack([rows, -rows], axis=1), [-1]),
+            [tf.shape(rows)[0], 295],
         )
 
+    monkeypatch.setattr(collection.trainer, "action_values", values)
     monkeypatch.setattr(
         collection._native_collection,
         "INPUTS",
         {
-            name: {"shape": [], "dtype": "int8"}
-            for name in ("decision_phase", "live_wall_count")
+            **{
+                name: {"shape": [], "dtype": "int8"}
+                for name in (
+                    "decision_phase",
+                    "live_wall_count",
+                    "trigger_tile_id",
+                )
+            },
+            "discard_action_legal": {"shape": [37], "dtype": "int8"},
         },
     )
-    network = types.SimpleNamespace(actor=repeated_actor)
-    evaluate = collection.root_scorer(network)
+    evaluate = collection.root_scorer(
+        types.SimpleNamespace(
+            actor=actor,
+            candidate_context=lambda features, outputs: (
+                outputs,
+                tf.zeros([tf.shape(outputs["selected"])[0], 1]),
+            ),
+        )
+    )
     for count in (2, 129):
-        priority = evaluate(
-            {
-                "decision_phase": numpy.zeros(count, numpy.int8),
-                "live_wall_count": numpy.arange(count, dtype=numpy.int8) % 2,
-            }
+        features = {
+            "decision_phase": numpy.zeros(count, numpy.int8),
+            "live_wall_count": numpy.arange(count, dtype=numpy.int8) % 2,
+            "trigger_tile_id": numpy.zeros(count, numpy.int8),
+            "discard_action_legal": numpy.broadcast_to(
+                numpy.isin(numpy.arange(37), [0, 36]).astype(numpy.int8),
+                (count, 37),
+            ),
+        }
+        values = evaluate(features)
+        assert values.shape == (count, 37)
+        numpy.testing.assert_array_equal(
+            values[:, 0], features["live_wall_count"]
         )
         numpy.testing.assert_array_equal(
-            priority["priority"], numpy.arange(count) % 2 == 0
+            values[:, 36], -features["live_wall_count"]
         )
-        numpy.testing.assert_array_equal(priority["actions"][0], [0, 1])
-        numpy.testing.assert_array_equal(priority["actions"][1], [-1, -1])
-
-    # Only distinct policy/max-Q actions with a 0.25 ST3 gap qualify.
-    outputs["critic_projected_st3"].assign([0.1, 0.0, 0.1, 0.0])
-    outputs[actions.TRAIN_POLICY_HEADS[0]].assign([[0.0, 1.0], [0.0, 1.0]])
-    features = {
-        "decision_phase": numpy.zeros(2, numpy.int8),
-        "live_wall_count": numpy.arange(2, dtype=numpy.int8),
-    }
-    numpy.testing.assert_array_equal(evaluate(features)["priority"], [0, 0])
-    outputs["critic_projected_st3"].assign([0.249, 0.0, 0.25, 0.0])
-    numpy.testing.assert_array_equal(evaluate(features)["priority"], [0, 1])
-    rows = numpy.zeros(2, self_play.FEATURE_DTYPE)
-    for name in (
-        "normal_self_shanten",
-        "chiitoitsu_self_shanten",
-        "kokushi_self_shanten",
-    ):
-        rows[name] = 3
-    numpy.testing.assert_array_equal(
-        self_play.target_categories(rows, numpy.zeros(2), numpy.array([0, 1])),
-        [0, 8],
-    )
+        assert numpy.isneginf(values[:, 1:36]).all()
 
 
 def test_action_pairs_repeat_each_choice_on_matched_walls():
@@ -338,7 +213,7 @@ def test_action_pairs_repeat_each_choice_on_matched_walls():
             2,
             123,
             collector=root.fork(2, 123),
-            forced_root=(root.decision, int(action), 8),
+            forced_root=(root.decision, int(action)),
         )
         for action in codes
     ]
@@ -362,85 +237,11 @@ def test_action_pairs_repeat_each_choice_on_matched_walls():
         )
 
 
-def test_call_and_hand_pairs_use_policy_choices_within_separate_groups():
+def test_improving_calls_use_unclipped_shanten():
     features = numpy.zeros((), self_play.FEATURE_DTYPE)
-    for name in (
-        "normal_self_shanten",
-        "chiitoitsu_self_shanten",
-        "kokushi_self_shanten",
-    ):
-        features[name] = 3
-    features["self_efficiency"][0] = 2 / 8
-    features["discard_action_all_shanten"] = 2
-    features["discard_action_all_shanten"][[1, 2]] = 1
-    features["chi_discard_legal"][0, 0] = 1
-    features["chi_discard_shanten"][0, 0] = 2
-    features["pon_discard_legal"][0, 0] = 1
-    features["pon_discard_shanten"][0, 0] = 2
-    features["kan_legal_mask"][[2, 9]] = 1
-    features["kan_efficiency"][1, 0] = 1 / 8
-    features["kan_efficiency"][8, 0] = 2 / 8
-    for head, codes, scores, expected in (
-        (0, [1, 2, 3], [1, 2, 9], [2, 3]),
-        (1, [1, 38, 3], [2, 3, 9], [38, 3]),
-        (2, [0, 1, 112, 149], [10, 2, 3, 4], [112, 0]),
-        (3, [0, 2, 9], [10, 2, 3], [2, 0]),
-    ):
-        legal = numpy.zeros(150, numpy.bool_)
-        policy = numpy.full(150, -1e9)
-        legal[codes] = True
-        policy[codes] = scores
-        numpy.testing.assert_array_equal(
-            self_play.focused_action_pair(features, head, legal, policy),
-            expected,
-        )
-    legal = numpy.zeros(150, numpy.bool_)
-    legal[[1, 2]] = True
-    assert self_play.focused_action_pair(features, 0, legal, policy) is None
-    legal[:] = False
-    legal[0] = True
-    assert self_play.focused_action_pair(features, 2, legal, policy) is None
-
-
-def test_targeted_calls_require_shanten_progress_for_both_root_and_replay():
-    features = numpy.zeros(5, self_play.FEATURE_DTYPE)
-    for name in (
-        "normal_self_shanten",
-        "chiitoitsu_self_shanten",
-        "kokushi_self_shanten",
-    ):
-        features[name] = 2
-    features["live_wall_count"] = 8
-    features["self_efficiency"][:, 0] = 1 / 8
-    features["chi_discard_legal"][:, 0, :2] = 1
-    features["chi_discard_shanten"][:, 0, :2] = [1, 2]
-    features["chi_discard_shanten"][2] = 2
-    features["kan_legal_mask"][:, 1] = 1
-    features["kan_efficiency"][:, 0, 0] = 1 / 8
-    features["kan_efficiency"][4, 0, 0] = 0
-    heads = numpy.array([2, 2, 2, 3, 3])
-    numpy.testing.assert_array_equal(
-        self_play.target_categories(features, heads, numpy.zeros(5)),
-        [4, 4, 0, 0, 4],
-    )
-    # Pass remains useful when the alternative improves; selected redundant
-    # calls do not enter targeted replay through the overlapping keiten bit.
-    numpy.testing.assert_array_equal(
-        self_play.target_categories(
-            features, heads, numpy.zeros(5), chosen=numpy.array([0, 2, 0, 1, 1])
-        ),
-        [4, 0, 0, 0, 4],
-    )
-    policy = numpy.arange(150, dtype=float)
-    legal = numpy.zeros(150, bool)
-    legal[:3] = True
-    numpy.testing.assert_array_equal(
-        self_play.focused_action_pair(features[0], 2, legal, policy), [1, 0]
-    )
-    assert self_play.focused_action_pair(features[2], 2, legal, policy) is None
-    # High shanten is clipped in family-category features, not efficiency.
-    features[0]["self_efficiency"][0] = 4 / 8
-    features[0]["chi_discard_shanten"][0, :2] = [4, 5]
-    numpy.testing.assert_array_equal(
-        self_play.focused_action_pair(features[0], 2, legal, policy), [1, 0]
-    )
+    features["self_efficiency"][0] = 4 / 8
+    features["chi_discard_legal"][0, :2] = 1
+    features["chi_discard_shanten"][0, :2] = [4, 5]
+    improving, _ = self_play.improving_call_choices(features)
+    assert improving[1]
+    assert not improving[2]

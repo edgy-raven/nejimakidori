@@ -90,14 +90,7 @@ def chii_pattern(called, consumed):
     )
 
 
-def pack(
-    state,
-    actor,
-    phase,
-    east_only=False,
-    *,
-    include_focus=False,
-):
+def pack(state, actor, phase, east_only=False):
     """Expose shared C++ feature buffers for the current public history."""
     if state.feature_replay is None:
         state.feature_replay = _native_collection.FeatureReplay()
@@ -105,14 +98,10 @@ def pack(
         json.dumps(state.history[state.feature_cursor :])
     )
     state.feature_cursor = len(state.history)
-    buffers = state.feature_replay.pack(
-        actor, PHASES[phase], east_only, include_focus
-    )
-    packed = {
+    buffers = state.feature_replay.pack(actor, PHASES[phase], east_only)
+    return {
         name: numpy.frombuffer(buffers[name], spec["dtype"])
         .reshape(spec["shape"])
         .copy()
         for name, spec in _native_collection.INPUTS.items()
     }
-
-    return (packed, buffers["focus"]) if include_focus else packed

@@ -14,7 +14,7 @@ predictions so the heads and shared encoder learn the constraints.
 | Critic settlements | Payment, score and deposit constraints |
 
 Shared-head constraint weight is 0.01. Critic constraints join the critic
-objective at weight 0.1. Unknown feasible yaku do not become positive labels.
+objective at weight 1.0. Unknown feasible yaku do not become positive labels.
 Padded rows do not contribute.
 
 Opponent held-count marginals respect known meld copies, concealed hand sizes
@@ -47,8 +47,8 @@ no-tile actions naturally have no applicable probe change.
 | --- | --- |
 | Uncomputed action slots | Constant padding and hard legality mask |
 | No legal win opportunity | Win head masked; not a decline label |
-| Legal ron or tsumo | Learn accept versus decline |
-| Heuristic policy priors | Separate from constraint losses |
+| Legal ron or tsumo | Restoration learns accept/decline; MMD shares one forecast |
+| Heuristic policy priors | Restoration only; excluded from MMD |
 
 Padding must not penalize the arbitrary common offset of learned action scores.
 Non-winning positions must not teach the model to refuse wins. Neither case

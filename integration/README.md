@@ -13,7 +13,7 @@ python smoke.py big
 | Path | Purpose |
 | --- | --- |
 | `small/` | Fast rules, schema, sampling and settlement checks |
-| `big/` | Native collection, model gradients, candidate updates and export workflows |
+| `big/` | Native collection, model gradients, match/root MMD and export workflows |
 | `fixtures/model/` | Recorded game regressions |
 | `*_reference.py` | Independent or test-only calculations used by the workflows |
 | `archive_fixture.py` | Minimal input archives for dataset tests |
@@ -21,14 +21,14 @@ python smoke.py big
 
 ## Scope
 
-Tests cover the model and selected candidate on `main`. Experimental objectives
+Tests cover the model and current match-then-root MMD recipe. Experimental objectives
 and their tests stay on their experiment branches. Each workflow test should
 show the supported behavior and preserve regressions that affect correctness.
 The big suite includes the small suite and CPU performance gate.
 
 ## Test organization
 
-Keep tests around complete workflows: build records, sample replay, update the
+Keep tests around complete workflows: build records, select and rerun roots, update the
 model, save/export weights, and play a match. Use the real producer and consumer
 when checking a data contract. Distributed parity runs in one isolated process
 with two logical CPUs.

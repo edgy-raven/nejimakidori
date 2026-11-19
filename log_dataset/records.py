@@ -6,14 +6,13 @@ import math
 import pathlib
 
 import numpy
+
 from log_dataset import _native_collection
 
 LABELS = {
     "ron_payments": {"shape": [3, 37], "dtype": "int32"},
     "ron_legal": {"shape": [3, 37], "dtype": "int8"},
     "win_action": {"shape": [], "dtype": "int8"},
-    "sakigiri_pair": {"shape": [2], "dtype": "int8"},
-    "sakigiri_weight": {"shape": [], "dtype": "float32"},
     "candidate_yaku_affinity": {"shape": [96, 3], "dtype": "float16"},
     "opponent_shanten": {"shape": [3], "dtype": "int8"},
     "opponent_ukeire": {"shape": [3, 34], "dtype": "int8"},
@@ -22,7 +21,6 @@ LABELS = {
     "round_completion_yaku": {"shape": [4, 2, 23], "dtype": "int8"},
     "round_completion_score": {"shape": [4, 2], "dtype": "int16"},
     "discard_action": {"shape": [], "dtype": "int8"},
-    "discard_regret": {"shape": [37], "dtype": "float32"},
     "continuation_discard": {"shape": [], "dtype": "int8"},
     "riichi_action": {"shape": [], "dtype": "int8"},
     "response_action": {"shape": [], "dtype": "int8"},
@@ -89,7 +87,7 @@ def encode(name, value):
     return raw.rstrip(b"\0")
 
 
-def serialize_observation(observation, focused):
+def serialize_observation(observation):
     import tensorflow as tf
 
     example = tf.train.Example()
@@ -108,15 +106,11 @@ def serialize_observation(observation, focused):
                     ).reshape(definition["shape"]),
                 )
             )
-    example.features.feature["meta/sample_weight"].float_list.value.append(1)
-    example.features.feature["meta/focused"].int64_list.value.append(
-        int(focused)
-    )
     for name in ("game_id", "kyoku_id"):
         example.features.feature["meta/" + name].bytes_list.value.append(
             getattr(observation, name).encode()
         )
-    for name in ("decision_index", "actor", "hand_yaku_focus"):
+    for name in ("decision_index", "actor"):
         example.features.feature["meta/" + name].int64_list.value.append(
             int(getattr(observation, name))
         )
@@ -130,7 +124,6 @@ def parse_batch(examples):
         examples,
         {
             **{name: tf.io.FixedLenFeature([], tf.string) for name in FIELDS},
-            "meta/sample_weight": tf.io.FixedLenFeature([], tf.float32),
         },
     )
     return decode_batch(parsed)
@@ -215,7 +208,7 @@ def decode_batch(parsed):
             "kan_action_logits": labels["kan_action"],
         }
     )
-    return inputs, labels, parsed["meta/sample_weight"]
+    return inputs, labels
 
 
 def validate_summary(data):

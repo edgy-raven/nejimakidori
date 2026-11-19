@@ -10,14 +10,14 @@ docker build -f docker/Dockerfile.model --target training \
 docker run --rm nejimakidori-training
 ```
 
-The default command prints candidate options. The image includes Python,
+The default command prints match-then-root MMD options. The image includes Python,
 TensorFlow, the pinned patched simulator and the native feature generator.
 
 ## Run
 
 Mount datasets, weights and an output directory, then pass a training command
 after the image name. NVIDIA training requires NVIDIA Container Toolkit and
-`--gpus` on `docker run`. See the [candidate command](../training/candidate/README.md).
+`--gpus` on `docker run`. See the [MMD command](../training/corrections/README.md).
 
 ## Files
 

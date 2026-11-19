@@ -1,16 +1,16 @@
-"""Visible attack routes and verified early defense orders train the actor."""
+"""Visible attack routes and opponent ron risk train the actor."""
 
 import json
 import pathlib
 
 import numpy
+import riichienv
 import tensorflow as tf
+
 from log_dataset import records, replay, scoring
 from model import actor as actor_layers
 from model import losses
 from model import network as joint_network
-
-import riichienv
 
 
 def test_specialist_targets_drive_tanyao_and_early_liability_gradients():
@@ -98,14 +98,14 @@ def test_specialist_targets_drive_tanyao_and_early_liability_gradients():
         .read_text()
     )
     rows = list(replay.Replay("swap", events).observations())
-    features, labels, _ = records.parse_batch(
-        [records.serialize_observation(row, False) for row in rows]
+    features, labels = records.parse_batch(
+        [records.serialize_observation(row) for row in rows]
     )
     network = joint_network.JointPolicyPayment()
     outputs = network.actor(features)
     terms = actor_layers.auxiliary_loss_terms((features, labels, None), outputs)
     assert all(numpy.isfinite(value) for value in terms.values())
-    assert terms["sakigiri_order_loss"] > 0
+    assert "sakigiri_order_loss" not in terms
     assert terms["route_affinity_loss"] > 0
     with tf.GradientTape(persistent=True) as tape:
         outputs = network.actor(features)
@@ -116,7 +116,6 @@ def test_specialist_targets_drive_tanyao_and_early_liability_gradients():
     for term, layer in (
         ("route_affinity_loss", "route_affinity"),
         ("candidate_ron_loss", "candidate_ron"),
-        ("sakigiri_order_loss", "sakigiri_order"),
     ):
         gradient = tape.gradient(
             terms[term], network.actor.get_layer(layer).trainable_variables
@@ -131,26 +130,6 @@ def test_specialist_targets_drive_tanyao_and_early_liability_gradients():
     )
     assert tf.linalg.global_norm(gradient) > 0
     del tape
-    scores = tf.Variable(tf.zeros((len(rows), 37)))
-    with tf.GradientTape() as tape:
-        loss = actor_layers.order_loss(labels, scores)
-    gradient = tape.gradient(loss, scores).numpy()
-    for row_ix, row in enumerate(rows):
-        if row.sakigiri_weight > 0:
-            assert gradient[row_ix, row.sakigiri_pair[0]] < 0
-            assert gradient[row_ix, row.sakigiri_pair[1]] > 0
-        else:
-            numpy.testing.assert_array_equal(gradient[row_ix], 0)
-    # Entirely unlabeled batches contribute neither loss nor a gradient.
-    unlabeled = {
-        **labels,
-        "sakigiri_pair": tf.fill((len(rows), 2), -1),
-        "sakigiri_weight": tf.zeros(len(rows)),
-    }
-    with tf.GradientTape() as tape:
-        loss = actor_layers.order_loss(unlabeled, scores)
-    assert loss == 0
-    numpy.testing.assert_array_equal(tape.gradient(loss, scores), 0)
     unknown = {
         **labels,
         "candidate_yaku_affinity": -tf.ones_like(
@@ -181,22 +160,13 @@ def test_partial_route_labels_keep_equal_decision_weight():
         [0.5, 0, 0.5, 0],
     )
     # Duplicating a known candidate changes neither the decision's weight
-    # nor the mean. Packed replica statistics must use the same definition.
+    # nor the mean.
     duplicated = tf.constant([0, 0, 1, 2, 3])
-    means = losses.MaskedMeans()
-    losses.candidate_mean(
-        tf.gather(loss_values, duplicated),
-        tf.gather(valid, duplicated),
-        tf.gather(rows, duplicated),
-        mean=means.collect,
-    )
-    means.reduce()
     numpy.testing.assert_allclose(
         losses.candidate_mean(
             tf.gather(loss_values, duplicated),
             tf.gather(valid, duplicated),
             tf.gather(rows, duplicated),
-            mean=means.read,
         ),
         2,
     )

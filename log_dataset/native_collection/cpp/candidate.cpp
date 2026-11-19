@@ -7,18 +7,20 @@ void Ranges::merge(Ranges const &other) {
   eligible |= other.eligible;
   for (int s = 0; s < 4; ++s)
     if (other.valid[s]) {
-      values[s * 2] =
-          valid[s] ? std::min(values[s * 2], other.values[s * 2]) : other.values[s * 2];
-      values[s * 2 + 1] = valid[s] ? std::max(values[s * 2 + 1], other.values[s * 2 + 1])
-                                   : other.values[s * 2 + 1];
+      values[s * 2] = valid[s]
+          ? std::min(values[s * 2], other.values[s * 2])
+          : other.values[s * 2];
+      values[s * 2 + 1] = valid[s]
+          ? std::max(values[s * 2 + 1], other.values[s * 2 + 1])
+          : other.values[s * 2 + 1];
       valid[s] = 1;
     }
   for (int i = 0; i < 2; ++i)
     restricted[i] |= other.restricted[i];
 }
 void write(Row row, Ranges const &v, int action) {
-  row.put(action_value_range, action * 8, v.values, 8);
-  row.put(action_value_valid, action * 4, v.valid, 4);
+  row.put(action_win_value_range, action * 8, v.values, 8);
+  row.put(action_win_value_valid, action * 4, v.valid, 4);
   row.put(action_open_yaku_restricted, action * 2, v.restricted, 2);
   row.set(action_value_eligible, action, v.eligible);
 }
@@ -125,7 +127,7 @@ void flags(Hand const &h, int const *exposed, int round, int seat, uint8_t *out,
 }
 void pack_candidates(Row row, State const &s, feature::Analysis const &a,
                      Branch const *branches, size_t branch_count, Legal &legal,
-                     Focus &focus, RangeContext const &availability, void *context,
+                     RangeContext const &availability, void *context,
                      Score score) {
   row.set(riichi_legal_mask, 0, 1);
   row.set(response_legal_mask, 0, 1);
@@ -157,17 +159,6 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
     uint64_t structural[34]{};
     nyanten_analyze_features(a.counts, a.unavailable, mask, modes, 2, analyses,
                              structural);
-    if (focus.threat && focus.phase == 0) {
-      focus.threat = 0;
-      for (int t : choices) {
-        for (int seat = 1; seat < 4; ++seat)
-          focus.threat |= a.genbutsu[seat][base(t)] != a.genbutsu[seat][base(choices[0])];
-        focus.threat |=
-            analyses[1].shanten[base(t)] != analyses[1].shanten[base(choices[0])] ||
-            analyses[1].ukeire_count[base(t)] !=
-                analyses[1].ukeire_count[base(choices[0])];
-      }
-    }
     Field shanten[] = {discard_action_normal_shanten, discard_action_all_shanten};
     Field ukeire[] = {discard_action_normal_ukeire_count,
                       discard_action_all_ukeire_count};
@@ -196,17 +187,15 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
       else
         flags(s.hand, s.exposed, s.wind, (s.actor + 4 - s.oya) % 4, cut_y, t);
       row.put(discard_action_yaku_possibility, cut * 19, cut_y, 19);
-      auto scoring_availability = availability;
-      scoring_availability.prior = legal.riichi[cut] && s.phase == 3;
-      auto v = ranges(after, scoring_availability, t, context, score, structural[t]);
-      if (scoring_availability.prior) {
-        row.set(riichi_dama_points, cut, v.dama_points);
-        row.set(riichi_extra_han, cut, v.extra_han);
-      }
+      auto v = ranges(after, availability, t, context, score, structural[t]);
       write(row, v, cut);
       write(row, v, 37 + cut);
-      if (legal.riichi[cut])
-        write(row, v, 74 + cut);
+      if (legal.riichi[cut]) {
+        auto declared = availability;
+        declared.riichi = 1;
+        write(row, ranges(after, declared, t, context, score, structural[t]),
+              74 + cut);
+      }
       decline.merge(v);
       for (int seat = 0; seat < 4; ++seat)
         row.set(discard_retained_genbutsu, cut * 4 + seat,
@@ -255,13 +244,6 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
     uint64_t structural[34]{};
     nyanten_analyze_features(counts(h).data(), a.unavailable, mask, &mode, 1, &analysis,
                              structural);
-    bool viable =
-        focus.yakuhai > 0 ||
-        (!chi && (branch.tile >= 31 || branch.tile == 27 + (s.actor + 4 - s.oya) % 4 ||
-                  branch.tile == 27 + s.wind));
-    int indices[] = {0, 6, 16};
-    for (int i = 0; i < 3; ++i)
-      viable |= focus.routes[i] && y[indices[i]];
     if (!call_cuts.empty()) {
       auto eff = efficiency(analysis, call_cuts);
       row.put(chi ? chi_call_efficiency : pon_call_efficiency, option * 3, eff.data(), 3);
@@ -278,20 +260,10 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
               analysis.shanten[base(cut)] + 1);
       row.set(chi ? chi_discard_ukeire_count : pon_discard_ukeire_count, position,
               analysis.ukeire_count[base(cut)]);
-      auto scoring_availability = availability;
-      scoring_availability.prior = s.phase == 1 && analysis.shanten[base(cut)] == 0;
-      auto v = ranges(after, scoring_availability, base(cut), context, score,
+      auto v = ranges(after, availability, base(cut), context, score,
                       structural[base(cut)]);
-      if (scoring_availability.prior) {
-        int slot = (chi ? option : 3) * 37 + cut;
-        row.set(call_open_points, slot, v.dama_points);
-        row.set(call_riichi_points, slot, v.riichi_points);
-      }
       write(row, v, (chi ? 112 : 223) + position);
-      focus.fast |= (analysis.shanten[base(cut)] < a.distance ||
-                     (analysis.shanten[base(cut)] == a.distance &&
-                      analysis.ukeire_count[base(cut)] > self[1])) &&
-                    (viable || v.values[5] > 0);
+
     }
     row.put(chi ? chi_call_yaku_possibility : pon_call_yaku_possibility, option * 19, y,
             19);
@@ -301,10 +273,10 @@ void pack_candidates(Row row, State const &s, feature::Analysis const &a,
 extern "C" void feature_pack_candidates(uint8_t *row, feature::State const *s,
                                         feature::Analysis const *a,
                                         feature::Branch const *branches, size_t size,
-                                        feature::Legal *legal, feature::Focus *focus,
+                                        feature::Legal *legal,
                                         feature::RangeContext const *availability,
                                         void *context, feature::Score score) {
-  feature::pack_candidates({row}, *s, *a, branches, size, *legal, *focus, *availability,
+  feature::pack_candidates({row}, *s, *a, branches, size, *legal, *availability,
                            context, score);
 }
 

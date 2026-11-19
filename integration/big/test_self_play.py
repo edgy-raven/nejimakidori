@@ -1,4 +1,4 @@
-"""Persistent CPU workers preserve complete games and deterministic cohorts."""
+"""Native collection preserves payments and deterministic batched streams."""
 
 import json
 import pathlib
@@ -7,8 +7,11 @@ import types
 import numpy
 import pytest
 import tensorflow as tf
+
 from log_dataset import _native_collection
-from model import actions, joint_settlement, outcomes
+from model import actions
+from model import actor as actor_layers
+from model import joint_settlement, outcomes
 from training import self_play
 
 
@@ -47,11 +50,6 @@ def test_native_nagashi_targets_charge_deposits_once(monkeypatch):
                 "hand": [0] * 4,
                 "seat": list(range(4)),
                 "event": [starts[0] + 1] * 4,
-                "opponent_shanten": numpy.zeros((4, 3), numpy.int8),
-                "opponent_ukeire": numpy.zeros((4, 3, 34), numpy.int8),
-                "opponent_hand_counts": numpy.zeros((4, 3, 37), numpy.int8),
-                "ron_legal": numpy.full((4, 3, 37), -1, numpy.int8),
-                "ron_payments": numpy.full((4, 3, 37), -1, numpy.int32),
             },
             None,
         ]
@@ -78,12 +76,7 @@ def test_native_nagashi_targets_charge_deposits_once(monkeypatch):
         ),
         batch["payment_points"],
     )
-    for seat in range(4):
-        numpy.testing.assert_array_equal(
-            batch["settlement"][seat, :4],
-            numpy.roll(recorded["scores"], -seat),
-        )
-        assert batch["settlement"][seat, 11] == 1000
+    assert "settlement" not in batch
     payments = numpy.zeros((4, 4, 4), numpy.int32)
     payments[2, :, 2] = [2000, 2000, 0, 4000]
     payments[3, 3, 3] = -1000
@@ -101,138 +94,208 @@ def test_native_nagashi_targets_charge_deposits_once(monkeypatch):
         )
 
 
-def test_parallel_complete_games_are_repeatable_and_workers_are_reaped():
-    with self_play.Collector(uniform_predict, 4) as collector:
-        first = collector.collect(2, 12)
-        first_counts = {
-            name: collector.metrics[name]
-            for name in self_play.collection_counts()
-        }
-        for name in ("ron_legal", "ron_payments"):
-            assert first[name].shape == (len(first["chosen"]), 3, 37)
-        assert first_counts["games"] == 2
-        assert first_counts["hands"] >= 2
-        assert collector.metrics["inference_rows"] == len(first["chosen"])
-        assert collector.metrics["inference_seconds"] > 0
-        assert collector.metrics["inference_calls"] > 0
-        assert len(collector.processes) == 2
-        processes = list(collector.processes)
-        for process in processes:
-            environment = pathlib.Path(
-                f"/proc/{process.pid}/environ"
-            ).read_bytes()
-            assert b"CUDA_VISIBLE_DEVICES=\x00" in environment
-            assert b"TF_NUM_INTRAOP_THREADS=1\x00" in environment
-            assert (
-                "libtensorflow"
-                not in pathlib.Path(f"/proc/{process.pid}/maps").read_text()
-            )
-        tf.nest.map_structure(
-            numpy.testing.assert_array_equal,
-            first,
-            collector.collect(2, 12),
-        )
-        assert collector.processes == processes
-        with self_play.Collector(uniform_predict, 1) as serial:
-            expected = [serial.collect(1, seed) for seed in (12, 13)]
-            assert serial.processes == []
-            for name, value in first_counts.items():
-                assert serial.metrics[name] == value
-                assert collector.metrics[name] == 2 * value
-        tf.nest.map_structure(
-            numpy.testing.assert_array_equal,
-            first,
-            tf.nest.map_structure(
-                lambda *arrays: numpy.concatenate(arrays), *expected
-            ),
-        )
-        probability = numpy.exp(first["behavior"])
-        numpy.testing.assert_allclose(probability.sum(-1), 1, atol=1e-6)
-        assert numpy.all(probability[~first["legal"]] == 0)
-        assert numpy.all(
-            first["legal"][numpy.arange(len(first["chosen"])), first["chosen"]]
-        )
-        assert len(numpy.unique(first["settlement"], axis=0)) > 1
-        # A dead persistent worker must fail promptly on the next cohort.
-        processes[0].kill()
-        processes[0].wait()
-        with pytest.raises((EOFError, BrokenPipeError, ConnectionResetError)):
-            collector.collect(1, 14)
-    assert all(process.poll() is not None for process in processes)
-    assert processes[1].returncode == 0
+def test_batched_streams_preserve_serial_features_and_targets():
+    def streams():
+        return [self_play.collection_steps(1, seed) for seed in (941, 944)]
 
-
-def test_batched_root_streams_preserve_serial_features_and_targets(monkeypatch):
-    def score_roots(features):
-        legal = actions.legal_choices(features)
-        pairs = numpy.full(
-            (len(features["decision_phase"]), 2), -1, numpy.int32
-        )
-        for row, phase in enumerate(features["decision_phase"]):
-            codes = numpy.flatnonzero(
-                legal[actions.TRAIN_POLICY_HEADS[[0, 2, 3, 1, 4][phase]]][row]
-            )
-            if len(codes) > 1:
-                pairs[row] = codes[[0, -1]]
-        return {"priority": numpy.zeros(len(pairs)), "actions": pairs}
-
-    with self_play.Collector(
-        uniform_predict,
-        2,
-        focus="targeted",
-        root_copies=2,
-        root_evaluate=score_roots,
-    ) as collector:
-        actual = collector.collect(6, 941)
-        assert 0 < collector.metrics["selected_roots"] <= 4
-        assert collector.metrics["root_continuations"] == (
-            4 * collector.metrics["selected_roots"]
-        )
-    collect_streams = self_play.collect_streams
-    monkeypatch.setattr(
-        self_play,
-        "collect_streams",
-        lambda predict, streams: [
-            collect_streams(predict, [stream])[0] for stream in streams
-        ],
-    )
+    actual = self_play.collect_streams(uniform_predict, streams())
     expected = [
-        self_play.collect_focused(
-            uniform_predict,
-            3,
-            seed,
-            focus="targeted",
-            root_copies=2,
-            root_evaluate=lambda rows: score_roots(
-                {name: rows[name] for name in self_play.FEATURE_DTYPE.names}
-            ),
-        )[0]
-        for seed in (941, 944)
+        self_play.collect_streams(uniform_predict, [stream])[0]
+        for stream in streams()
     ]
+    tf.nest.map_structure(numpy.testing.assert_array_equal, actual, expected)
+
+
+def test_greedy_reference_selects_marginal_branches_before_continuations():
+    logits = numpy.full((5, 150), -1e9, numpy.float32)
+    logits[0, 5] = 0
+    logits[1, [0, 37, 38]] = numpy.log([0.45, 0.28, 0.27])
+    logits[2, [0, 1, 2, 38, 112]] = numpy.log([0.4, 0.17, 0.15, 0.18, 0.1])
+    logits[3, 2] = 0
+    logits[4, 1] = 0
+    numpy.testing.assert_array_equal(
+        actor_layers.greedy_choices(tf.constant(logits), tf.range(5)),
+        [5, 37, 1, 2, 1],
+    )
+
+
+def test_native_self_play_records_legal_sampled_actions(monkeypatch):
+    game_logs = []
+    normalize = self_play.outcomes.normalize_draw_payments
+
+    def record_log(events):
+        game_logs.append(events)
+        return normalize(events)
+
+    monkeypatch.setattr(
+        self_play.outcomes, "normalize_draw_payments", record_log
+    )
+
+    class Actor:
+        def __init__(self):
+            self.scale = tf.Variable(0.0)
+            self.traces = 0
+
+        def __call__(self, inputs, training=False):
+            self.traces += 1
+            count = tf.shape(inputs["decision_phase"])[0]
+            return {
+                **{
+                    name: tf.zeros((count, actions.ACTOR_OUTPUTS[name][0]))
+                    + self.scale
+                    * tf.range(
+                        actions.ACTOR_OUTPUTS[name][0],
+                        dtype=tf.float32,
+                    )
+                    for name in actions.TRAIN_POLICY_HEADS
+                },
+                "board": tf.zeros((count, 1)),
+            }
+
+    tf.keras.utils.set_random_seed(12)
+    actor = Actor()
+    predict = self_play.predictor(actor)
+
+    def infer(rows):
+        return predict({name: rows[name] for name in rows.dtype.names})
+
+    batch, statistics = self_play.collect(infer, 1, 12)
+    tf.keras.utils.set_random_seed(12)
     tf.nest.map_structure(
         numpy.testing.assert_array_equal,
-        actual,
-        tf.nest.map_structure(
-            lambda *values: numpy.concatenate(values), *expected
-        ),
+        (batch, statistics),
+        self_play.collect(infer, 1, 12),
     )
+    assert statistics["games"] == 1
+    assert statistics["hands"] >= 1
+    for name, event_type in (
+        ("hands", "start_kyoku"),
+        ("wins", "hora"),
+        ("draws", "ryukyoku"),
+        ("games", "end_game"),
+        ("riichi_hands", "reach_accepted"),
+    ):
+        assert statistics[name] == sum(
+            event["type"] == event_type for event in game_logs[0]
+        )
+    assert statistics["win_points"] == sum(
+        event["deltas"][event["actor"]]
+        for event in game_logs[0]
+        if event["type"] == "hora"
+    )
+    assert len(batch["chosen"]) > 100
+    probability = numpy.exp(batch["behavior"])
+    numpy.testing.assert_allclose(probability.sum(-1), 1, atol=1e-6)
+    assert numpy.all(probability[~batch["legal"]] == 0)
+    assert numpy.all(
+        batch["legal"][numpy.arange(len(batch["chosen"])), batch["chosen"]]
+    )
+    assert len(numpy.unique(batch["payment_points"], axis=0)) > 1
+    assert "advantages" not in batch
+    assert "value" not in batch
+    current = actor_layers.distribution(
+        Actor()(batch["features"]), batch["head"], batch["legal"]
+    )
+    numpy.testing.assert_allclose(current, batch["behavior"], atol=1e-6)
+    actor.scale.assign(1.0)
+    for count in (1, 2):
+        outputs = predict(
+            {name: value[:count] for name, value in batch["features"].items()}
+        )
+        numpy.testing.assert_array_equal(
+            outputs["discard_policy_logits"][:, 1], numpy.ones(count)
+        )
+    assert actor.traces == 1
 
 
-def test_inference_failure_reaps_workers_waiting_for_outputs():
-    def fail_predict(features):
-        raise RuntimeError("inference failed")
+def test_fresh_critic_targets_preserve_deposits_and_preempted_calls(
+    monkeypatch,
+):
+    from log_dataset import _native_collection
+    from model import outcomes
 
-    with pytest.raises(RuntimeError, match="inference failed"):
-        with self_play.Collector(fail_predict, 2) as collector:
-            collector.collect(1, 12)
-    assert len(collector.processes) == 1
-    assert collector.processes[0].poll() is not None
+    events = [
+        {
+            "type": "start_kyoku",
+            "scores": [25000] * 4,
+            "oya": 0,
+            "kyoku": 1,
+            "bakaze": "E",
+            "honba": 1,
+            "kyotaku": 1,
+        },
+        {"type": "reach", "actor": 0},
+        {"type": "reach_accepted", "actor": 0},
+        {"type": "dahai", "actor": 0},
+        {"type": "pon", "actor": 2},
+        {"type": "dahai", "actor": 2},
+        {"type": "reach", "actor": 3},
+        {"type": "reach_accepted", "actor": 3},
+        {"type": "dahai", "actor": 3},
+        {
+            "type": "hora",
+            "actor": 1,
+            "target": 3,
+            "deltas": [0, 11300, 0, -8300],
+        },
+        {"type": "end_kyoku"},
+        {"type": "end_game"},
+    ]
+    features = numpy.zeros(4, self_play.FEATURE_DTYPE)
+    features["riichi_state"][1, 3] = 2  # Absolute seat 0 already paid.
+    features["riichi_state"][2, 2] = 2
+    features["riichi_state"][3, 1] = 2
+    features["riichi_state"][3, 0] = 1  # Declaration is not acceptance.
+    legal = numpy.zeros((4, 150), bool)
+    legal[numpy.arange(4), [37, 112, 112, 0]] = True
 
+    class Collector:
+        submitted = False
 
-def test_collection_rejects_empty_pool_and_empty_cohort():
-    with pytest.raises(ValueError, match="workers must be positive"):
-        self_play.Collector(uniform_predict, 0)
-    with self_play.Collector(uniform_predict, 2) as collector:
-        with pytest.raises(ValueError, match="games must be positive"):
-            collector.collect(0, 12)
-        assert collector.processes == []
+        def __init__(self, games, seed):
+            pass
+
+        def next(self):
+            if self.submitted:
+                return None
+            return {
+                "features": features.tobytes(),
+                "head": [1, 2, 2, 0],
+                "game": [0] * 4,
+                "hand": [0] * 4,
+                "seat": [0, 1, 2, 3],
+                "event": [1, 4, 4, 7],
+                "legal": legal.tobytes(),
+            }
+
+        def submit(self, chosen):
+            assert chosen == [37, 112, 112, 0]
+            self.submitted = True
+
+        def finish(self):
+            return [json.dumps(events)], {"games": 1}
+
+    monkeypatch.setattr(_native_collection, "NativeCollector", Collector)
+    batch, _ = self_play.collect(
+        lambda features: {
+            name: numpy.zeros((4, actions.ACTOR_OUTPUTS[name][0]))
+            for name in actions.TRAIN_POLICY_HEADS
+        },
+        1,
+        12,
+    )
+    numpy.testing.assert_array_equal(batch["chosen"], [37, 112, 112, 0])
+    # Honba is removed; carried pots and only future deposits remain.
+    expected = numpy.zeros((4, 4, 4), numpy.int32)
+    expected[0, 3, 1] = 8000
+    expected[3] = numpy.diag([-1000, 3000, 0, -1000])
+    numpy.testing.assert_array_equal(
+        batch["payment_points"][0], expected[outcomes.PAYMENT_CELLS]
+    )
+    expected[3, 0, 0] = 0
+    for seat in (1, 2, 3):
+        order = (seat + numpy.arange(4)) % 4
+        numpy.testing.assert_array_equal(
+            batch["payment_points"][seat],
+            expected[:, order][:, :, order][outcomes.PAYMENT_CELLS],
+        )

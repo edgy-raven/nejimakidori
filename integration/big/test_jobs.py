@@ -10,9 +10,9 @@ import zipfile
 
 import numpy
 import tensorflow as tf
+
 from integration import archive_fixture
-from log_dataset import training_data
-from model import joint_settlement
+from log_dataset import records, training_data
 
 
 def test_dataset_job_builds_joint_records_and_resumes(tmp_path):
@@ -43,6 +43,11 @@ def test_dataset_job_builds_joint_records_and_resumes(tmp_path):
     summary = json.loads((data / "dataset_summary.json").read_text())
     assert summary["games"] == 1
     assert summary["examples"] > 0
+    records.validate_summary(data)
+    assert summary["critic_auxiliary"] == training_data.AUXILIARY
+    assert len(summary["partition_counts"]) == 10
+    assert sum(summary["partition_counts"]) == summary["examples"]
+    assert "focus_counts" not in summary
     assert summary["validation_sample"]["decision_hash_modulus"] == 16
     assert summary["validation_examples"] == sum(
         row["validation_count"] for row in summary["shard_manifest"]
@@ -56,23 +61,20 @@ def test_dataset_job_builds_joint_records_and_resumes(tmp_path):
             )
         )
         inputs = training_data.parse_batch(raw_batch)
-        settlements = numpy.stack(
-            [
-                numpy.frombuffer(
-                    tf.train.Example.FromString(raw)
-                    .features.feature["critic/settlement"]
-                    .bytes_list.value[0],
-                    dtype=numpy.int32,
-                )
-                for raw in raw_batch.numpy()
-            ]
-        )
-        # Serialized expert outcomes use the same payoff as fresh rollouts.
-        numpy.testing.assert_allclose(
-            inputs[2]["projected_st3"],
-            joint_settlement.observed_payoffs(settlements),
-        )
-        assert numpy.isfinite(inputs[2]["projected_st3"]).all()
+        assert inputs[2]["bonus"].shape[-1] == 24
+        assert numpy.isfinite(inputs[2]["score"]).all()
+        for raw in raw_batch.numpy():
+            fields = tf.train.Example.FromString(raw).features.feature
+            assert set(fields) == {
+                *records.FIELDS,
+                "meta/game_id",
+                "meta/kyoku_id",
+                "meta/decision_index",
+                "meta/actor",
+                "critic/partition",
+                "critic/bonus",
+                "critic/score",
+            }
         validation_rows = list(
             tf.data.TFRecordDataset(
                 str(data / row["validation_path"]), compression_type="GZIP"

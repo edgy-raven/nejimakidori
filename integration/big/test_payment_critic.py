@@ -6,13 +6,13 @@ import types
 
 import numpy
 import pytest
+import riichienv
 import tensorflow as tf
+
 from log_dataset import _native_collection, scoring
 from model import actions, critic, export, inference
 from model import network as joint_network
 from model import outcomes, payment_scoring
-
-import riichienv
 
 
 def test_score_states_are_canonical_and_respect_win_methods():
@@ -163,42 +163,6 @@ def test_same_hand_scoring_separates_bonuses_and_respects_limits():
         assert score.ron_agari == expected
 
 
-def test_sparse_score_payments_preserve_probabilities_and_gradients():
-    # Immediate ron uses three cells; continuation uses all 24. Both must
-    # match the original dense map, including many scores sharing an amount.
-    for cells in (3, 24):
-        logits = tf.Variable(
-            tf.reshape(
-                tf.linspace(
-                    -4.0, 4.0, 4 * cells * 2 * len(payment_scoring.SCORES)
-                ),
-                (4, cells, 2, len(payment_scoring.SCORES)),
-            )
-        )
-        matches = tf.constant(
-            payment_scoring.payment_amounts()[:, :cells, :, None]
-            == outcomes.PAYMENT_VALUES
-        )
-        with tf.GradientTape(persistent=True) as tape:
-            probability = tf.nn.softmax(
-                tf.where(tf.reduce_any(matches, -1)[:, :, None], logits, -1e9)
-            )
-            sparse = payment_scoring.score_payments(probability, tf.range(4))
-            dense = tf.einsum(
-                "bhrs,bhsk->bhrk", probability, tf.cast(matches, tf.float32)
-            )
-            sparse_loss = tf.reduce_sum(tf.square(sparse))
-            dense_loss = tf.reduce_sum(tf.square(dense))
-        numpy.testing.assert_allclose(sparse, dense, atol=1e-7, rtol=1e-6)
-        numpy.testing.assert_allclose(
-            tape.gradient(sparse_loss, logits),
-            tape.gradient(dense_loss, logits),
-            atol=1e-7,
-            rtol=1e-6,
-        )
-        del tape
-
-
 def test_robbed_kan_preserves_ippatsu_in_scoring_labels():
     events = json.loads(
         pathlib.Path(__file__)
@@ -234,7 +198,7 @@ def test_checkpoint_export_and_placement_inference(
         .joinpath("payment_dealer_90fu.json")
         .read_text()
     )
-    targets = training_data.game_targets(events + [{"type": "end_game"}])
+    targets = scoring.round_labels(events + [{"type": "end_game"}])
     key, ctx = next(scoring.win_contexts(events))
     assert (ctx.actual.han, ctx.actual.fu, ctx.actual.ron_agari) == (
         3,
@@ -315,22 +279,18 @@ def test_checkpoint_export_and_placement_inference(
         )
     serving = export.ServingModel(restored)
     expected = serving.serve(**inputs[0])
+    assert set(expected) == set(actions.SERVING_ACTOR_OUTPUTS) | {
+        "terminal_payment_probabilities",
+        "payment_values",
+        "final_placement_probabilities",
+        "review_outcome_probabilities",
+        "settlement_mean",
+        "settlement_variance",
+        "critic_expected_points",
+        "critic_action_indices",
+    }
 
-    root_outputs = serving.root_evaluation(**inputs[0])
     assert "state_value" not in restored_outputs
-    assert "state_value" not in root_outputs
-    for name in ("critic_action_indices", "discard_policy_logits"):
-        numpy.testing.assert_allclose(
-            root_outputs[name], expected[name], rtol=1e-5, atol=1e-6
-        )
-    # Independent serving traces can reorder the FP32 settlement reduction;
-    # the absolute tolerance also covers values whose expectation is near zero.
-    numpy.testing.assert_allclose(
-        root_outputs["critic_projected_st3"],
-        expected["critic_projected_st3"],
-        rtol=1e-5,
-        atol=3e-5,
-    )
     numpy.testing.assert_allclose(
         tf.reduce_sum(expected["final_placement_probabilities"], -1),
         1,
@@ -424,7 +384,7 @@ def test_checkpoint_export_and_placement_inference(
             row["structured_outcome"]["uncertainty"] == "joint hand settlement"
         )
         assert all(
-            numpy.isfinite(action["projected_st3"])
+            numpy.isfinite(action["expected_points"]).all()
             for action in row["action_values"]
         )
 

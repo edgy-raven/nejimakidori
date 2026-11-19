@@ -3,6 +3,7 @@
 import math
 
 import tensorflow as tf
+
 from model import actions, losses
 
 TENPAI_UKEIRE_WEIGHT = 9.0
@@ -68,12 +69,6 @@ def opponent_summaries(outputs):
                     -1,
                 ),
                 -1,
-            )
-        ),
-        "opponent_tenpai_logits": (
-            outputs["opponent_shanten_logits"][..., 0]
-            - tf.reduce_logsumexp(
-                outputs["opponent_shanten_logits"][..., 1:], -1
             )
         ),
     }

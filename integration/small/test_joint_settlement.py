@@ -2,16 +2,17 @@
 
 import numpy
 import tensorflow as tf
+
 from integration import settlement_reference
 from log_dataset import scoring
 from model import joint_settlement, losses, outcomes, payment_scoring
 
 
 def expanded_terms(labels, outputs, mean=losses.mean_valid):
-    """Exact observed-payment likelihood and derived hand-end rank likelihood.
+    """Exact observed-payment likelihood over expanded settlement support.
 
-    Liability/nagashi allocations outside the ordinary support
-    receive neither settlement nor rank supervision. Coverage is reported.
+    Liability/nagashi allocations outside the ordinary support receive no
+    settlement supervision. Coverage is reported.
     """
     same_transfer = tf.reduce_all(
         (
@@ -33,7 +34,7 @@ def expanded_terms(labels, outputs, mean=losses.mean_valid):
     matches = same_transfer[:, :, None] & tf.reduce_all(
         outputs["joint_bank"] == actual_bank[:, None, None], -1
     )
-    matches &= outputs["joint_legal_deposits"]
+    matches &= outputs["joint_probability"] > 0
     if "event" in labels:
         matches &= (
             outputs["joint_support"][:, :, 5]
@@ -41,20 +42,15 @@ def expanded_terms(labels, outputs, mean=losses.mean_valid):
         )[..., None]
     supported = tf.reduce_any(matches, axis=(1, 2))
     log_likelihood = tf.reduce_logsumexp(
-        tf.where(matches, outputs["joint_log_probability"], -1e30), axis=(1, 2)
-    )
-    rank_log_probability = tf.gather(
-        outputs["round_placement_logits"],
-        tf.maximum(labels["round_placement"], 0),
-        axis=2,
-        batch_dims=2,
+        tf.where(
+            matches,
+            tf.math.log(tf.maximum(outputs["joint_probability"], 1e-30)),
+            -1e30,
+        ),
+        axis=(1, 2),
     )
     return {
         "payment_nll": mean(-log_likelihood, supported),
-        "round_placement_loss": mean(
-            -rank_log_probability,
-            supported[:, None] & (labels["round_placement"] >= 0),
-        ),
         "settlement_multi_ron_fraction": tf.reduce_mean(
             tf.cast(
                 tf.reduce_sum(
@@ -147,12 +143,6 @@ def test_joint_law_conserves_points_and_reconstructs_tsumo_bank_and_tie_order():
     numpy.testing.assert_allclose(
         result["joint_scores"][0].numpy().sum(-1) + outstanding, 100000
     )
-    for seat in range(4):
-        numpy.testing.assert_allclose(
-            tf.exp(result["round_placement_logits"])[0, seat].numpy().sum(),
-            1,
-            atol=2e-5,
-        )
     zero = numpy.flatnonzero((support[:, 1] == 2) & (support[:, 3] == 0))[0]
     numpy.testing.assert_array_equal(
         result["joint_ranks"][0, zero, 0], [0, 1, 2, 3]
@@ -181,7 +171,12 @@ def test_joint_law_conserves_points_and_reconstructs_tsumo_bank_and_tie_order():
         @ coefficient
     )
     numpy.testing.assert_allclose(
-        expected / 10000, result["expected_points"], atol=3e-5
+        expected,
+        joint_settlement.expectation(
+            result["joint_probability"],
+            result["joint_scores"] - public["scores"][:, None, None],
+        ),
+        atol=0.3,
     )
 
     # Concentrated legal score distributions must not create negative
@@ -203,7 +198,7 @@ def test_joint_law_conserves_points_and_reconstructs_tsumo_bank_and_tie_order():
     numpy.testing.assert_allclose(tf.reduce_sum(marginal, -1), 1, atol=3e-5)
 
 
-def test_payment_and_round_rank_supervise_single_and_double_ron():
+def test_payment_likelihood_and_utility_differentiate_ron_settlements():
     public = {**inputs(), "pot": tf.zeros(1), "honba": tf.zeros(1)}
     factors = tf.Variable(tf.zeros((1, len(joint_settlement.EVENTS))))
     deposits = tf.Variable(public["deposit_logits"])
@@ -214,7 +209,6 @@ def test_payment_and_round_rank_supervise_single_and_double_ron():
             outcomes.payment_classes(payment)[outcomes.PAYMENT_CELLS][None],
             tf.int32,
         ),
-        "round_placement": tf.constant([[0, 3, 1, 2]]),
         "pot": public["pot"],
     }
     with tf.GradientTape(persistent=True) as tape:
@@ -224,7 +218,7 @@ def test_payment_and_round_rank_supervise_single_and_double_ron():
         terms = expanded_terms(labels, result)
         utility = settlement_reference.projected_st3(result, public)
     assert terms["settlement_supported_fraction"] == 1
-    for loss in (terms["payment_nll"], terms["round_placement_loss"], utility):
+    for loss in (terms["payment_nll"], utility):
         for gradient in tape.gradient(loss, [factors, deposits]):
             assert gradient is not None
             assert numpy.isfinite(gradient).all()
@@ -242,7 +236,35 @@ def test_payment_and_round_rank_supervise_single_and_double_ron():
     )
     assert masked["settlement_supported_fraction"] == 1
     assert masked["payment_nll"] > 0
-    assert masked["round_placement_loss"] > 0
+
+
+def test_policy_objective_adds_rank_bonuses_and_preserves_raw_st3():
+    scores = numpy.array(
+        [numpy.roll([40000.0, 30000, 20000, 10000], -seat) for seat in range(4)]
+    )
+    ranks = numpy.argsort(numpy.argsort(-scores, axis=1), axis=1)
+    st3, probability = joint_settlement.post_hand_forecast(
+        scores=tf.constant(scores, tf.float32),
+        ranks=tf.constant(ranks, tf.int64),
+        next_dealer=tf.zeros(4, tf.int64),
+        next_hand=tf.fill([4], 8),
+        terminal=tf.ones(4, tf.bool),
+        pot=tf.zeros(4),
+    )
+    numpy.testing.assert_array_equal(st3, [140, 65, -10, -270])
+    objective = joint_settlement.policy_objective(st3, probability)
+    numpy.testing.assert_allclose(objective, [2.4, 0.65, -0.1, -3.7], atol=1e-6)
+    # A forecast mixes terminal utilities; neither normalization nor bonuses
+    # may be applied to a hard predicted rank instead of the rank distribution.
+    weight = tf.constant([0.1, 0.2, 0.3, 0.4])
+    numpy.testing.assert_allclose(
+        joint_settlement.policy_objective(tf.reduce_sum(weight * st3), weight),
+        -1.14,
+        atol=1e-6,
+    )
+    numpy.testing.assert_allclose(
+        tf.reduce_sum(weight * objective), -1.14, atol=1e-6
+    )
 
 
 def test_terminal_st3_is_exact_and_draw_pot_goes_to_leader():
@@ -319,6 +341,7 @@ def test_terminal_st3_is_exact_and_draw_pot_goes_to_leader():
                 {**result, "joint_probability": exact}, public
             ),
             expected,
+            rtol=1e-6,
             atol=1e-5,
         )
 
@@ -398,7 +421,7 @@ def test_future_draw_readiness_requires_riichi_and_hadaka():
     # Four melds require tenpai even without riichi; they do not force a stick.
     assert probability[draws & (support[:, 3] == 13), 1].sum() > 0
     assert not public["riichi_required"][0, 3]
-    assert not result["joint_legal_deposits"].numpy()[0][incompatible].any()
+    assert not result["joint_probability"].numpy()[0][incompatible].any()
 
 
 def test_double_ron_awards_honba_and_bank_once_and_keeps_dealer_repeat():
@@ -477,7 +500,6 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
     }
     labels = {
         "payment": tf.ones((3, 40), tf.int32),
-        "round_placement": tf.constant([[0, 1, 2, 3]] * 3),
         "pot": public["pot"],
         "points": tf.zeros(3),
         "score": tf.fill((3, 24, len(scoring.BONUS_HAN)), -1),
@@ -492,7 +514,7 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
         ),
         -1,
     )
-    predictor = critic.PaymentCritic(belief_offset=0)
+    predictor = critic.PaymentCritic(belief_offset=0, player_width=8)
     predictor(public)
     # Partial chunks have a dynamic batch dimension. Their compiled loss
     # must stay stateless so replicas can execute the backward pass together.
@@ -563,9 +585,8 @@ def test_streamed_settlement_gradients_equal_full_batch(monkeypatch):
             result = predictor.supervised_statistics(
                 public, fresh, valid=tf.constant(valid)
             )
-            loss = sum(
-                critic.settlement_metrics(result)[name]
-                for name in ("payment_nll", "critic_constraint_loss")
+            loss = critic.settlement_objective(
+                dict(zip(critic.CRITIC_METRICS, losses.packed_means(result)))
             )
         gradients = tape.gradient(
             loss,
@@ -632,7 +653,6 @@ def test_observed_categories_match_enumeration_without_score_cross_products():
             labels = {
                 "payment": tf.cast(payment, tf.int32),
                 "pot": public["pot"],
-                "round_placement": reference["joint_ranks"][:, row, deposit],
             }
             with tf.GradientTape(persistent=True) as tape:
                 values = {
@@ -688,7 +708,6 @@ def test_partial_ron_amount_marginalizes_scores_but_preserves_exact_event():
         "payment": payment,
         "event": tf.constant([0]),
         "pot": public["pot"],
-        "round_placement": tf.fill((1, 4), -1),
     }
     with tf.GradientTape(persistent=True) as tape:
         values = {
@@ -721,49 +740,8 @@ def test_partial_ron_amount_marginalizes_scores_but_preserves_exact_event():
     )
 
 
-def test_observed_hand_target_matches_critic_without_future_outcomes():
-    events = [
-        dict(
-            type="start_kyoku",
-            bakaze="S",
-            kyoku=4,
-            oya=0,
-            scores=[28000, 29000, 22000, 19000],
-            kyotaku=2,
-        ),
-        dict(type="reach_accepted", actor=1),
-        dict(type="ryukyoku", deltas=[1500, 1500, -1500, -1500]),
-        dict(type="end_kyoku"),
-        dict(
-            type="start_kyoku",
-            bakaze="S",
-            kyoku=4,
-            oya=0,
-            scores=[29500, 29500, 20500, 17500],
-            kyotaku=3,
-        ),
-        dict(type="hora", deltas=[-8300, 0, 11300, 0]),
-        dict(type="end_kyoku"),
-        dict(type="end_game"),
-    ]
-    states = outcomes.hand_continuation_states(events)
-    numpy.testing.assert_array_equal(
-        states[0, 0],
-        [29500, 29500, 20500, 17500, 1, 0, 2, 3, 0, 7, 0, 3000],
-    )
-    flat = states.reshape(-1, 12)
-    observed = (
-        joint_settlement.post_hand_forecast(
-            scores=tf.constant(flat[:, :4], tf.float32),
-            ranks=tf.constant(flat[:, 4:8], tf.int64),
-            next_dealer=tf.constant(flat[:, 8], tf.int64),
-            next_hand=tf.constant(flat[:, 9], tf.int32),
-            terminal=tf.cast(flat[:, 10], tf.bool),
-            pot=tf.constant(flat[:, 11], tf.float32),
-        )[0]
-        .numpy()
-        .reshape(2, 4)
-    )
+def test_post_hand_forecast_matches_settlement_and_exact_terminal_st3():
+    # A two-tenpai draw repeats the dealer and carries three deposit sticks.
     public = {
         **inputs(),
         "scores": tf.constant([[28000.0, 29000, 22000, 19000]]),
@@ -774,32 +752,38 @@ def test_observed_hand_target_matches_critic_without_future_outcomes():
     predicted = joint_settlement.decode(public)
     support = predicted["joint_support"].numpy()[0]
     row = numpy.flatnonzero((support[:, 1] == 2) & (support[:, 3] == 3))[0]
-    payoffs = joint_settlement.continuation_payoffs(
+    payoffs = joint_settlement.continuation_forecast(
         scores=predicted["joint_scores"],
         ranks=predicted["joint_ranks"],
         support=predicted["joint_support"],
         dealer=public["dealer"],
         hand_number=public["hand_number"],
         pot=public["pot"],
+    )[0]
+    direct, _ = joint_settlement.post_hand_forecast(
+        scores=tf.constant([[29500, 29500, 20500, 17500]], tf.float32),
+        ranks=tf.constant([[1, 0, 2, 3]], tf.int64),
+        next_dealer=tf.constant([0], tf.int64),
+        next_hand=tf.constant([7]),
+        terminal=tf.constant([False]),
+        pot=tf.constant([3000.0]),
     )
-    numpy.testing.assert_allclose(observed[0, 0], payoffs[0, row, 2], atol=1e-5)
     numpy.testing.assert_allclose(
-        joint_settlement.observed_payoffs(tf.constant(flat)),
-        observed.reshape(-1),
-        atol=1e-5,
+        direct[0], payoffs[0, row, 2], rtol=1e-6, atol=1e-5
     )
-    final_scores = [21200, 29500, 31800, 17500]
+
+    final_scores = numpy.array([21200, 29500, 31800, 17500])
+    ranks = numpy.array(outcomes.score_ranks(final_scores, 1)) - 1
+    seats = (numpy.arange(4)[:, None] + numpy.arange(4)) % 4
+    terminal, probability = joint_settlement.post_hand_forecast(
+        scores=tf.constant(final_scores[seats], tf.float32),
+        ranks=tf.constant(ranks[seats], tf.int64),
+        next_dealer=tf.constant([0, 3, 2, 1], tf.int64),
+        next_hand=tf.constant([7] * 4),
+        terminal=tf.constant([True] * 4),
+        pot=tf.zeros(4),
+    )
     numpy.testing.assert_array_equal(
-        observed[1],
-        outcomes.saint3_jade_south(
-            final_scores, outcomes.score_ranks(final_scores, 1)
-        ),
+        terminal, outcomes.saint3_jade_south(final_scores, ranks + 1)
     )
-    events[5]["deltas"] = [0, -8300, 11300, 0]
-    changed = outcomes.hand_continuation_states(events)
-    numpy.testing.assert_array_equal(changed[0], states[0])
-    numpy.testing.assert_array_equal(
-        joint_settlement.observed_payoffs(tf.constant(changed[0])),
-        joint_settlement.observed_payoffs(tf.constant(states[0])),
-    )
-    assert not numpy.array_equal(changed[1], states[1])
+    numpy.testing.assert_array_equal(probability, numpy.eye(4)[ranks])

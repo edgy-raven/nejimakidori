@@ -4,7 +4,7 @@ import numpy
 import riichienv
 
 from log_dataset import _native_collection, features, replay
-from model import actions, outcomes
+from model import actions
 from training import self_play
 
 
@@ -189,9 +189,6 @@ def collect(predict, games, seed):
                 observations[game] = env.step(choices[game])
     for ctx, env in zip(contexts, envs):
         advance(ctx, env.mjai_log_since(ctx["cursor"]), statistics)
-    settlements = [
-        outcomes.hand_continuation_states(env.mjai_log) for env in envs
-    ]
     batch = {
         "features": {
             name: numpy.stack([sample["features"][name] for sample in samples])
@@ -201,11 +198,5 @@ def collect(predict, games, seed):
             name: numpy.asarray([sample[name] for sample in samples])
             for name in ("head", "legal", "chosen", "behavior")
         },
-        "settlement": numpy.asarray(
-            [
-                settlements[sample["game"]][sample["hand"], sample["seat"]]
-                for sample in samples
-            ]
-        ),
     }
     return batch, statistics

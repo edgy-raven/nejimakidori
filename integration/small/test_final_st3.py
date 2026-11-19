@@ -25,8 +25,8 @@ def test_full_scoring_and_hand_label_record_roundtrip():
             "st3-targets", afk.retained_hands(events)[0]
         ).observations()
     )[:8]
-    inputs, labels, _ = records.parse_batch(
-        [records.serialize_observation(row, True) for row in rows]
+    inputs, labels = records.parse_batch(
+        [records.serialize_observation(row) for row in rows]
     )
     assert {
         "final_score",

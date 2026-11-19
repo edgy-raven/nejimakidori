@@ -24,17 +24,6 @@ unsafe extern "C" {
         out: *mut Analysis,
         structural: *mut u64,
     );
-    fn nyanten_tenpai_paths(
-        counts: *const u8,
-        unavailable: *const u8,
-        mask: u64,
-        max_draws: u32,
-        nodes: u32,
-        hands: *mut u8,
-        weights: *mut u64,
-        capacity: u32,
-        size: *mut u32,
-    ) -> bool;
     #[cfg(test)]
     fn nyanten_analyze_modes(
         counts: *const u8,
@@ -48,8 +37,8 @@ unsafe extern "C" {
     );
     #[cfg(test)]
     fn nyanten_tenpai_discards(counts: *const u8, waits: *mut u64);
+    #[cfg(test)]
     fn nyanten_draw(counts: *const u8, mode: u32) -> u64;
-    fn nyanten_yaku_shanten(counts: *const u8, melds: *const u8, count: u32) -> u32;
 }
 
 #[cfg(test)]
@@ -88,6 +77,7 @@ pub fn tenpai_discards(counts: &[u8; 34]) -> [u64; 34] {
     waits
 }
 
+#[cfg(test)]
 pub fn improving(counts: &[u8; 34]) -> (i32, u64) {
     let value = unsafe { nyanten_draw(counts.as_ptr(), 1) };
     ((value >> 34) as i32 - 1, value & ((1u64 << 34) - 1))
@@ -106,75 +96,6 @@ pub fn efficiency(counts: &[u8; 34], unavailable: &[u8; 34]) -> [f64; 3] {
             .sum::<i32>() as f64
             / 80.0,
     ]
-}
-
-pub fn yaku(counts: &[u8; 34], melds: &[riichienv_core::types::Meld]) -> [i32; 3] {
-    let mut fixed = [34u8; 16];
-    for (index, meld) in melds.iter().enumerate() {
-        for (copy, tile) in meld.tiles.iter().enumerate() {
-            fixed[index * 4 + copy] = tile / 4;
-        }
-    }
-    let value =
-        unsafe { nyanten_yaku_shanten(counts.as_ptr(), fixed.as_ptr(), melds.len() as u32) };
-    std::array::from_fn(|index| ((value >> (index * 8)) & 255) as i32 - 1)
-}
-
-/// Positive shortest-route mass for tanyao, flush and outside families.
-/// Incomplete searches select nothing, matching the dataset sampling contract.
-pub fn focus_routes(
-    counts: &[u8; 34],
-    unavailable: &[u8; 34],
-    melds: &[riichienv_core::types::Meld],
-    cuts: u64,
-) -> [bool; 3] {
-    let mut hands = vec![[0u8; 34]; 4096];
-    let mut weights = vec![0u64; 4096];
-    let mut size = 0;
-    let mask = if counts.iter().map(|&n| n as usize).sum::<usize>() % 3 == 1 {
-        1 << 34
-    } else {
-        cuts
-    };
-    let complete = unsafe {
-        nyanten_tenpai_paths(
-            counts.as_ptr(),
-            unavailable.as_ptr(),
-            mask,
-            3,
-            512,
-            hands.as_mut_ptr().cast(),
-            weights.as_mut_ptr(),
-            4096,
-            &mut size,
-        )
-    };
-    if !complete {
-        return [false; 3];
-    }
-    let mut routes = [false; 3];
-    for hand in &mut hands[..size as usize] {
-        // Family-route labels override scorer yaku with inclusive structural
-        // families and intersect all winning waits. Only positive support is
-        // needed for sampling; the path weights are positive by construction.
-        let waits = improving(hand).1;
-        let mut supported = [waits != 0; 3];
-        for tile in (0..34).filter(|tile| waits & (1 << tile) != 0) {
-            hand[tile] += 1;
-            let distances = yaku(hand, melds);
-            for family in 0..3 {
-                supported[family] &= distances[family] == -1;
-            }
-            hand[tile] -= 1;
-        }
-        for family in 0..3 {
-            routes[family] |= supported[family];
-        }
-        if routes.iter().all(|&value| value) {
-            break;
-        }
-    }
-    routes
 }
 
 #[cfg(test)]

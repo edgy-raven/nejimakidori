@@ -10,6 +10,46 @@ from log_dataset import _native_collection, features, replay, shanten
 from model import encoder
 
 
+def test_shared_river_encoding_masks_padding_and_preserves_opponent_order():
+    tf.keras.utils.set_random_seed(941)
+    inputs = {
+        name: tf.zeros((2, *spec["shape"]), tf.as_dtype(spec["dtype"]))
+        for name, spec in _native_collection.INPUTS.items()
+        if name.startswith("river_")
+    }
+    inputs["river_pre_valid"] = tf.tensor_scatter_nd_update(
+        inputs["river_pre_valid"], [[0, 0, 0], [0, 1, 0]], [1, 1]
+    )
+    inputs["river_pre_tile_id"] = tf.tensor_scatter_nd_update(
+        inputs["river_pre_tile_id"], [[0, 0, 0], [0, 1, 0]], [4, 13]
+    )
+    river = encoder.RiverEncoding(dtype="float32")
+    board, local = river(inputs)
+    numpy.testing.assert_array_equal(board[1], 0)
+    numpy.testing.assert_array_equal(local[1], 0)
+    permutation = [2, 0, 1]
+    reordered_board, reordered_local = river(
+        {
+            name: tf.gather(value, permutation, axis=1)
+            for name, value in inputs.items()
+        }
+    )
+    numpy.testing.assert_allclose(
+        reordered_local, tf.gather(local, permutation, axis=1), atol=1e-6
+    )
+    numpy.testing.assert_allclose(
+        tf.reshape(reordered_board, (-1, 3, 128)),
+        tf.gather(tf.reshape(board, (-1, 3, 128)), permutation, axis=1),
+        atol=1e-6,
+    )
+    padded = dict(inputs)
+    padded["river_pre_tile_id"] = tf.where(
+        inputs["river_pre_valid"] > 0, inputs["river_pre_tile_id"], 33
+    )
+    for actual, expected in zip(river(padded), (board, local)):
+        numpy.testing.assert_array_equal(actual, expected)
+
+
 def test_reused_suits_match_float32_gradient_accumulation(monkeypatch):
     tf.keras.utils.set_random_seed(941)
     inputs = {
@@ -68,7 +108,9 @@ def test_reused_suits_match_float32_gradient_accumulation(monkeypatch):
         )
 
 
-def test_retired_analysis_is_skipped_and_cached_inputs_are_ignored(monkeypatch):
+def test_native_inputs_exclude_retired_analysis(
+    monkeypatch,
+):
     events = json.loads(
         pathlib.Path(
             "integration/fixtures/model/pass_speed_round.json"
@@ -83,23 +125,17 @@ def test_retired_analysis_is_skipped_and_cached_inputs_are_ignored(monkeypatch):
 
     monkeypatch.setattr(shanten, "native", rejected_python_analysis)
     packed = features.pack(state, actor, "DISCARD")
-    assert not any(name.startswith("discard_completion_") for name in packed)
-    for name in _native_collection.IGNORED_INPUTS:
-        numpy.testing.assert_array_equal(packed[name], 0)
-        packed[name].fill(1)
-    fresh = features.pack(state, actor, "DISCARD")
-    for name in _native_collection.IGNORED_INPUTS:
-        numpy.testing.assert_array_equal(fresh[name], 0)
-    packed = fresh
-    inputs, board, _, _, _ = encoder.encode_inputs()
+    assert packed.keys() == _native_collection.INPUTS.keys()
+    assert not any(
+        name.startswith("discard_completion_")
+        or (name.startswith("discard_action_") and "_upgrade_" in name)
+        or name.startswith("magnet_")
+        for name in packed
+    )
+    inputs, board, _, _, _, _ = encoder.encode_inputs()
     board_model = tf.keras.Model(inputs, board)
     batch = {name: value[None] for name, value in packed.items()}
     expected = board_model(batch).numpy()
-    # Retired fields in cached records cannot influence the encoder.
-    for name in _native_collection.IGNORED_INPUTS:
-        batch[name] = numpy.ones_like(batch[name])
-    numpy.testing.assert_array_equal(board_model(batch), expected)
-
-    # Exact candidate distances reach the encoder, unlike retired inputs.
+    # Exact candidate distances reach the learned board projection.
     batch["candidate_yaku_shanten"] = batch["candidate_yaku_shanten"] + 1
     assert not numpy.allclose(board_model(batch), expected)

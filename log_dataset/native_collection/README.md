@@ -31,50 +31,60 @@ explicitly converts them. Packed rows contain consecutive fields in declaration
 order, without alignment padding. `training.self_play.FEATURE_DTYPE` exposes NumPy
 views of those rows.
 
+The contract contains 127 tensors, 34,976 scalar elements and 43,368 bytes per
+packed row. The eight `discard_action_{normal,all}_upgrade_` fields
+(`valid`, `type_count`, `tile_count`, `weighted_gain`) are removed. They were
+unpopulated and excluded from learning by zero substitution. Extraction now
+omits them, and the encoder has no retired-input substitution path. Nyanten's
+explicit upgrade-analysis API is independent of the model input contract.
+
+This changes the board projection kernel by removing 296 input rows (151,552
+parameters). Previous checkpoints cannot be loaded strictly into this model.
+An explicit one-time conversion must remove the corresponding kernel rows;
+this input pruning alone leaves other learned tensor shapes unchanged. The
+separate removal of the learned `sakigiri_order` branch also changes actor
+weights; see [model compatibility](../../model/ARCHITECTURE.md#from-a-game-state-to-an-action).
+Re-export fixed reference policies with the 127-input signature, fixing the
+removed inputs to zero when retracing their original computation, and verify
+output parity before training.
+Existing exports keep their original signatures; the training runtime does not
+adapt between contracts. Rebuild datasets from source under the current schema.
+
 Self-shanten fields encode actual shanten + 1: 0 is complete, 1 is tenpai,
 and 2 is one away. Target samplers must account for that offset.
 
-Collector requests also carry `opponent_shanten`, `opponent_ukeire` and
-`opponent_hand_counts` as separate training labels in actor-relative order.
-These match the recorded labels, including red-five categories and known meld
-copies. They never enter public feature rows or inference inputs. Candidate
-replay retains them as int8 arrays for direct belief supervision.
+### Action-conditioned win values
 
-Requests also carry `ron_legal` (int8) and `ron_payments` (int32), each
-`[3, 37]`, for opponents and discard tile codes. These hidden labels remain in the replay schema but do not contribute
-to the training objective. Unknown values are
--1. Own discard/declaration/kan phases use exact simulator scoring, including
-ura when available; response/win requests leave these labels unknown. Ron
-amounts include honba per claimant. Triple ron is an abort, not three
-payments. Liability amounts without ordinary support remain unknown.
+`action_win_value_range` has axes `[295, closed/open, ron/tsumo, min/max]`;
+`action_win_value_valid` marks legal, available completions. Closed dama actions
+are scored without riichi. Declaration actions and actions after accepted
+riichi include it. No-yaku dama has zero ron range and a false ron-valid flag;
+its menzen-tsumo completion can still be legal. One-shanten searches preserve
+the action's declaration state rather than assuming a later riichi.
 
-The expert priors add five decision-time fields:
-`policy_prior_no_threat` (scalar), `riichi_dama_points` (37 discards), and
-`riichi_extra_han` (37 discards), `call_open_points` and
-`call_riichi_points` (each 4 by 37 chi/pon continuations).
-The threat gate reuses the native focused
-sampling detector. Scores use the minimum across available winning-tile
-variants, include visible/red dora, and exclude ura, ippatsu and honba.
-Dama points are normalized to non-dealer ron; a no-yaku completion is zero.
-Riichi and response decisions calculate their respective scoring facts.
-Call values score the post-call hand, with hypothetical closed-riichi value
-computed by concealing chi/pon melds and treating kans as concealed. These
-fields bypass learned encoder projections and affect only expert CE.
+These fields replace `action_value_range` and `action_value_valid`, which assumed
+riichi for every closed hand. Rebuild recorded datasets from source archives and
+collect fresh replay before training with this contract. Old TFRecords are
+rejected because the new required fields are absent; renaming old fields does
+not repair their values. Old exports retain their original input contract and
+must not be paired with this encoder. Warm-start weights require retraining
+and evaluation with the corrected features before publication.
 
-Existing TFRecords require these fields; the reader does not silently fill
-missing values. Amend a corpus into a separate directory with:
+The retired fixed-reference scoring tensors are absent. The selected fixed
+reference policy does not consume them, and they never entered learned encoder
+projections. Declared-riichi candidate ranges are computed explicitly for legal
+riichi actions; other candidate evaluations no longer calculate an unused
+forced-riichi scoring bank. Removing these tensors changes the input signature
+and packed layout but no learned tensor shape.
 
-```sh
-python -m log_dataset.amend_riichi_prior \
-  --source /path/to/original/data --output /path/to/amended/data --workers 8
-```
+Collector requests contain public feature rows, legal actions and trajectory
+indices. MMD supervises observed payments reconstructed from completed logs;
+the native collector does not calculate unused hidden-hand or counterfactual
+ron labels. Expert restoration labels are generated by recorded replay.
 
-The amendment uses stored candidate hands and the existing threat metadata,
-calls the same native scorer, and preserves every original field. A completed
-full amendment updates the dataset schema and shard byte counts. Use the
-amended corpus only after `amendment.json` reports `complete: true`.
-`--replace` may regenerate an inactive derived cache from the original corpus;
-it replaces shards atomically and never permits identical source/output paths.
+The former prior-only scoring fields and `policy_prior_values` binding are
+removed. Their dama/extra-han and hypothetical closed-hand scoring branches had
+no model consumer. Legal action completion ranges retain their scoring contract.
 
 | Source | Responsibility |
 | --- | --- |
@@ -85,9 +95,9 @@ it replaces shards atomically and never permits identical source/output paths.
 | [cpp/scoring.cpp](cpp/scoring.cpp) | Completion search, with scoring delegated to RiichiEnv. |
 | [src/lib.rs](src/lib.rs) | Python bindings. |
 
-Opponent concealed hands are excluded from feature snapshots. Sampling metadata
-is optional: `FeatureReplay.pack(..., include_focus=True)` adds category,
-late-placement and score-gap flags for dataset construction.
+Opponent concealed hands are excluded from feature snapshots. Feature packing
+returns only the model input contract. Historical dataset focus metadata and
+its native sampling analysis are removed.
 
 ## Collector interface
 
@@ -105,11 +115,17 @@ worker results contain actions, behavior probabilities and targets.
 `snapshot(decision)` captures a pending decision between `next()` and
 `submit()`, including every simultaneous request in that game. The returned
 root exposes `decision` (its local request offset) and
-`fork(copies, seed, shuffle_remaining=True)`. Forks retain public history,
-concealed hands, pending actions and prefix logs. They shuffle unrevealed wall
+`fork(copies, seed, shuffle_remaining=True, *, until_hand_end=False)`.
+With `until_hand_end=True`, each branch stops after its current hand settles.
+The log retains the following hand's start as a completion boundary, or the
+real `end_game` when the match ends. Collection reconstructs payments only
+for completed hands; the pending following hand contributes no training rows.
+Forks retain public history, concealed hands, pending actions and prefix logs. They shuffle unrevealed wall
 tiles without moving revealed dora indicators, and seed future hands from the
-branch seed. With shuffling disabled, the initial engine state is identical;
-subsequent collector randomness still uses the supplied seed. Repeated forks
+branch seed. Duplicate-wall forks apply the same physical-tile permutation to
+each player's remaining queue, preserving queue order, counterclockwise
+borrowing and the shared rinshan tiles. With shuffling disabled, the initial
+engine state is identical; subsequent collector randomness still uses the supplied seed. Repeated forks
 with the same seed are reproducible. The parent collector is unchanged.
 These continuations condition on the captured hidden hands rather than drawing
 an information-set posterior. Python collection emits only suffix decisions.
@@ -117,6 +133,17 @@ Hand counters count completed hands, including the initial partial hand of a
 fork. Riichi turn totals include declarations before the root in that hand,
 matching the retained riichi flags and completed-hand denominators. Fork
 statistics describe root-conditioned continuations, not ordinary match rates.
+
+`NativeCollector.from_match(events_json, seed, duplicate)` recreates a seeded
+evaluation trajectory. Call `next()` to inspect its pending decisions and
+`submit_recorded()` to advance the recorded actions. Replay verifies every
+generated event against the supplied log, including discard origin, consumed
+tiles and settlements; incompatible seeds or simulator histories fail.
+Triple-ron abortive draws (`sanchaho`) reconstruct all three legal ron claims:
+the log records one draw event rather than three individual wins. Unobserved
+losing claims are replayed as passes only to reconstruct the public trajectory;
+they are not action labels. Snapshots fork out of replay mode,
+and simultaneous claims in counterfactual branches follow the supplied policy.
 
 Action heads and dimensions are defined in
 [model/actions.py](../../model/actions.py). SavedModel exports expose their

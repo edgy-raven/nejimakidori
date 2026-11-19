@@ -7,6 +7,7 @@ import time
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import _native_collection, scoring, shanten
 from model import actions, outcomes
 
@@ -46,8 +47,7 @@ class Predictor:
             raise ValueError("SavedModel inputs do not match feature producer")
         self.output_specs = self.function.structured_outputs
         expected = {
-            **actions.ACTOR_OUTPUTS,
-            "round_placement_logits": [4, 4],
+            **actions.SERVING_ACTOR_OUTPUTS,
             "terminal_payment_probabilities": [
                 4,
                 4,
@@ -59,14 +59,8 @@ class Predictor:
             "review_outcome_probabilities": [7],
             "settlement_mean": [5],
             "settlement_variance": [5],
-            "critic_projected_st3": [],
             "critic_expected_points": [4],
             "critic_action_indices": [2],
-            "critic_payment_probabilities": [
-                len(scoring.CELLS),
-                len(outcomes.PAYMENT_VALUES) + 4,
-            ],
-            "critic_structural_wait_probabilities": [3],
         }
         if self.output_specs.keys() != expected.keys():
             raise ValueError("SavedModel must include joint actor and critic")
@@ -146,18 +140,8 @@ class Predictor:
         for name, logits in outputs.items():
             if not name.endswith("logits"):
                 continue
-            if name in {
-                "opponent_wait_logits",
-                "opponent_ukeire_logits",
-                "opponent_ukeire_by_shanten_logits",
-                "round_completion_yaku_logits",
-                "opponent_tenpai_logits",
-            }:
-                values = tf.math.sigmoid(logits)
-            else:
-                values = tf.nn.softmax(logits, -1)
             probabilities[name.replace("logits", "probabilities")] = (
-                values.numpy()
+                tf.nn.softmax(logits, -1).numpy()
             )
         probabilities["terminal_payment_probabilities"] = outputs[
             "terminal_payment_probabilities"
@@ -169,29 +153,8 @@ class Predictor:
             "review_outcome_probabilities"
         ].numpy()
         payment_values = outputs["payment_values"].numpy()
-        payment_means = numpy.sum(
-            probabilities["terminal_payment_probabilities"]
-            * payment_values[:, None, None, None],
-            axis=-1,
-        )
-        payment_variances = numpy.maximum(
-            0,
-            numpy.sum(
-                probabilities["terminal_payment_probabilities"]
-                * payment_values[:, None, None, None] ** 2,
-                axis=-1,
-            )
-            - payment_means**2,
-        )
-        hand_counts = probabilities[
-            "opponent_hand_count_probabilities"
-        ] @ numpy.arange(5)
         action_points = outputs["critic_expected_points"].numpy()
-        projected_st3 = outputs["critic_projected_st3"].numpy()
         selected = outputs["critic_action_indices"].numpy()
-        structural_waits = outputs[
-            "critic_structural_wait_probabilities"
-        ].numpy()
         settlement_mean = outputs["settlement_mean"].numpy()
         settlement_variance = outputs["settlement_variance"].numpy()
         predictions = []
@@ -200,22 +163,10 @@ class Predictor:
                 name: values[index].tolist()
                 for name, values in probabilities.items()
             }
-            mean = payment_means[index].sum(axis=0)
-            variance = numpy.maximum(
-                (payment_variances[index] + payment_means[index] ** 2).sum(
-                    axis=0
-                )
-                - mean**2,
-                0,
-            )
             row["action_values"] = [
                 {
                     "action": int(selected[action, 1]),
                     "expected_points": action_points[action].tolist(),
-                    "projected_st3": float(projected_st3[action]),
-                    "structural_wait_probabilities": structural_waits[
-                        action
-                    ].tolist(),
                 }
                 for action in numpy.flatnonzero(selected[:, 0] == index)
             ]
@@ -226,19 +177,12 @@ class Predictor:
                 "types": list(outcomes.PAYMENT_TYPES),
                 "probabilities": row["terminal_payment_probabilities"],
                 "values": payment_values[index].tolist(),
-                "payment_mean_by_type": payment_means[index].tolist(),
-                "payment_stddev_by_type": numpy.sqrt(
-                    payment_variances[index]
-                ).tolist(),
-                "payment_mean": mean.tolist(),
-                "payment_stddev": numpy.sqrt(variance).tolist(),
                 "settlement_mean": settlement_mean[index].tolist(),
                 "settlement_stddev": numpy.sqrt(
                     settlement_variance[index]
                 ).tolist(),
                 "uncertainty": "joint hand settlement",
             }
-            row["opponent_hand_expected_counts"] = hand_counts[index].tolist()
             predictions.append(row)
         return Inference(
             predictions,

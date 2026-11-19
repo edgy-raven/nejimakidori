@@ -35,7 +35,6 @@ starting each shard, in addition to space for the corpus itself.
 | `--archives DIR` | Read existing archives. |
 | `--databases DIR` | Enrich ranks from historical Tenhou databases. Without `--archives`, download the pinned Houou archives first. |
 | `--extra-archives DIR` | Add another enriched source; repeat for multiple sources. |
-| `--own-bots ID ...` | Import games against the configured [RiichiLab expert players](riichilab.py). |
 | `--limit-games N` | Build a small sample before a full corpus. |
 | `--workers N` | Set the number of CPU record builders. |
 
@@ -65,7 +64,9 @@ prevents two builds from using the same directory.
 | Feature tensors and simulator interface | [Native engine](native_collection/README.md) |
 | Model prediction meanings | [Architecture](../model/ARCHITECTURE.md) |
 
-## Greedy distill policy teacher labels
+## Structural restoration
 
-[Fixed hybrid imitation](../training/HYBRID.md) adds reusable greedy distill policy
-actions alongside existing expert records without rewriting the corpus.
+The [finite reader](training_data.py) selects training partitions, and the
+[label decoder](../training/restoration.py) recovers observed legal policy
+choices for supervised restoration. Match/root
+MMD uses observed outcomes without treating Mortal actions as imitation labels.

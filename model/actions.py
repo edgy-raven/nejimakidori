@@ -1,10 +1,10 @@
 """Legal actions, physical-copy selection and model action indexing."""
 
 import numpy
+import riichienv
+
 from log_dataset import features
 from model import outcomes
-
-import riichienv
 
 TRAIN_POLICY_HEADS = (
     "discard_policy_logits",
@@ -18,7 +18,6 @@ TRAIN_POLICY_HEADS = (
 ACTOR_OUTPUTS = {
     "win_decision_logits": [2],
     "opponent_shanten_logits": [3, 4],
-    "opponent_tenpai_logits": [3],
     "opponent_ukeire_by_shanten_logits": [3, 4, 34],
     "opponent_ukeire_logits": [3, 34],
     "opponent_wait_logits": [3, 34],
@@ -29,10 +28,22 @@ ACTOR_OUTPUTS = {
     "riichi_policy_logits": [74],
     "response_policy_logits": [150],
     "riichi_action_logits": [2],
-    "tenpai_decision_logits": [3],
     "response_action_logits": [4],
     "chi_pattern_logits": [3],
     "kan_action_logits": [35],
+}
+
+
+# Public serving tensors; other actor outputs remain internal training/context.
+SERVING_ACTOR_OUTPUTS = {
+    name: ACTOR_OUTPUTS[name]
+    for name in (
+        *TRAIN_POLICY_HEADS,
+        "opponent_shanten_logits",
+        "riichi_action_logits",
+        "response_action_logits",
+        "chi_pattern_logits",
+    )
 }
 
 
@@ -401,16 +412,4 @@ def discard_decisions(inputs, selected):
         ((phase == 0) & (selected[:, 1] < 37))
         | ((phase == 3) & (selected[:, 1] >= 37) & (selected[:, 1] < 111))
         | ((phase == 1) & (selected[:, 1] >= 112) & (selected[:, 1] < 260))
-    )
-
-
-def immediate_decisions(inputs, selected):
-    """Discard ron and robbery of an actor's concealed/added kan."""
-    import tensorflow as tf
-
-    phase = tf.gather(inputs["decision_phase"], selected[:, 0])
-    # A call's planned discard is contingent on priority resolution, not
-    # the next guaranteed transition of the attempted action.
-    return (discard_decisions(inputs, selected) & (phase != 1)) | (
-        (phase == 2) & (selected[:, 1] >= 261)
     )

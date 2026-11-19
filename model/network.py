@@ -1,7 +1,7 @@
 """Assembly of the shared actor, beliefs and payment critic."""
 
 import tensorflow as tf
-from model import actions
+
 from model import actor as actor_layers
 from model import beliefs, critic, encoder, joint_settlement, payment_scoring
 
@@ -12,7 +12,9 @@ class JointPolicyPayment(tf.keras.Model):
     def __init__(self):
         super().__init__(autocast=False)
         tf.keras.mixed_precision.set_global_policy("mixed_bfloat16")
-        inputs, board, candidates, selected, structure = encoder.encode_inputs()
+        inputs, board, candidates, selected, structure, critic_rivers = (
+            encoder.encode_inputs()
+        )
         self.beliefs = beliefs.OpponentBeliefs(
             encoder=tf.keras.Model(
                 inputs, board, name="belief_encoder", autocast=False
@@ -29,6 +31,7 @@ class JointPolicyPayment(tf.keras.Model):
                 board=board,
                 selected=selected,
                 structure=structure,
+                critic_rivers=critic_rivers,
                 **belief_logits,
                 belief_context=tf.keras.layers.Concatenate(dtype="float32")(
                     [
@@ -38,22 +41,18 @@ class JointPolicyPayment(tf.keras.Model):
                         for name in beliefs.BELIEF_HEADS
                     ]
                 ),
-                belief_wait_probability=tf.keras.layers.Multiply(
-                    dtype="float32"
-                )(
-                    [
-                        belief_probability[beliefs.BELIEF_HEADS[0]][
-                            ..., 0, None
-                        ],
-                        belief_probability[beliefs.BELIEF_HEADS[1]][..., 0, :],
-                    ]
-                ),
             ),
         )
         tf.keras.mixed_precision.set_global_policy("float32")
         self.context = critic.HandContext(dtype="float32")
         self.public = critic.PublicContext(dtype="float32")
-        self.critic = critic.PaymentCritic(belief_offset=candidates.shape[-1])
+        self.player_context = critic.PlayerContext(dtype="float32")
+        self.critic = critic.PaymentCritic(
+            belief_offset=candidates.shape[-1],
+            player_width=self.player_context(
+                [inputs, critic_rivers, selected]
+            ).shape[-1],
+        )
 
         inputs = self.encoder.input
         encoded = self.encoder.output
@@ -75,9 +74,7 @@ class JointPolicyPayment(tf.keras.Model):
                 context=context,
             )
         )
-        outputs.update(
-            actor_layers.PolicySummaries(dtype="float32")([outputs, inputs])
-        )
+        outputs.update(actor_layers.PolicySummaries(dtype="float32")(outputs))
         outputs["constraint_loss"] = tf.keras.layers.Add(dtype="float32")(
             [
                 encoded["belief_constraint_loss"],
@@ -111,9 +108,6 @@ class JointPolicyPayment(tf.keras.Model):
         )
         self.critic.joint_distributions = tf.function(
             self.critic.joint_distributions, jit_compile=True
-        )
-        self.critic.projected_mean_downside = tf.function(
-            self.critic.projected_mean_downside, jit_compile=True
         )
         self.critic.chunk_statistics = tf.function(
             self.critic.chunk_statistics, jit_compile=True
@@ -150,14 +144,6 @@ class JointPolicyPayment(tf.keras.Model):
             ],
             axis=-1,
         )
-        tiles = tf.cast(encoded["structure"][:, -1], tf.int32)
-        base = tf.where(
-            tiles == 37, 0, tf.where(tiles < 34, tiles, 4 + 9 * (tiles - 34))
-        )
-        encoded["structural_wait"] = tf.gather_nd(
-            tf.transpose(encoded["belief_wait_probability"], [0, 2, 1]),
-            tf.stack([encoded["selected"][:, 0], base], axis=1),
-        )
         return encoded, tf.concat(
             [
                 state,
@@ -175,6 +161,16 @@ class JointPolicyPayment(tf.keras.Model):
                         encoded["selected"][:, 0],
                     ),
                     (-1, 4 * 2 * len(payment_scoring.SCORES)),
+                ),
+                tf.reshape(
+                    self.player_context(
+                        [
+                            features,
+                            encoded["critic_rivers"],
+                            encoded["selected"],
+                        ]
+                    ),
+                    (-1, 4 * self.critic.player_width),
                 ),
             ],
             axis=-1,

@@ -40,15 +40,12 @@ pub struct Context {
 
 #[derive(Clone, Default)]
 pub struct Ranges {
-    // Flattened [closed riichi / open][ron / tsumo][minimum / maximum].
+    // Flattened [closed / open][ron / tsumo][minimum / maximum].
     pub values: [f64; 8],
     pub valid: [u8; 4],
     // Open completions lacking yaku, separately for ron and tsumo.
     pub restricted: [u8; 2],
     pub eligible: bool,
-    pub dama_points: i32,
-    pub extra_han: u8,
-    pub riichi_points: i32,
 }
 pub fn ready_ranges(
     tiles: Vec<u8>,
@@ -68,79 +65,9 @@ pub fn ready_ranges(
         eligible: true,
         ..Ranges::default()
     };
-    // calc adds the winning tile to a thirteen-tile hand, including its red
-    // bonus. Normalize the hand and fixed melds once for all winning tiles.
-    let closed = (availability.prior != 0 && open).then(|| {
-        let mut concealed = tiles.clone();
-        let mut kans = vec![];
-        for meld in &melds {
-            if meld.tiles.len() == 3 {
-                concealed.extend(&meld.tiles);
-            } else {
-                kans.push(Meld::new(
-                    riichienv_core::types::MeldType::Ankan,
-                    meld.tiles.clone(),
-                    false,
-                    0,
-                    None,
-                ));
-            }
-        }
-        HandEvaluator::new(concealed, kans)
-    });
     let evaluator = HandEvaluator::new(tiles, melds);
-    let mut prior_seen = false;
     for base in (0u8..34).filter(|base| waits & (1u64 << base) != 0) {
         for (winning_tile, _) in availability.available_tiles(base) {
-            if availability.prior != 0 {
-                let conditions = Conditions {
-                    player_wind: Wind::from(ctx.player_wind),
-                    round_wind: Wind::from(ctx.round_wind),
-                    ..Conditions::default()
-                };
-                let dama = normalize_score(
-                    evaluator.calc_with_indicators(
-                        winning_tile,
-                        &ctx.dora,
-                        &[],
-                        Some(conditions.clone()),
-                    ),
-                    false,
-                    false,
-                );
-                let declared = normalize_score(
-                    closed.as_ref().unwrap_or(&evaluator).calc_with_indicators(
-                        winning_tile,
-                        &ctx.dora,
-                        &[],
-                        Some(Conditions {
-                            riichi: true,
-                            ..conditions
-                        }),
-                    ),
-                    false,
-                    false,
-                );
-                let points = [&dama, &declared].map(|value| {
-                    if value.is_win {
-                        score::calculate_score(value.han as u8, value.fu as u8, false, false, 0, 4)
-                            .pay_ron as i32
-                    } else {
-                        0
-                    }
-                });
-                let extra = declared.han.saturating_sub(1).min(127) as u8;
-                if prior_seen {
-                    result.dama_points = result.dama_points.min(points[0]);
-                    result.riichi_points = result.riichi_points.min(points[1]);
-                    result.extra_han = result.extra_han.min(extra);
-                } else {
-                    result.dama_points = points[0];
-                    result.riichi_points = points[1];
-                    result.extra_han = extra;
-                    prior_seen = true;
-                }
-            }
             for (win_kind, is_tsumo) in [false, true].into_iter().enumerate() {
                 if !open && !is_tsumo && furiten {
                     continue;
@@ -150,7 +77,7 @@ pub fn ready_ranges(
                     &ctx.dora,
                     &[],
                     Some(Conditions {
-                        riichi: !open,
+                        riichi: !open && availability.riichi != 0,
                         tsumo: is_tsumo,
                         player_wind: Wind::from(ctx.player_wind),
                         round_wind: Wind::from(ctx.round_wind),
@@ -193,55 +120,6 @@ pub fn ready_ranges(
         }
     }
     result
-}
-
-#[pyo3::pyfunction]
-pub fn policy_prior_values(
-    tiles: Vec<u8>,
-    melds: Vec<(u8, Vec<u8>)>,
-    dora: Vec<u8>,
-    unavailable: [u8; 34],
-    unavailable_red: [i32; 3],
-    player_wind: u8,
-    round_wind: u8,
-) -> (i32, u8, i32) {
-    use riichienv_core::types::MeldType;
-    let melds: Vec<_> = melds
-        .into_iter()
-        .map(|(kind, tiles)| {
-            Meld::new(
-                match kind {
-                    0 => MeldType::Chi,
-                    1 => MeldType::Pon,
-                    2 => MeldType::Daiminkan,
-                    3 => MeldType::Ankan,
-                    4 => MeldType::Kakan,
-                    _ => unreachable!(),
-                },
-                tiles,
-                kind != 3,
-                0,
-                None,
-            )
-        })
-        .collect();
-    let waits = HandEvaluator::new(tiles.clone(), melds.clone())
-        .get_waits_u8()
-        .iter()
-        .fold(0u64, |mask, &tile| mask | (1u64 << tile));
-    let ctx = Context {
-        own_discards: vec![],
-        missed_agari: false,
-        unavailable,
-        unavailable_red,
-        dora,
-        player_wind,
-        round_wind,
-    };
-    let mut availability = crate::features::RangeContext::new(&ctx);
-    availability.prior = 1;
-    let result = ready_ranges(tiles, melds, &ctx, &availability, None, waits);
-    (result.dama_points, result.extra_han, result.riichi_points)
 }
 
 // The label pipeline supplies complete concealed hands, with melds separate.
@@ -409,7 +287,7 @@ mod tests {
         let values = ranges(&tiles, &[], &ctx, None);
         assert!(values.eligible);
         assert_eq!(values.valid, [1, 1, 0, 0]);
-        assert_eq!(values.values, [1300., 3900., 2000., 5200., 0., 0., 0., 0.]);
+        assert_eq!(values.values, [1000., 2000., 1100., 2700., 0., 0., 0., 0.]);
         // Exhausted 5s still makes later 5s/8s waits furiten. Retain it in
         // the shared structural mask even though it cannot be drawn.
         let mut exhausted = ctx.clone();
@@ -418,7 +296,7 @@ mod tests {
         exhausted.own_discards.push(22);
         assert_eq!(
             ranges(&tiles, &[], &exhausted, None).values,
-            [1300., 2600., 2000., 4000., 0., 0., 0., 0.],
+            [1300., 1300., 1100., 2000., 0., 0., 0., 0.],
         );
         tiles[10] = 96;
         ctx.unavailable[27] -= 1;
@@ -452,12 +330,12 @@ mod tests {
             round_wind: 0,
         };
         let values = ranges(&tiles, &[], &ctx, None);
-        assert_eq!(values.values, [2000., 2000., 2700., 2700., 0., 0., 0., 0.]);
+        assert_eq!(values.values, [1000., 1000., 1500., 1500., 0., 0., 0., 0.]);
         ctx.unavailable[22] = 4;
         ctx.own_discards.push(22);
         let values = ranges(&tiles, &[], &ctx, None);
         assert_eq!(values.valid, [0, 1, 0, 0]);
-        assert_eq!(&values.values[..4], &[0., 0., 2700., 2700.]);
+        assert_eq!(&values.values[..4], &[0., 0., 1500., 1500.]);
         ctx.unavailable[25] = 4;
         assert_eq!(ranges(&tiles, &[], &ctx, None).valid, [0; 4]);
     }

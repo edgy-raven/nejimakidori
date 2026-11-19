@@ -3,9 +3,8 @@
 import math
 
 import tensorflow as tf
-from model import actions, beliefs, encoder, losses, payment_scoring
 
-POLICY_ENTROPY_WEIGHT = 0.01
+from model import actions, beliefs, encoder, losses, payment_scoring
 
 
 @tf.keras.utils.register_keras_serializable(package="nejimakidori")
@@ -107,35 +106,14 @@ class PolicyPrior(tf.keras.layers.Layer):
 @tf.keras.utils.register_keras_serializable(package="nejimakidori")
 class PolicySummaries(tf.keras.layers.Layer):
     def call(self, values):
-        outputs, inputs = values
+        outputs = values
         riichi = tf.reshape(outputs["riichi_policy_logits"], (-1, 2, 37))
         response = outputs["response_policy_logits"]
         chii = tf.reshape(response[:, 1:112], (-1, 3, 37))
         pon = tf.reshape(response[:, 112:149], (-1, 1, 37))
-        # Discard and riichi decisions have independently trained policies.
-        # Use the active policy for the no-declaration branch.
-        without = tf.where(
-            (inputs["decision_phase"] == 3)[:, None],
-            riichi[:, 0],
-            outputs["discard_policy_logits"],
-        )
-        ready = inputs["discard_action_all_shanten"] == 1
-        decision = tf.stack(
-            [
-                tf.reduce_logsumexp(tf.where(ready, without, -1e9), -1),
-                tf.reduce_logsumexp(tf.where(~ready, without, -1e9), -1),
-                tf.where(
-                    inputs["decision_phase"] == 3,
-                    tf.reduce_logsumexp(riichi[:, 1], -1),
-                    -1e9,
-                ),
-            ],
-            axis=-1,
-        )
         return {
             **beliefs.opponent_summaries(outputs),
             "riichi_action_logits": tf.reduce_logsumexp(riichi, -1),
-            "tenpai_decision_logits": decision,
             "response_action_logits": tf.stack(
                 [
                     response[:, 0],
@@ -159,18 +137,12 @@ def build_policy_heads(inputs, hidden, candidates, selected, context):
     ron = tf.keras.layers.Dense(3, dtype="float32", name="candidate_ron")(
         candidates
     )
-    order = tf.keras.layers.Dense(1, dtype="float32", name="sakigiri_order")(
-        candidates
-    )
     outputs = {
         "route_affinity_logits": route,
         "route_constraint_loss": losses.ConstraintLoss(
             binary=True, dtype="float32"
         )([raw_route, route, selected[:, 0]]),
         "candidate_ron_logits": ron,
-        "sakigiri_scores": UnpackCandidates()([order, selected, hidden])[
-            :, :, 0
-        ],
     }
     final = FinalCandidates()(
         [
@@ -179,7 +151,6 @@ def build_policy_heads(inputs, hidden, candidates, selected, context):
                     candidates,
                     tf.keras.layers.Activation("sigmoid")(route),
                     ron,
-                    order,
                 ]
             ),
             context,
@@ -495,8 +466,8 @@ class ResponseKan(tf.keras.layers.Layer):
         )
 
 
-def policy_nll(labels, logits):
-    losses = tf.add_n(
+def policy_loss(labels, logits, mean=losses.mean_valid):
+    nll = tf.add_n(
         [
             tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=tf.maximum(tf.cast(labels[name], tf.int32), 0),
@@ -506,87 +477,8 @@ def policy_nll(labels, logits):
             for name in actions.TRAIN_POLICY_HEADS
         ]
     )
-    return losses, tf.reduce_any(
-        tf.stack([labels[name] >= 0 for name in actions.TRAIN_POLICY_HEADS]),
-        axis=0,
-    )
-
-
-def policy_loss(labels, logits, mean=losses.mean_valid):
-    return mean(*policy_nll(labels, logits))
-
-
-def weighted_imitation_terms(nll, advantages, eligible, mean=losses.mean_valid):
-    """Detached, capped positive regression weights on replayed actions."""
-    log_weights = tf.minimum(tf.cast(advantages, tf.float32), tf.math.log(20.0))
-    log_weight_offset = tf.reduce_max(tf.where(eligible, log_weights, -1e30))
-    replica = tf.distribute.get_replica_context()
-    if replica is not None and replica.num_replicas_in_sync > 1:
-        log_weight_offset = tf.reduce_max(
-            replica.all_gather(log_weight_offset[None], axis=0)
-        )
-    # A shared scale cancels from weighted CE and ESS. It prevents tiny
-    # negative-advantage weights from underflowing, including their squares.
-    weights = tf.stop_gradient(
-        tf.exp(tf.where(eligible, log_weights - log_weight_offset, -1e30))
-    )
-    mean_weight = mean(weights, eligible)
-    # ESS / N = E[w]^2 / E[w^2]; the common scale cancels.
-    return {
-        "loss": mean(nll, eligible, weights),
-        "weight_mean": mean_weight * tf.exp(log_weight_offset),
-        "weight_clipped_fraction": mean(
-            tf.cast(advantages >= tf.math.log(20.0), tf.float32),
-            eligible,
-        ),
-        "effective_sample_fraction": tf.math.divide_no_nan(
-            tf.square(mean_weight), mean(tf.square(weights), eligible)
-        ),
-    }
-
-
-def action_entropy(log_probability, head):
-    """Explore continuations without rewarding their parent for having more.
-
-    H(branch) + stop_gradient(P(branch)) * H(continuation | branch).
-    The value remains joint entropy, but conditional uncertainty cannot push
-    probability toward a call or declaration with more follow-up choices.
-    """
-    if head == "response_policy_logits":
-        sizes = (1, 111, 37, 1)
-    elif head == "riichi_policy_logits":
-        sizes = (37, 37)
-    else:
-        return -tf.reduce_sum(
-            tf.exp(log_probability) * log_probability, axis=-1
-        )
-    entropies = []
-    for branch in tf.split(log_probability[:, : sum(sizes)], sizes, axis=-1):
-        log_mass = tf.reduce_logsumexp(branch, axis=-1)
-        mass = tf.exp(log_mass)
-        # Normalize logits directly; dividing by tiny branch mass can give
-        # nonfinite gradients even when the entropy itself is finite.
-        conditional_log_probability = tf.nn.log_softmax(branch, axis=-1)
-        conditional = -tf.reduce_sum(
-            tf.exp(conditional_log_probability) * conditional_log_probability,
-            axis=-1,
-        )
-        entropies.append(
-            -mass * log_mass + tf.stop_gradient(mass) * conditional
-        )
-    return tf.add_n(entropies)
-
-
-def policy_entropy(labels, logits, mean=losses.mean_valid):
-    entropies = []
-    for name in actions.TRAIN_POLICY_HEADS:
-        log_probability = tf.nn.log_softmax(
-            tf.cast(logits[name], tf.float32), axis=-1
-        )
-        entropy = action_entropy(log_probability, name)
-        entropies.append(tf.where(labels[name] >= 0, entropy, 0.0))
     return mean(
-        tf.add_n(entropies),
+        nll,
         tf.reduce_any(
             tf.stack(
                 [labels[name] >= 0 for name in actions.TRAIN_POLICY_HEADS]
@@ -642,83 +534,6 @@ def greedy_choices(log_probability, heads):
     return chosen
 
 
-def riichi_prior(inputs):
-    """Soft first-riichi preference; accepted dama cases stay neutral."""
-    waits = inputs["discard_action_all_ukeire_count"]
-    points = inputs["riichi_dama_points"]
-    turns = inputs["opponent_discard_count"][:, :1]
-    good = waits >= 6
-    valuable_early = ((turns < 6) & good) | (
-        (turns >= 6) & (turns < 12) & (waits >= 10)
-    )
-    return (
-        tf.cast(inputs["riichi_discard_legal_mask"], tf.bool)
-        & tf.cast(inputs["policy_prior_no_threat"][:, None], tf.bool)
-        & ~tf.reduce_any(inputs["riichi_state"] > 0, axis=1)[:, None]
-        & (good | (inputs["riichi_extra_han"] >= 1))
-        & ~((points >= 5200) & ~good)
-        & ((points < 7700) | valuable_early)
-        & (points < 12000)
-    )
-
-
-def expert_prior(inputs, heads):
-    """Positive-only riichi and chi/pon preferences, never pass/dama labels."""
-    opened = tf.reduce_any(
-        (inputs["meld_valid"][:, 0] > 0) & (inputs["meld_type"][:, 0] != 3),
-        axis=1,
-    )
-    distance = tf.concat(
-        [inputs["chi_discard_shanten"], inputs["pon_discard_shanten"]], axis=1
-    )
-    legal = (
-        tf.concat(
-            [inputs["chi_discard_legal"], inputs["pon_discard_legal"]], axis=1
-        )
-        > 0
-    )
-    tenpai = (
-        (distance == 1)
-        & (inputs["call_open_points"] > 0)
-        & (
-            (inputs["call_open_points"] >= 3900)
-            | (inputs["call_riichi_points"] < 7700)
-        )
-    )
-    advance = distance < inputs["normal_self_shanten"][:, None, None]
-    calls = (
-        legal
-        & tf.where(opened[:, None, None], advance, tenpai)
-        & tf.cast(inputs["policy_prior_no_threat"][:, None, None], tf.bool)
-    )
-    return (
-        tf.pad(riichi_prior(inputs), [[0, 0], [37, 76]]) & (heads == 1)[:, None]
-    ) | (
-        tf.pad(tf.reshape(calls, [-1, 148]), [[0, 0], [1, 1]])
-        & (heads == 2)[:, None]
-    )
-
-
-def expert_prior_loss(current, preference, heads, mean=losses.mean_valid):
-    """Encourage eligible mass, with fivefold riichi pressure, over all rows."""
-    log_mass = tf.reduce_logsumexp(tf.where(preference, current, -1e9), axis=1)
-    return mean(
-        tf.where(tf.reduce_any(preference, axis=1), -log_mass, 0.0)
-        * tf.where(heads == 1, 5.0, 1.0),
-        tf.ones(tf.shape(current)[0]),
-    )
-
-
-def policy_kl(reference, current, mean=losses.mean_valid, *, reverse=False):
-    """Unmodified fixed-reference KL; expert encouragement is separate."""
-    reference = tf.stop_gradient(reference)
-    first, second = (current, reference) if reverse else (reference, current)
-    return mean(
-        tf.reduce_sum(tf.exp(first) * (first - second), axis=-1),
-        tf.ones(tf.shape(current)[0]),
-    )
-
-
 def offline_loss_terms(inputs, outputs, mean=losses.mean_valid):
     metrics = {}
     metrics["policy_loss"] = policy_loss(inputs[1], outputs, mean=mean)
@@ -755,92 +570,7 @@ def offline_loss_terms(inputs, outputs, mean=losses.mean_valid):
         ),
         inputs[1]["round_completion_score"] >= 0,
     )
-    metrics["policy_entropy"] = policy_entropy(inputs[1], outputs, mean=mean)
-    for name in actions.TRAIN_POLICY_HEADS:
-        prefix = name.removesuffix("_logits")
-        valid = inputs[1][name] >= 0
-        ranked_actions = tf.math.top_k(
-            outputs[name], k=min(3, actions.ACTOR_OUTPUTS[name][0])
-        ).indices
-        recorded_action = tf.cast(inputs[1][name], tf.int32)
-        matches = ranked_actions == recorded_action[:, None]
-        nll = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            labels=tf.maximum(tf.cast(inputs[1][name], tf.int32), 0),
-            logits=outputs[name],
-        )
-        # Counts make validation aggregation exact even when
-        # the frequencies of calls and kan differ between batches/replicas.
-        metrics[prefix + "_count"] = tf.reduce_sum(tf.cast(valid, tf.float32))
-        metrics[prefix + "_correct"] = tf.reduce_sum(
-            tf.cast(valid & matches[:, 0], tf.float32)
-        )
-        metrics[prefix + "_top3_correct"] = tf.reduce_sum(
-            tf.cast(valid & tf.reduce_any(matches, axis=-1), tf.float32)
-        )
-        metrics[prefix + "_nll_sum"] = tf.reduce_sum(tf.where(valid, nll, 0.0))
-        if name == "discard_policy_logits":
-            drawn = tf.where(
-                inputs[0]["current_draw_is_red"] > 0,
-                34 + tf.cast(inputs[0]["current_draw_tile_id"], tf.int32) // 9,
-                tf.cast(inputs[0]["current_draw_tile_id"], tf.int32),
-            )
-            selected_draw = (inputs[0]["current_draw_valid"] > 0) & (
-                recorded_action == drawn
-            )
-            for stratum, selected in {
-                "focused": inputs[2]["focused"] > 0,
-                "ordinary": inputs[2]["focused"] == 0,
-                "drawn_tile": selected_draw,
-                "other_tile": ~selected_draw,
-            }.items():
-                selected &= valid
-                metrics[f"discard_{stratum}_count"] = tf.reduce_sum(
-                    tf.cast(selected, tf.float32)
-                )
-                metrics[f"discard_{stratum}_correct"] = tf.reduce_sum(
-                    tf.cast(selected & matches[:, 0], tf.float32)
-                )
-                metrics[f"discard_{stratum}_nll_sum"] = tf.reduce_sum(
-                    tf.where(selected, nll, 0.0)
-                )
     return metrics
-
-
-def decision_regularizers(*, outputs, current, heads, count, mean):
-    """Prior and branch-aware entropy for each decision's active head."""
-    return {
-        "constraint_loss": mean(
-            outputs["constraint_loss"][:count], tf.ones(count)
-        ),
-        "policy_prior_loss": mean(
-            tf.gather(
-                tf.stack(
-                    [
-                        outputs[name + "_prior_loss"][:count]
-                        for name in actions.TRAIN_POLICY_HEADS
-                    ],
-                    axis=1,
-                ),
-                heads[:count],
-                batch_dims=1,
-            ),
-            tf.ones(count),
-        ),
-        "entropy": mean(
-            tf.gather(
-                tf.stack(
-                    [
-                        action_entropy(current, name)
-                        for name in actions.TRAIN_POLICY_HEADS
-                    ],
-                    axis=1,
-                ),
-                heads[:count],
-                batch_dims=1,
-            ),
-            tf.ones(count),
-        ),
-    }
 
 
 @tf.keras.utils.register_keras_serializable(package="nejimakidori")
@@ -904,16 +634,6 @@ def ron_risk_labels(labels, selected, structure):
     return risk & ~tf.reduce_all(risk, axis=1)[:, None]
 
 
-def order_loss(labels, scores, mean=losses.mean_valid):
-    pair = tf.cast(labels["sakigiri_pair"], tf.int32)
-    values = tf.gather(scores, tf.maximum(pair, 0), batch_dims=1)
-    return mean(
-        tf.nn.softplus(values[:, 1] - values[:, 0]),
-        tf.reduce_all(pair >= 0, axis=1),
-        tf.maximum(labels["sakigiri_weight"], 0.0),
-    )
-
-
 def auxiliary_loss_terms(inputs, outputs, mean=losses.mean_valid):
     features, labels, _ = inputs
     selected = outputs["selected"]
@@ -954,8 +674,5 @@ def auxiliary_loss_terms(inputs, outputs, mean=losses.mean_valid):
         ),
         selected[:, 0],
         mean=mean,
-    )
-    terms["sakigiri_order_loss"] = order_loss(
-        labels, outputs["sakigiri_scores"][:, :37], mean
     )
     return terms

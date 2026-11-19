@@ -8,6 +8,7 @@
 | Legality, gradient constraints and compatibility | [Constraints](CONSTRAINTS.md) |
 | Current training objective | [Objective](../training/OBJECTIVE.md) |
 | Export and match evaluation | [Evaluation](../training/EVALUATION.md) |
+| Search inputs, outputs and architecture | [Interactive catalog](catalog/README.md) |
 
 ## Source map
 

@@ -92,28 +92,6 @@ def packed_means(statistics):
     return tf.math.divide_no_nan(statistics[:, 0], statistics[:, 1])
 
 
-class MaskedMeans:
-    """Trace independent masked statistics, then assemble globally shared loss.
-
-    Collection results must not feed another mean's loss, mask or weight.
-    Both passes build loss arithmetic only; the actor forward runs once.
-    The unused second-pass arithmetic is pruned from the TensorFlow graph.
-    """
-
-    def __init__(self):
-        self.statistics = []
-
-    def collect(self, loss, mask, weight=None):
-        self.statistics.append(masked_totals(loss, mask, weight))
-        return tf.constant(0.0)
-
-    def reduce(self):
-        self.values = iter(tf.unstack(packed_means(tf.stack(self.statistics))))
-
-    def read(self, loss, mask, weight=None):
-        return next(self.values)
-
-
 def classification(labels, logits, weight=None, mean=mean_valid):
     labels = tf.cast(labels, tf.int32)
     return mean(

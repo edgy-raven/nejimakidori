@@ -58,6 +58,11 @@ for line in sys.stdin:
                 "previous": [],
             }
         context = contexts[stream]
+        context["random_seed"] = item["random_seed"]
+        numpy.random.seed(
+            numpy.random.SeedSequence(context["random_seed"])
+            .generate_state(4)
+        )
         for event in item["events"][context["cursor"] :]:
             if event["type"] == "start_kyoku":
                 context["state"] = replay.Replay.from_start("frozen", event)
@@ -108,6 +113,12 @@ for line in sys.stdin:
         )
         deferred = []
         for row, (index, context, observation, value) in enumerate(decisions):
+            numpy.random.seed(
+                numpy.random.SeedSequence([
+                    *context["random_seed"],
+                    features.PHASES[value["phase"]] + 1,
+                ]).generate_state(4)
+            )
             selected, metadata = actions.select_policy_action(
                 value, output, row
             )
@@ -143,7 +154,7 @@ for line in sys.stdin:
 """
 
 
-def freeze_source(source, target, include_native=False):
+def freeze_source(source, target):
     source, target = pathlib.Path(source), pathlib.Path(target)
     shutil.copytree(
         source,
@@ -153,7 +164,6 @@ def freeze_source(source, target, include_native=False):
             ".pytest_cache",
             "*.pyc",
             "target",
-            *(() if include_native else (".native", "*.so")),
         ),
     )
 
@@ -176,8 +186,7 @@ class FrozenPolicy:
             [
                 sys.executable,
                 "-c",
-                "import sys; sys.path.pop(0); "
-                f"from {self.source.name}.frozen_policy import WORKER; exec(WORKER)",
+                "import sys; sys.path.pop(0);\n" + WORKER,
                 str(self.model_path),
                 str(memory_mb),
             ],
@@ -199,7 +208,8 @@ class FrozenPolicy:
             },
         )
 
-    def reset(self):
+    def reset(self, game_seeds):
+        self.game_seeds = game_seeds
         self.events = {}
         self.reset_pending = True
 
@@ -217,11 +227,14 @@ class FrozenPolicy:
             json.dumps(
                 {
                     "reset": self.reset_pending,
-                    # Saved opponent workers read this wire field.
-                    "batch_size": 1,
                     "items": [
                         {
                             "stream": stream,
+                            "random_seed": [
+                                self.game_seeds[stream // 4],
+                                stream % 4,
+                                len(self.events[env]),
+                            ],
                             "events": self.events[env],
                             "observation": observation.serialize_to_base64(),
                         }

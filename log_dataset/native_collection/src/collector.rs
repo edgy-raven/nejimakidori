@@ -1,9 +1,7 @@
 use crate::{
     actions, candidate,
     history::PublicHistory,
-    nyanten,
     packed::{ROW_BYTES, Row},
-    scoring,
 };
 use pyo3::{
     prelude::*,
@@ -16,7 +14,6 @@ use riichienv_core::{
     observation::Observation,
     rule::GameRule,
     state::GameState,
-    types::{Conditions, Wind},
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -54,10 +51,17 @@ struct Game {
     dealt: u8,
     cuts: [i64; 4],
     riichi_turn_sum: i64,
+    recorded: Option<Vec<Value>>,
 }
 impl Game {
-    fn new(seed: u64) -> Self {
-        let mut engine = GameState::new(2, true, Some(seed), 0, GameRule::default_tenhou());
+    fn complete(&self, stop_after_hand: Option<usize>) -> bool {
+        self.engine.is_done || stop_after_hand.is_some_and(|hand| self.hand > hand)
+    }
+
+    fn new(seed: u64, duplicate: bool) -> Self {
+        let mut rule = GameRule::default_tenhou();
+        rule.duplicate = duplicate;
+        let mut engine = GameState::new(2, true, Some(seed), 0, rule);
         engine.event_buffer = Some(Vec::new());
         engine.reset();
         engine._initialize_round(0, 0, 0, 0, None, Some(vec![25000; 4]));
@@ -74,127 +78,108 @@ impl Game {
             dealt: 0,
             cuts: [0; 4],
             riichi_turn_sum: 0,
+            recorded: None,
         }
+    }
+
+    fn recorded_event(&self, actor: usize) -> Option<&Value> {
+        let events = &self.recorded.as_ref().unwrap()[self.logs.len()..];
+        let start = events
+            .iter()
+            .position(|event| !matches!(event["type"].as_str().unwrap(), "reach_accepted" | "dora"))
+            .unwrap();
+        let event = &events[start];
+        if event["type"] == "ryukyoku"
+            && matches!(event["reason"].as_str(), Some("kyushu_kyuhai" | "sanchaho"))
+        {
+            return Some(event);
+        }
+        if event["type"] == "hora" {
+            events[start..]
+                .iter()
+                .take_while(|event| event["type"] == "hora")
+                .find(|event| event["actor"].as_u64() == Some(actor as u64))
+        } else {
+            (event["actor"].as_u64() == Some(actor as u64)
+                && matches!(
+                    event["type"].as_str().unwrap(),
+                    "dahai"
+                        | "reach"
+                        | "chi"
+                        | "pon"
+                        | "daiminkan"
+                        | "ankan"
+                        | "kakan"
+                        | "ryukyoku"
+                ))
+            .then_some(event)
+        }
+    }
+
+    fn recorded_action(&self, obs: &Observation, actor: usize) -> Action {
+        let event = self.recorded_event(actor);
+        obs.legal_actions_method()
+            .into_iter()
+            .find(|action| {
+                if let Some(event) = event {
+                    // Triple ron is logged as a draw, without individual hora
+                    // events. All three legal ron claims must be reconstructed.
+                    if event["type"] == "ryukyoku" && event["reason"] == "sanchaho" {
+                        return action.action_type == ActionType::Ron;
+                    }
+                    let candidate: Value = serde_json::from_str(&action.to_mjai()).unwrap();
+                    if candidate["type"] != event["type"] {
+                        return false;
+                    }
+                    if action.action_type != ActionType::Ankan
+                        && candidate.get("pai").is_some()
+                        && candidate["pai"] != event["pai"]
+                    {
+                        return false;
+                    }
+                    if let Some(consumed) = candidate.get("consumed") {
+                        let mut actual = consumed
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|tile| tile.as_str().unwrap())
+                            .collect::<Vec<_>>();
+                        let mut expected = event["consumed"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|tile| tile.as_str().unwrap())
+                            .collect::<Vec<_>>();
+                        actual.sort();
+                        expected.sort();
+                        if actual != expected {
+                            return false;
+                        }
+                    }
+                    action.action_type != ActionType::Discard
+                        || event["tsumogiri"].as_bool().unwrap() == (action.tile == obs.drawn_tile)
+                } else {
+                    action.action_type == ActionType::Pass
+                }
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "recorded action missing at event {} for seat {actor}: {event:?}",
+                    self.logs.len()
+                )
+            })
     }
     // Counterfactual terminal labels stay separate from observable feature rows.
-    fn ron_labels(&self, request: &Request) -> (Vec<Vec<i8>>, Vec<Vec<i32>>) {
-        let mut legal = vec![vec![-1; 37]; 3];
-        let mut payments = vec![vec![-1; 37]; 3];
-        if !matches!(request.phase, 0 | 2 | 3) {
-            return (legal, payments);
-        }
-        let cuts: Vec<_> = request
-            .obs
-            .legal_actions_method()
-            .into_iter()
-            .filter(|action| {
-                if request.phase == 2 {
-                    matches!(action.action_type, ActionType::Ankan | ActionType::Kakan)
-                } else {
-                    action.action_type == ActionType::Discard
-                }
-            })
-            .collect();
-        let mut dora = self.engine.wall.dora_indicators.clone();
-        // Discard and kakan expose deferred indicators before any ron settlement.
-        for index in
-            dora.len()..(dora.len() + self.engine.wall.pending_kan_dora_count as usize).min(5)
-        {
-            dora.push(
-                self.engine.wall.tiles
-                    [(4 + 2 * index).saturating_sub(self.engine.wall.dead_wall_shift())],
-            );
-        }
-        let ura: Vec<_> = (0..dora.len())
-            .map(|index| {
-                self.engine.wall.tiles
-                    [(5 + 2 * index).saturating_sub(self.engine.wall.dead_wall_shift())]
-            })
-            .collect();
-        for offset in 1..4 {
-            let seat = (request.seat + offset) % 4;
-            let player = &self.engine.players[seat];
-            for action in &cuts {
-                let code = if request.phase == 2 {
-                    (action.tile.unwrap() / 4) as usize
-                } else {
-                    candidate::code(action.tile.unwrap())
-                };
-                legal[offset - 1][code] = 0;
-                payments[offset - 1][code] = 0;
-            }
-            if player.hand.len() % 3 != 1
-                || player.missed_agari_riichi
-                || player.missed_agari_doujun
-            {
-                continue;
-            }
-            let evaluator = HandEvaluator::new(player.hand.clone(), player.melds.clone());
-            let waits = evaluator.get_waits_u8();
-            if player
-                .discards
-                .iter()
-                .any(|tile| waits.contains(&(tile / 4)))
-            {
-                continue;
-            }
-            for action in &cuts {
-                let tile = action.tile.unwrap();
-                if !waits.contains(&(tile / 4)) {
-                    continue;
-                }
-                let scored = scoring::normalize_score(
-                    evaluator.calc_with_indicators(
-                        tile,
-                        &dora,
-                        if player.riichi_declared { &ura } else { &[] },
-                        Some(Conditions {
-                            riichi: player.riichi_declared,
-                            double_riichi: player.double_riichi_declared,
-                            ippatsu: player.ippatsu_cycle,
-                            houtei: self.engine.wall.drawable_count == 0
-                                && !self.engine.is_rinshan_flag
-                                && request.phase != 2,
-                            chankan: request.phase == 2,
-                            player_wind: Wind::from((seat as u8 + 4 - self.engine.oya) % 4),
-                            round_wind: Wind::from(self.engine.round_wind),
-                            ..Conditions::default()
-                        }),
-                    ),
-                    seat as u8 == self.engine.oya,
-                    false,
-                );
-                if !scored.is_win
-                    || (action.action_type == ActionType::Ankan
-                        && !(scored.yaku.contains(&42) || scored.yaku.contains(&49)))
-                {
-                    continue;
-                }
-                let code = if request.phase == 2 {
-                    (tile / 4) as usize
-                } else {
-                    candidate::code(tile)
-                };
-                legal[offset - 1][code] = 1;
-                // Each claimant includes honba; settlement assigns it once by seat priority.
-                payments[offset - 1][code] = if player.pao.is_empty() {
-                    scored.ron_agari as i32 + 300 * self.engine.honba as i32
-                } else {
-                    -1
-                };
-            }
-        }
-        for code in 0..37 {
-            if legal.iter().all(|opponent| opponent[code] == 1) {
-                for opponent in &mut payments {
-                    opponent[code] = -1;
-                }
-            }
-        }
-        (legal, payments)
-    }
     fn sync(&mut self, counts: &mut HashMap<String, i64>) {
         for event in self.engine.drain_events() {
+            if let Some(recorded) = &self.recorded {
+                assert_eq!(
+                    &event,
+                    &recorded[self.logs.len()],
+                    "recorded replay diverged at event {}",
+                    self.logs.len()
+                );
+            }
             let kind = event["type"].as_str().unwrap();
             match kind {
                 "start_kyoku" => {
@@ -329,8 +314,14 @@ impl NativeRoot {
     }
 
     /// Keep the full simulator state; optionally resample only unseen wall tiles.
-    #[pyo3(signature = (copies, seed, shuffle_remaining=true))]
-    fn fork(&self, copies: usize, seed: u64, shuffle_remaining: bool) -> PyResult<NativeCollector> {
+    #[pyo3(signature = (copies, seed, shuffle_remaining=true, *, until_hand_end=false))]
+    fn fork(
+        &self,
+        copies: usize,
+        seed: u64,
+        shuffle_remaining: bool,
+        until_hand_end: bool,
+    ) -> PyResult<NativeCollector> {
         if copies == 0 {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "copies must be positive",
@@ -340,6 +331,7 @@ impl NativeRoot {
         let mut requests = Vec::with_capacity(copies * self.requests.len());
         for index in 0..copies {
             let mut game = self.game.clone();
+            game.recorded = None;
             if shuffle_remaining {
                 let seed = seed.wrapping_add(index as u64);
                 let mut rng = StdRng::seed_from_u64(seed);
@@ -353,9 +345,19 @@ impl NativeRoot {
                     .collect::<Vec<_>>();
                 unseen.shuffle(&mut rng);
                 let mut unseen = unseen.into_iter();
+                let mut replacements = [0; 136];
                 for tile in &mut game.engine.wall.tiles {
+                    let original = *tile;
                     if !game.engine.wall.dora_indicators.contains(tile) {
                         *tile = unseen.next().unwrap();
+                    }
+                    replacements[original as usize] = *tile;
+                }
+                if let Some(queues) = &mut game.engine.wall.duplicate_draws {
+                    // Queue entries refer to physical wall tiles. Apply the
+                    // same permutation without changing ownership or order.
+                    for tile in queues.iter_mut().flatten() {
+                        *tile = replacements[*tile as usize];
                     }
                 }
                 game.engine.wall.seed = Some(seed);
@@ -372,6 +374,7 @@ impl NativeRoot {
             rng: StdRng::seed_from_u64(seed),
             counts: COUNTERS.iter().map(|name| (name.to_string(), 0)).collect(),
             submitted: true,
+            stop_after_hand: until_hand_end.then_some(self.game.hand),
         })
     }
 }
@@ -383,6 +386,7 @@ pub struct NativeCollector {
     rng: StdRng,
     counts: HashMap<String, i64>,
     submitted: bool,
+    stop_after_hand: Option<usize>,
 }
 impl NativeCollector {
     fn prepare(&mut self) {
@@ -392,7 +396,7 @@ impl NativeCollector {
         loop {
             for (game, ctx) in self.games.iter_mut().enumerate() {
                 ctx.sync(&mut self.counts);
-                if ctx.engine.is_done {
+                if ctx.complete(self.stop_after_hand) {
                     continue;
                 }
                 let mut seats = ctx.engine.active_players.clone();
@@ -420,17 +424,23 @@ impl NativeCollector {
                         }
                     }
                     if let Some(action) = selected {
-                        ctx.choices.insert(seat as u8, action);
+                        ctx.choices.insert(
+                            seat as u8,
+                            if ctx.recorded.is_some() {
+                                ctx.recorded_action(&obs, seat)
+                            } else {
+                                action
+                            },
+                        );
                     } else {
                         let phase = actions::phase_for_actions(&legal);
                         let mut row = Row::new();
-                        let (legal, _) = crate::features::pack(
+                        let legal = crate::features::pack(
                             &mut row,
                             &mut ctx.history,
                             &obs,
                             seat,
                             phase,
-                            false,
                             false,
                         );
                         let candidates = actions::candidates(&obs, phase, &legal, &mut self.rng);
@@ -446,7 +456,12 @@ impl NativeCollector {
                     }
                 }
             }
-            if !self.requests.is_empty() || self.games.iter().all(|ctx| ctx.engine.is_done) {
+            if !self.requests.is_empty()
+                || self
+                    .games
+                    .iter()
+                    .all(|ctx| ctx.complete(self.stop_after_hand))
+            {
                 return;
             }
             self.step_games();
@@ -454,7 +469,7 @@ impl NativeCollector {
     }
     fn step_games(&mut self) {
         for ctx in &mut self.games {
-            if !ctx.engine.is_done {
+            if !ctx.complete(self.stop_after_hand) {
                 ctx.engine.step(&ctx.choices);
                 ctx.choices.clear();
                 if let Some(error) = ctx.engine.last_error.take() {
@@ -475,13 +490,73 @@ impl NativeCollector {
         }
         Ok(Self {
             games: (0..games)
-                .map(|game| Game::new(seed + game as u64))
+                .map(|game| Game::new(seed + game as u64, false))
                 .collect(),
             requests: Vec::new(),
             rng: StdRng::seed_from_u64(seed),
             counts: COUNTERS.iter().map(|name| (name.to_string(), 0)).collect(),
             submitted: true,
+            stop_after_hand: None,
         })
+    }
+    #[staticmethod]
+    fn from_match(events: &str, seed: u64, duplicate: bool) -> PyResult<Self> {
+        let mut collector = Self::new(1, seed)?;
+        collector.games[0] = Game::new(seed, duplicate);
+        collector.games[0].recorded = Some(
+            serde_json::from_str(events)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+        );
+        Ok(collector)
+    }
+
+    fn submit_recorded(&mut self, py: Python<'_>) -> PyResult<()> {
+        let mut codes = Vec::with_capacity(self.requests.len());
+        for request in &mut self.requests {
+            let game = &self.games[request.game];
+            let action = game.recorded_action(&request.obs, request.seat);
+            let followup = if matches!(
+                action.action_type,
+                ActionType::Riichi | ActionType::Chi | ActionType::Pon
+            ) {
+                let event = game.recorded.as_ref().unwrap()[game.logs.len()..]
+                    .iter()
+                    .find(|event| {
+                        event["type"] == "dahai"
+                            && event["actor"].as_u64() == Some(request.seat as u64)
+                    })
+                    .unwrap();
+                Some(crate::history::code(&event["pai"]))
+            } else {
+                None
+            };
+            let candidate = request
+                .candidates
+                .iter_mut()
+                .find(|candidate| {
+                    if let Some(selected) = &candidate.action {
+                        selected.action_type == action.action_type
+                            && selected.to_mjai() == action.to_mjai()
+                            && (followup.is_none() || candidate.discard == followup)
+                    } else {
+                        (request.phase == 4
+                            && !matches!(action.action_type, ActionType::Ron | ActionType::Tsumo))
+                            || (request.phase == 2
+                                && !matches!(
+                                    action.action_type,
+                                    ActionType::Ankan | ActionType::Kakan
+                                ))
+                    }
+                })
+                .unwrap_or_else(|| {
+                    panic!("recorded candidate missing at event {}", game.logs.len())
+                });
+            if candidate.action.is_some() {
+                candidate.action = Some(action);
+            }
+            codes.push(candidate.code);
+        }
+        self.submit(py, codes)
     }
     fn next<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
         if !self.submitted {
@@ -502,55 +577,6 @@ impl NativeCollector {
             Ok(())
         })?;
         result.set_item("features", features)?;
-        // Hidden state is a training target only, never part of feature rows.
-        let mut shanten = Vec::new();
-        let mut ukeire = Vec::new();
-        let mut hand_counts = Vec::new();
-        let mut ron_legal = Vec::new();
-        let mut ron_payments = Vec::new();
-        for request in &self.requests {
-            let (legal, payments) = self.games[request.game].ron_labels(request);
-            ron_legal.push(legal);
-            ron_payments.push(payments);
-            let mut distances = Vec::new();
-            let mut improving = Vec::new();
-            let mut holdings = Vec::new();
-            for offset in 1..4 {
-                let player =
-                    &self.games[request.game].history.replay.players[(request.seat + offset) % 4];
-                let mut concealed = [0u8; 34];
-                let mut counts = vec![0i8; 37];
-                for &tile in &player.hand {
-                    concealed[(tile / 4) as usize] += 1;
-                    counts[candidate::code(tile)] += 1;
-                }
-                for meld in &player.melds {
-                    for &tile in &meld.tiles {
-                        counts[candidate::code(tile)] += 1;
-                    }
-                }
-                let (distance, waits) = if player.hand.len() % 3 == 1 {
-                    let (distance, mask) = nyanten::improving(&concealed);
-                    (
-                        distance.min(3) as i8,
-                        (0..34).map(|tile| ((mask >> tile) & 1) as i8).collect(),
-                    )
-                } else {
-                    (-1, vec![-1i8; 34])
-                };
-                distances.push(distance);
-                improving.push(waits);
-                holdings.push(counts);
-            }
-            shanten.push(distances);
-            ukeire.push(improving);
-            hand_counts.push(holdings);
-        }
-        result.set_item("ron_legal", ron_legal)?;
-        result.set_item("ron_payments", ron_payments)?;
-        result.set_item("opponent_shanten", shanten)?;
-        result.set_item("opponent_ukeire", ukeire)?;
-        result.set_item("opponent_hand_counts", hand_counts)?;
         result.set_item(
             "head",
             self.requests
@@ -692,18 +718,39 @@ impl NativeCollector {
         Ok(())
     }
     fn finish(&mut self) -> PyResult<(Vec<String>, HashMap<String, i64>)> {
-        if !self.games.iter().all(|g| g.engine.is_done) || !self.requests.is_empty() {
+        if !self.games.iter().all(|g| g.complete(self.stop_after_hand)) || !self.requests.is_empty()
+        {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "collection is not complete",
             ));
         }
         for game in &mut self.games {
             game.sync(&mut self.counts);
+            if let Some(recorded) = &game.recorded {
+                assert_eq!(
+                    game.logs.len(),
+                    recorded.len(),
+                    "recorded match ended early"
+                );
+            }
         }
         Ok((
             self.games
                 .iter()
-                .map(|g| serde_json::to_string(&g.logs).unwrap())
+                .map(|g| {
+                    let end = if g.engine.is_done {
+                        g.logs.len()
+                    } else {
+                        // The following start identifies the real continuation;
+                        // it is not a terminal game or a completed extra hand.
+                        g.logs
+                            .iter()
+                            .rposition(|event| event["type"] == "start_kyoku")
+                            .unwrap()
+                            + 1
+                    };
+                    serde_json::to_string(&g.logs[..end]).unwrap()
+                })
                 .collect(),
             self.counts.clone(),
         ))
@@ -727,44 +774,84 @@ mod root_tests {
     use super::*;
 
     #[test]
-    fn counterfactual_ron_scores_honba_and_masks_furiten_and_response() {
-        let mut collector = NativeCollector::new(1, 941).unwrap();
-        collector.prepare();
-        let mut request = collector.requests[0].clone();
-        request.seat = 0;
-        request.phase = 0;
-        request.obs.replace_legal_actions(vec![Action::new(
-            ActionType::Discard,
-            Some(116),
-            vec![],
-            Some(0),
-        )]);
-        let game = &mut collector.games[request.game];
-        game.engine.oya = 0;
-        game.engine.round_wind = 0;
-        game.engine.honba = 2;
-        game.engine.wall.dora_indicators = vec![120];
-        game.engine.wall.pending_kan_dora_count = 0;
-        game.engine.wall.drawable_count = 30;
-        for player in &mut game.engine.players {
-            player.hand.clear();
+    fn recorded_triple_ron_restores_all_three_claims() {
+        let mut game = Game::new(941, false);
+        game.recorded = Some(vec![serde_json::json!({
+            "type": "ryukyoku", "reason": "sanchaho", "deltas": [0, 0, 0, 0]
+        })]);
+        for actor in 1..4 {
+            let mut observation = game.engine.get_observation(actor);
+            observation.replace_legal_actions(vec![
+                Action::new(ActionType::Pass, None, vec![], None),
+                Action::new(ActionType::Ron, Some(76), vec![], Some(0)),
+            ]);
+            assert_eq!(
+                game.recorded_action(&observation, actor as usize)
+                    .action_type,
+                ActionType::Ron
+            );
         }
-        game.engine.players[1].hand = vec![0, 4, 8, 36, 40, 44, 96, 100, 104, 124, 125, 126, 117];
-        let (legal, payments) = game.ron_labels(&request);
-        assert_eq!(legal[0][29], 1);
-        // Closed chanta + green dragon: 3 han, 40 fu, plus two honba.
-        assert_eq!(payments[0][29], 5800);
-        assert_eq!(legal[0][28], -1);
-        game.engine.players[1].missed_agari_doujun = true;
-        let (legal, payments) = game.ron_labels(&request);
-        assert_eq!((legal[0][29], payments[0][29]), (0, 0));
-        game.engine.players[1].missed_agari_doujun = false;
-        game.engine.players[1].discards.push(118);
-        assert_eq!(game.ron_labels(&request).0[0][29], 0);
-        request.phase = 1;
-        let (legal, payments) = game.ron_labels(&request);
-        assert!(legal.iter().flatten().all(|&value| value == -1));
-        assert!(payments.iter().flatten().all(|&value| value == -1));
+    }
+
+    #[test]
+    fn shuffled_duplicate_roots_preserve_queues_and_shared_rinshan() {
+        let mut collector = NativeCollector::new(1, 941).unwrap();
+        collector.games[0] = Game::new(941, true);
+        collector.prepare();
+        collector.submitted = false;
+        let root = collector.snapshot(0).unwrap();
+        let mut branches = root.fork(2, 17, true, true).unwrap();
+        let paired = root.fork(1, 17, true, true).unwrap();
+        assert_eq!(
+            branches.games[0].engine.wall.tiles,
+            paired.games[0].engine.wall.tiles
+        );
+        assert_eq!(
+            branches.games[0].engine.wall.duplicate_draws,
+            paired.games[0].engine.wall.duplicate_draws
+        );
+        let original = &root.game.engine.wall;
+        for branch in &mut branches.games {
+            let wall = &mut branch.engine.wall;
+            let replacement: HashMap<_, _> = original
+                .tiles
+                .iter()
+                .copied()
+                .zip(wall.tiles.iter().copied())
+                .collect();
+            for (before, after) in original
+                .duplicate_draws
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(wall.duplicate_draws.as_ref().unwrap())
+            {
+                assert_eq!(
+                    after,
+                    &before
+                        .iter()
+                        .map(|tile| replacement[tile])
+                        .collect::<Vec<_>>()
+                );
+            }
+            assert_eq!(wall.dora_indicators, original.dora_indicators);
+            let mut drawn = Vec::new();
+            for player in 0..4 {
+                let rinshan = wall.tiles[0];
+                assert_eq!(wall.draw(player, true), Some(rinshan));
+                drawn.push(rinshan);
+                drawn.push(wall.draw(player, false).unwrap());
+            }
+            while wall.drawable_count > 0 {
+                // Deplete one queue and exercise borrowing from queue backs.
+                drawn.push(wall.draw(0, false).unwrap());
+            }
+            let mut unique = drawn.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(unique.len(), drawn.len());
+            assert_eq!(wall.tiles.len(), 14);
+        }
     }
 
     #[test]
@@ -773,7 +860,7 @@ mod root_tests {
         collector.prepare();
         collector.submitted = false;
         let root = collector.snapshot(0).unwrap();
-        let unchanged = root.fork(1, 17, false).unwrap();
+        let unchanged = root.fork(1, 17, false, false).unwrap();
         assert_eq!(
             format!("{:?}", collector.games[0].engine),
             format!("{:?}", unchanged.games[0].engine)
@@ -783,7 +870,7 @@ mod root_tests {
             collector.requests[0].row.bytes,
             unchanged.requests[0].row.bytes
         );
-        let branches = root.fork(2, 17, true).unwrap();
+        let branches = root.fork(2, 17, true, false).unwrap();
         for branch in &branches.games {
             let mut before = collector.games[0].engine.wall.tiles.clone();
             let mut after = branch.engine.wall.tiles.clone();

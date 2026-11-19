@@ -5,10 +5,10 @@ import inspect
 import json
 
 import numpy
+import riichienv
+
 from log_dataset import records, shanten
 from model import actions
-
-import riichienv
 
 CALL_TYPES = {"chi", "pon", "daiminkan"}
 OBSERVATION_FIELDS = tuple(
@@ -27,8 +27,6 @@ Observation = dataclasses.make_dataclass(
             "decision_index",
             "actor",
             "features",
-            "focus",
-            "hand_yaku_focus",
             *records.LABELS,
         )
     ],
@@ -297,6 +295,12 @@ class Replay:
         elif kind == "dora":
             self.dora_markers.append(event["dora_marker"])
         self.native_env.apply_event(event)
+        if kind == "tsumo":
+            self.native_env.is_rinshan_flag = (
+                self.rinshan_actor == event["actor"]
+            )
+        elif kind == "dahai":
+            self.native_env.is_rinshan_flag = False
 
     def replay_events(self):
         index = 0
@@ -417,19 +421,15 @@ class Replay:
                 continue
             yield index, actor, phase, next_index, win_choices
 
-    def recorded_action(
-        self, observation, *, index, phase, next_index, win_choices
-    ):
+    def recorded_action(self, observation, *, phase, next_index, win_choices):
         """Attach the observed action without computing hindsight targets."""
         from log_dataset import features
 
         actor = observation.actor
         next_event = self.events[next_index]
-        action_index = index
         if phase == "WIN":
-            observation.win_action, action_index = win_choices[actor]
+            observation.win_action = win_choices[actor][0]
         elif phase == "DISCARD" and next_event["type"] == "dahai":
-            action_index = next_index
             if (
                 not self.accepted[actor]
                 and observation.features["discard_action_legal"].sum() > 1
@@ -439,7 +439,6 @@ class Replay:
                 )
         elif phase == "RIICHI":
             declaration = next_event["type"] == "reach"
-            action_index = next_index + int(declaration)
             cut = self.events[next_index + 1] if declaration else next_event
             observation.riichi_action = int(declaration)
             observation.continuation_discard = shanten.mjai_tile_code(
@@ -451,9 +450,6 @@ class Replay:
                 next_event["type"] in CALL_TYPES
                 and next_event["actor"] == actor
             ):
-                action_index = next_index + int(
-                    next_event["type"] != "daiminkan"
-                )
                 observation.response_action = {
                     "chi": 1,
                     "pon": 2,
@@ -470,13 +466,11 @@ class Replay:
         elif phase == "KAN":
             observation.kan_action = 0
             if next_event["type"] in {"ankan", "kakan"}:
-                action_index = next_index
                 observation.kan_action = 1 + shanten.base_id(
                     next_event["consumed"][0]
                     if next_event["type"] == "ankan"
                     else next_event["pai"]
                 )
-        return action_index
 
     def observations(self, feature_provider=None, *, actors=(0, 1, 2, 3)):
         from log_dataset import features, training_targets
@@ -495,16 +489,13 @@ class Replay:
         ) in self.policy_decisions():
             if actor not in actors:
                 continue
-            packed, focus = feature_provider(
-                state=self, actor=actor, phase=phase, include_focus=True
-            )
+            packed = feature_provider(state=self, actor=actor, phase=phase)
             observation = Observation(
                 game_id=self.game_id,
                 kyoku_id=self.kyoku_id,
                 decision_index=self.decision_index,
                 actor=actor,
                 features=packed,
-                focus=focus,
             )
             for name, definition in records.LABELS.items():
                 setattr(
@@ -512,14 +503,13 @@ class Replay:
                     name,
                     numpy.full(definition["shape"], -1, definition["dtype"]),
                 )
-            action_index = self.recorded_action(
+            self.recorded_action(
                 observation=observation,
-                index=index,
                 phase=phase,
                 next_index=next_index,
                 win_choices=win_choices,
             )
-            training_targets.attach(observation, self, index, action_index)
+            training_targets.attach(observation, self, index)
             for name, value in training_targets.ron_labels(
                 self, actor, phase
             ).items():

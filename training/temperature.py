@@ -4,6 +4,8 @@ import collections
 
 import numpy
 
+from model import outcomes
+
 TARGET_ESS = 0.7
 
 
@@ -30,7 +32,7 @@ class RollingTemperature:
         if len(gaps) < 1024:
             return False
         assert numpy.isfinite(gaps).all()
-        grid = numpy.geomspace(0.01, 128.0, 65)
+        grid = numpy.geomspace(0.01, 128.0, 65) / outcomes.OBJECTIVE_ST3_SCALE
         for source in range(2):
             curve = effective_fraction(gaps[:, source, None], grid)
             self.minimum_ess[source] = curve.min()

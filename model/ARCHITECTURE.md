@@ -26,8 +26,8 @@ from recorded choices and action-conditioned current-hand forecasts.
 
 [actor.py](actor.py) applies opening symmetry and final-wall safety rules.
 Its other heuristic prior outputs are training diagnostics.
-Positive-only first-riichi and call priors add an expert cross-entropy term
-under the [candidate objective](../training/OBJECTIVE.md#fixed-policy-pull).
+Earlier candidate training used positive-only first-riichi and call priors.
+The paired correction runner does not apply these imitation losses.
 Their threat and post-action scoring facts bypass learned encoder projections;
 they neither change inference logits nor introduce new trained parameters.
 
@@ -69,8 +69,8 @@ jointly; triple ron follows the simulator's abort rule.
 
 The critic applies shared player and claim projections rather than separate
 weights for each opponent/payment slot. Player descriptors combine public
-evidence with mean/max summaries of the shared river convolutions, before
-stream-specific attention. Wind descriptors expose dealer/double-wind status,
+evidence with mean/max summaries of the shared river convolutions. Wind
+descriptors expose dealer/double-wind status,
 known unavailable wind copies and dora multiplicity rather than wind identity.
 Scores and placement priority remain explicit public inputs. Our player token
 is distinguished because its hand and candidate action are known.
@@ -105,7 +105,8 @@ scores and deposits. Unsupported payments, including some responsibility and
 nagashi allocations, are excluded from settlement likelihood and counted in
 coverage metrics.
 
-Training values actions by projected Saint 3 (ST3) match points. Completed
+Training values actions by `ST3/100 + P(first) - P(fourth)`. Raw Saint 3 (ST3)
+match points remain a separate evaluation and diagnostic output. Completed
 matches use exact final scores and ranks. Earlier hands use a fixed continuation
 model based on scores, remaining hands and scheduled dealerships. Its parameters
 are separate from the learned current-hand critic.
@@ -123,45 +124,17 @@ them across candidate actions. Only the settlement probabilities depend on the
 action. Payoff construction and action forecasts use bounded GPU chunks; the
 shared payoff tensor exists only for the current root batch.
 
-## Shared river self-attention
+## Shared river encoding
 
-After the per-stream convolutions, one residual self-attention block connects
-all 192 observed river events across opponents and pre/post-riichi streams.
-It uses width 64, four heads, pre-normalization, and learned stream and position
-embeddings. Invalid keys are masked, invalid query outputs remain zero, and
-a zero null key handles empty rivers. Its bias-free output projection starts
-at zero. The refined tokens feed both the pooled board representation (and
-therefore opponent beliefs) and candidate-to-river attention, reaching Q
-through both paths. No future events or hidden hands are attention inputs.
+Opponent rivers use shared tile embeddings and three masked convolutional
+blocks, separately for pre- and post-riichi streams. Each stream contributes
+its ordered token features and maximum to the board projection. Shared mean
+and maximum summaries also feed the critic's per-player context. Padding is
+masked after every convolution; empty streams remain zero.
 
-This block is implemented but has not been strength- or Q-quality-tested.
-
-## Candidate attention to rivers
-
-Each legal candidate queries the river encoder's 192 event tokens: three
-opponents, two pre/post-riichi streams and 32 positions per stream. Tokens
-retain the existing convolutional event features, with learned stream and
-position embeddings. Four attention heads of width 16 produce a residual
-correction to the 384-wide candidate representation shared by policy and
-critic. The pooled river representation still feeds the board encoder.
-
-Queries are packed by board using only legal candidates; river keys are shared
-across those candidates. Invalid events are masked. A zero-valued null token
-allows empty rivers to produce exactly zero correction, including after
-training. The output projection starts at zero, preserving existing predictions
-when weights are explicitly transferred. Training must learn the new branch
-before it can change decisions. Input features and exported outputs are unchanged.
-
-To add missing river attention branches to otherwise matching weights, run:
-
-```sh
-CUDA_VISIBLE_DEVICES=-1 python -m model.initialize \
-    --weights previous.weights.h5 --output river.weights.h5
-```
-
-The converter rejects unrelated architecture differences and existing output
-files. Normal checkpoint loading remains strict. This command does not start
-training or alter frozen runs or serving models.
+Candidate representations combine the hand and board encodings directly.
+There is no river self-attention or candidate-to-river attention. Tile
+attention in opponent beliefs and the shared player/event critic remain.
 
 ## Tile interactions in opponent beliefs
 

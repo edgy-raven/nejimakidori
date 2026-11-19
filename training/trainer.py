@@ -1,10 +1,11 @@
 """Hybrid expert/distill policy imitation and magnetic self-play policy improvement."""
 
 import tensorflow as tf
+
 from log_dataset import training_data
 from model import actions
 from model import actor as actor_layers
-from model import beliefs, critic, joint_settlement, losses
+from model import beliefs, critic, joint_settlement, losses, outcomes
 from training import temperature
 
 VALUE_CHUNK = 256
@@ -40,7 +41,6 @@ class Trainer:
         self.mirror = mirror
         self.magnet = magnet
         self.mirror.trainable = False
-        self.magnet.trainable = False
         self.feature_packing = training_data.PackedBatch(features)
         self.optimizer = tf.keras.optimizers.AdamW(
             learning_rate=args.learning_rate,
@@ -96,7 +96,10 @@ class Trainer:
         }
         positions, position_indices = tf.unique(selected[:, 0])
         payoffs = joint_settlement.gather_position_payoffs(
-            {**public, "dealer": features["dealer_relative_seat"]}, positions
+            {**public, "dealer": features["dealer_relative_seat"]},
+            positions,
+            objective=True,
+            include_st3=True,
         )
         integer_fields = tuple(
             name for name, value in inputs.items() if value.dtype == tf.int32
@@ -115,7 +118,7 @@ class Trainer:
         ]
         chunk_count = (tf.shape(selected)[0] + VALUE_CHUNK - 1) // VALUE_CHUNK
         values = tf.TensorArray(
-            tf.float32, size=chunk_count, element_shape=[VALUE_CHUNK, 2]
+            tf.float32, size=chunk_count, element_shape=[VALUE_CHUNK, 4]
         )
         for chunk in tf.range(chunk_count):
             indices = tf.minimum(
@@ -139,8 +142,8 @@ class Trainer:
         return tf.stop_gradient(
             tf.scatter_nd(
                 selected,
-                tf.reshape(values.stack(), [-1, 2])[: tf.shape(selected)[0]],
-                [tf.shape(chosen)[0], 295, 2],
+                tf.reshape(values.stack(), [-1, 4])[: tf.shape(selected)[0]],
+                [tf.shape(chosen)[0], 295, 4],
             )
         )
 
@@ -152,7 +155,7 @@ class Trainer:
             self.mirror(features, training=False), batch["head"], batch["legal"]
         )
         magnet = actor_layers.distribution(
-            self.magnet(features, training=False),
+            self.magnet(**features),
             batch["head"],
             batch["legal"],
         )
@@ -233,6 +236,14 @@ class Trainer:
             )
             expected_gain = tf.reduce_sum(probabilities * score, axis=1)[:count]
             expected_risk = tf.reduce_sum(probabilities * risk, axis=1)[:count]
+            st3_risk = self.args.risk_coefficient * tf.maximum(
+                values[:, :, 3] - reference_values[:, None, 3], 0.0
+            )
+            st3_gain = tf.reduce_sum(
+                probabilities
+                * (values[:, :, 2] - reference_values[:, None, 2] - st3_risk),
+                axis=1,
+            )[:count]
             recorded = batch["recorded"][:count]
             valid = tf.ones(count, tf.bool)
 
@@ -285,12 +296,31 @@ class Trainer:
                         for name, value in metrics.items()
                         if name != "loss"
                     },
-                    "self_play_loss": mean(-expected_gain, ~recorded),
+                    "self_play_loss": outcomes.OBJECTIVE_ST3_SCALE
+                    * mean(-expected_gain, ~recorded),
                     "record_fraction": record_fraction,
-                    "expert_q_gap_st3": mean(q_gap[:count], recorded),
-                    "distill_q_gap_st3": mean(distill_q_gap[:count], recorded),
-                    "self_play_gain_st3": mean(expected_gain, ~recorded),
-                    "risk_penalty_st3": mean(expected_risk, ~recorded),
+                    "expert_q_gap_objective": mean(q_gap[:count], recorded),
+                    "distill_q_gap_objective": mean(
+                        distill_q_gap[:count], recorded
+                    ),
+                    "self_play_gain_objective": mean(expected_gain, ~recorded),
+                    "risk_penalty_objective": mean(expected_risk, ~recorded),
+                    "expert_q_gap_st3": mean(
+                        expert_values[:count, 2] - reference_values[:count, 2],
+                        recorded,
+                    ),
+                    "distill_q_gap_st3": mean(
+                        tf.gather(values, distill_actions, batch_dims=1)[
+                            :count, 2
+                        ]
+                        - reference_values[:count, 2],
+                        recorded,
+                    ),
+                    "self_play_gain_st3": mean(st3_gain, ~recorded),
+                    "risk_penalty_st3": mean(
+                        tf.reduce_sum(probabilities * st3_risk, axis=1)[:count],
+                        ~recorded,
+                    ),
                     "mirror_kl": actor_layers.policy_kl(
                         reference=mirror[:count],
                         current=current[:count],

@@ -7,10 +7,11 @@ import types
 import numpy
 import pytest
 import tensorflow as tf
+
 from log_dataset import afk, replay, training_data
 from model import actions
 from model import actor as actor_layers
-from model import beliefs
+from model import beliefs, export
 from model import network as joint_network
 from training import self_play
 from training import trainer as training
@@ -305,7 +306,7 @@ def test_fresh_critic_targets_preserve_deposits_and_preempted_calls(
     )
 
 
-def test_mixed_policy_updates_shared_model_with_fixed_anchors():
+def test_mixed_policy_updates_shared_model_with_fixed_anchors(tmp_path):
     events = json.loads(
         pathlib.Path(__file__)
         .parent.parent.joinpath("fixtures/model/payment_dealer_90fu.json")
@@ -337,14 +338,30 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
     reference(inputs)
     reference.actor.set_weights(network.actor.get_weights())
     reference_weights = reference.actor.get_weights()
+    serving = export.ServingModel(reference)
+    signature = serving.policy.get_concrete_function(
+        **{
+            name: tf.TensorSpec([None, *value.shape[1:]], value.dtype)
+            for name, value in inputs[0].items()
+        }
+    )
+    tf.saved_model.save(
+        serving,
+        tmp_path / "magnet",
+        signatures={
+            "policy": signature,
+        },
+    )
+    magnet = tf.saved_model.load(tmp_path / "magnet")
+    magnet_weights = [value.numpy().copy() for value in magnet.parameters]
     trainer = training.Trainer(
         network=network,
         features=inputs[0],
         mirror=reference.actor,
-        magnet=reference.actor,
+        magnet=magnet.signatures["policy"],
         args=types.SimpleNamespace(
             learning_rate=1e-5,
-            beta=16.0,
+            beta=0.16,
             expert_prior=0.2,
             mirror_coefficient=0.3,
             magnet_coefficient=0.3,
@@ -373,7 +390,10 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
     )
     # Both actor objectives must leave critic forecasts detached; the
     # observed-outcome loss still trains the critic through its shared inputs.
-    with tf.GradientTape(persistent=True) as tape:
+    with tf.GradientTape(
+        persistent=True, watch_accessed_variables=False
+    ) as tape:
+        tape.watch([variable.value for variable in network.trainable_variables])
         metrics = trainer.policy_update.python_function(
             batch, tf.constant(2), train=False
         )
@@ -401,7 +421,7 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
         > 0
     )
     fixed = actor_layers.distribution(
-        reference.actor(inputs[0], training=False),
+        trainer.magnet(**inputs[0]),
         batch["head"],
         batch["legal"],
     )
@@ -410,7 +430,7 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
         actor_layers.policy_kl(fixed, current, reverse=True),
         atol=1e-5,
     )
-    assert float(metrics["risk_penalty_st3"]) >= 0
+    assert float(metrics["risk_penalty_objective"]) >= 0
     for name, value in expected.items():
         numpy.testing.assert_allclose(metrics[name], value, rtol=1e-5)
     numpy.testing.assert_allclose(
@@ -468,7 +488,7 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
     )
     numpy.testing.assert_allclose(
         metrics["self_play_loss"],
-        -metrics["self_play_gain_st3"],
+        -100 * metrics["self_play_gain_objective"],
         rtol=1e-6,
     )
     numpy.testing.assert_allclose(
@@ -511,3 +531,5 @@ def test_mixed_policy_updates_shared_model_with_fixed_anchors():
         assert numpy.any(before[name] != value.numpy()), name
     for before, after in zip(reference_weights, reference.actor.get_weights()):
         numpy.testing.assert_array_equal(before, after)
+    for before, after in zip(magnet_weights, magnet.parameters):
+        numpy.testing.assert_array_equal(before, after.numpy())

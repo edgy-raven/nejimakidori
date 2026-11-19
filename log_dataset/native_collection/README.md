@@ -129,10 +129,18 @@ worker results contain actions, behavior probabilities and targets.
 `snapshot(decision)` captures a pending decision between `next()` and
 `submit()`, including every simultaneous request in that game. The returned
 root exposes `decision` (its local request offset) and
-`fork(copies, seed, shuffle_remaining=True)`. Forks retain public history,
+`fork(copies, seed, shuffle_remaining=True, *, until_hand_end=False)`.
+With `until_hand_end=True`, each branch stops after its current hand settles.
+The log retains the following hand's start for the continuation forecast, or
+the real `end_game` when the match ends. Truncation never becomes a terminal
+game target, and the pending following hand contributes no training rows.
+Forks retain public history,
 concealed hands, pending actions and prefix logs. They shuffle unrevealed wall
 tiles without moving revealed dora indicators, and seed future hands from the
-branch seed. With shuffling disabled, the initial engine state is identical;
+branch seed. Duplicate-wall forks apply the same physical-tile permutation to
+each player's remaining queue, preserving queue order, counterclockwise
+borrowing and the shared rinshan tiles. With shuffling disabled, the initial
+engine state is identical;
 subsequent collector randomness still uses the supplied seed. Repeated forks
 with the same seed are reproducible. The parent collector is unchanged.
 These continuations condition on the captured hidden hands rather than drawing
@@ -141,6 +149,16 @@ Hand counters count completed hands, including the initial partial hand of a
 fork. Riichi turn totals include declarations before the root in that hand,
 matching the retained riichi flags and completed-hand denominators. Fork
 statistics describe root-conditioned continuations, not ordinary match rates.
+
+`NativeCollector.from_match(events_json, seed, duplicate)` recreates a seeded
+evaluation trajectory. Call `next()` to inspect its pending decisions and
+`submit_recorded()` to advance the recorded actions. Replay verifies every
+generated event against the supplied log, including discard origin, consumed
+tiles and settlements; incompatible seeds or simulator histories fail.
+Triple-ron abortive draws (`sanchaho`) reconstruct all three legal ron claims:
+the log records one draw event rather than three individual wins. Unobserved
+losing claims are replayed as passes only to reconstruct the public trajectory. They are not action labels. Snapshots fork out of replay mode,
+and simultaneous claims in counterfactual branches follow the supplied policy.
 
 Action heads and dimensions are defined in
 [model/actions.py](../../model/actions.py). SavedModel exports expose their

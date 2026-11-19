@@ -1,3 +1,6 @@
+> Historical workflow; the released checkpoint uses
+> [paired corrections](../corrections/README.md).
+
 # Candidate training
 
 ## Prerequisites
@@ -57,7 +60,7 @@ Choose batch and pool sizes for the available hardware.
 ```sh
 CUDA_VISIBLE_DEVICES=GPU-TRAIN,GPU-COLLECT python -m training.candidate \
   --initial /path/to/compatible/initial.weights.h5 \
-  --reference /path/to/release/final.weights.h5 \
+  --reference /path/to/release/saved_model \
   --distill-labels /path/to/distill-labels --output /path/to/new-run \
   --collection-device GPU-COLLECT \
   --evaluation-command evaluation-command.json \
@@ -94,7 +97,8 @@ on experiment branches, not launch flags.
 | Excess losing-hand downside penalty coefficient | 0.1 |
 | Positive-only expert CE coefficient | 0.2 riichi; 0.2 calls |
 | Riichi hand-rate calibration target | 20% |
-| Recorded imitation | 50% expert / 50% greedy distill policy Q-weighted CE; separate adaptive beta targeting 70% ESS |
+| Policy value | ST3/100 + P(first) - P(fourth); raw ST3 remains an evaluation metric |
+| Recorded imitation | 50% expert / 50% greedy distill policy Q-weighted CE; beta starts0.16 and adapts toward70% ESS |
 | Previous-policy mirror KL coefficient | 0.3 |
 | Continuations per selected action | 1 |
 | Targeted sampling fraction | 50% |
@@ -118,13 +122,14 @@ the worker count or game batch size.
 | `--replay-positions` | Capacity of each disk-backed replay pool |
 
 Every restart loads all weights from `--initial`, including actor and attention
-weights. `--reference` remains the fixed production magnet. Optimizers,
+weights. `--reference` loads the production SavedModel's `policy` signature
+as the fixed magnet, independently of the candidate architecture. Optimizers,
 exposure/cohort counters, schedules, replay and TensorBoard start fresh in a
 new output directory. The previous-policy snapshot starts from the initializer.
 
-Initial weights and fixed-reference weights remain separate required paths.
-The v2.0 fixed magnet uses its original scoring tensors from the required
-`magnet_win_value_*` fields; candidate and mirror use corrected dama values.
+Initial weights and the fixed-reference SavedModel remain separate required
+paths. The plan records hashes of every reference export file. The promoted
+magnet receives the same corrected action-conditioned inputs as the candidate.
 Rebuild datasets that lack this [input contract](../../log_dataset/native_collection/README.md#action-conditioned-win-values).
 `--seed` controls reproducibility. The saved plan includes the fixed recipe and
 capacity settings.

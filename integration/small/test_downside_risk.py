@@ -2,6 +2,7 @@
 
 import numpy
 import tensorflow as tf
+
 from model import critic, joint_settlement
 
 
@@ -51,4 +52,19 @@ def test_downside_uses_loss_probability_and_below_mean_shortfall(monkeypatch):
     )
     numpy.testing.assert_allclose(
         network.projected_mean_downside(inputs, payoff), expected, atol=1e-6
+    )
+    # Diagnostics retain raw ST3 moments, not 100 times the new objective.
+    objective = tf.constant(
+        [[[-2.0], [1.0], [2.0]], [[-2.0], [1.0], [2.0]], [[0.0], [1.0], [2.0]]]
+    )
+    numpy.testing.assert_allclose(
+        network.projected_mean_downside(
+            inputs, tf.stack([objective, payoff], axis=-1)
+        ),
+        [
+            [0.75, 0, 60, 5],
+            [0.75, 0, 60, 0],
+            [1.5, numpy.sqrt(0.125), 60, numpy.sqrt(50)],
+        ],
+        atol=1e-6,
     )

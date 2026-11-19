@@ -10,6 +10,7 @@ import sys
 import time
 
 import numpy
+
 from log_dataset import _native_collection
 from model import actions, outcomes
 
@@ -32,6 +33,7 @@ def initial_features(seed):
 def predictor(actor):
     """Pack on the CPU and transfer a few lossless buffers per inference."""
     import tensorflow as tf
+
     from log_dataset import training_data
 
     strategy = tf.distribute.get_strategy()
@@ -217,6 +219,7 @@ def collect(
     retain_features=True,
     collector=None,
     root_callback=None,
+    greedy=False,
 ):
     return collect_streams(
         predict,
@@ -227,6 +230,7 @@ def collect(
                 retain_features=retain_features,
                 collector=collector,
                 root_callback=root_callback,
+                greedy=greedy,
             )
         ],
     )[0]
@@ -267,8 +271,14 @@ def collection_steps(
     collector=None,
     root_callback=None,
     forced_root=None,
+    greedy=False,
 ):
     """Collect fresh games or supplied native continuations, without records."""
+    if greedy:
+        import tensorflow as tf
+
+        from model import actor as actor_layers
+
     first = True
     if collector is None:
         collector = _native_collection.NativeCollector(games, seed)
@@ -322,13 +332,19 @@ def collection_steps(
             )
             root_callback(collector, batch)
             priority = batch["targets"] & 8
-        cumulative = numpy.exp(batch["behavior"]).cumsum(
-            axis=1, dtype=numpy.float64
-        )
-        cumulative /= cumulative[:, -1:]
-        batch["chosen"] = (
-            generator.random((len(cumulative), 1)) >= cumulative
-        ).sum(axis=1)
+        if greedy:
+            with tf.device("/CPU:0"):
+                batch["chosen"] = actor_layers.greedy_choices(
+                    batch["behavior"], batch["head"]
+                ).numpy()
+        else:
+            cumulative = numpy.exp(batch["behavior"]).cumsum(
+                axis=1, dtype=numpy.float64
+            )
+            cumulative /= cumulative[:, -1:]
+            batch["chosen"] = (
+                generator.random((len(cumulative), 1)) >= cumulative
+            ).sum(axis=1)
         batch["paired_root"] = numpy.zeros(count, numpy.bool_)
         batch["root_path"] = numpy.zeros(count, numpy.uint8)
         if first and forced_root is not None:
@@ -360,7 +376,7 @@ def collection_steps(
         outcomes.normalize_draw_payments(events)
     settlements = [outcomes.hand_continuation_states(events) for events in logs]
     payments = []
-    for events in logs:
+    for events, states in zip(logs, settlements):
         starts = [
             i
             for i, event in enumerate(events)
@@ -369,7 +385,9 @@ def collection_steps(
         payments.append(
             [
                 outcomes.terminal_payments(events[start:end])
-                for start, end in zip(starts, starts[1:] + [len(events)])
+                for start, end in zip(
+                    starts[: len(states)], starts[1:] + [len(events)]
+                )
             ]
         )
     indices = numpy.concatenate([batch.pop("indices") for batch in batches])

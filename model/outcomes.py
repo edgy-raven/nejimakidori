@@ -4,6 +4,7 @@ import numpy
 
 PAYMENT_TYPES = ("ron", "tsumo", "draw", "bank")
 SAINT3_JADE_SOUTH_OFFSETS = (125, 60, -5, -255)
+OBJECTIVE_ST3_SCALE = 100.0
 PAYMENT_CELLS = numpy.array(
     [
         [
@@ -199,13 +200,14 @@ def terminal_scores(events):
 
 
 def hand_continuation_states(events):
-    """One observed settlement per hand and actor in a completed game.
+    """One observed settlement per completed hand and actor.
 
     Columns: four scores, four zero-based ranks, next relative dealer,
     next zero-based hand number, terminal flag, outstanding deposit points.
     Future hands supply only the immediately following round/dealer identity.
+    A hand-only continuation ends at the following start, not a fake game end.
     """
-    assert events[-1]["type"] == "end_game"
+    assert events[-1]["type"] in ("end_game", "start_kyoku")
     starts = [
         i for i, event in enumerate(events) if event["type"] == "start_kyoku"
     ]
@@ -213,7 +215,8 @@ def hand_continuation_states(events):
         events[starts[0]]["oya"] - events[starts[0]]["kyoku"] + 1
     ) % 4
     states = []
-    for hand, start in enumerate(starts):
+    completed = len(starts) - (events[-1]["type"] != "end_game")
+    for hand, start in enumerate(starts[:completed]):
         terminal = hand + 1 == len(starts)
         end = len(events) if terminal else starts[hand + 1]
         scores = terminal_scores(events[start:end])

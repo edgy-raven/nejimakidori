@@ -7,6 +7,7 @@ import numpy
 import pytest
 import tensorboard.backend.event_processing.event_accumulator as accumulator
 import tensorboard.util.tensor_util
+
 from training.candidate import monitor
 
 
@@ -54,6 +55,10 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
             "effective_sample_fraction": 0.6,
             "weight_clipped_fraction": 0.2,
             "replay/record_fraction": 0.8,
+            "self_play_gain_st3": 12.0,
+            "self_play_gain_objective": 0.34,
+            "risk_penalty_st3": 2.0,
+            "risk_penalty_objective": 0.03,
         },
         exposures=150,
         cohort=1,
@@ -78,6 +83,10 @@ def test_candidate_progress_units_and_stable_tags(tmp_path, monkeypatch):
         "policy/belief_loss": 0.25,
         "policy/joint_wait_brier": 0.1,
         "policy/policy": 0.2,
+        "policy/self_play_gain_st3": 12.0,
+        "policy/self_play_gain_objective": 0.34,
+        "policy/risk_penalty_st3": 2.0,
+        "policy/risk_penalty_objective": 0.03,
         "replay/record_fraction": 0.8,
         "progress/total_fraction": 150 / 600,
     }.items():

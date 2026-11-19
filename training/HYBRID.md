@@ -1,3 +1,6 @@
+> Historical workflow; the released checkpoint uses
+> [paired corrections](corrections/README.md).
+
 # Q-weighted expert and distill policy imitation
 
 The selected candidate uses the [six-pass recipe](candidate/README.md): one
@@ -10,11 +13,11 @@ loss = 0.5 * weighted_mean(CE(expert), w(expert))
      + 0.5 * weighted_mean(CE(distill), w(distill))
 ```
 
-Each source starts at beta 16 and adapts independently toward 70% rolling
+Each source starts at beta 0.16 and adapts independently toward 70% rolling
 ESS. See the [candidate recipe](candidate/README.md) for its update bounds.
 Both terms use the same positions. Normalize each label source separately
 across recorded rows and replicas, preserving equal objective shares. Q is
-projected current-hand ST3 and the reference action comes from the fixed
+projected `ST3/100 + P(first) - P(fourth)` and the reference action comes from the fixed
 production policy. Each label uses its own Q gap; weights do not backpropagate
 into Q. The full recipe retains self-play improvement, both KL anchors,
 positive priors and shared belief/critic objectives.

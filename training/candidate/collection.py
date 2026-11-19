@@ -6,7 +6,7 @@ import time
 import numpy
 import tensorflow as tf
 from log_dataset import _native_collection, training_data
-from model import export
+from model import export, outcomes
 from training import self_play
 
 
@@ -24,17 +24,17 @@ def root_scorer(network):
     def predict(inputs):
         outputs = signature(**packing.unpack(inputs))
         state_rows = outputs["critic_action_indices"][:, 0]
-        q_st3 = outputs["critic_projected_st3"]
+        q_objective = outputs["critic_objective"]
         state_count = tf.shape(outputs["discard_policy_logits"])[0]
         policy_scores = tf.gather_nd(
             outputs["discard_policy_logits"],
             outputs["critic_action_indices"],
         )
-        action_positions = tf.range(tf.size(q_st3))
+        action_positions = tf.range(tf.size(q_objective))
         selected = []
         # Minimize -Q for the best action, then -policy logit for the comparison.
         # Ties choose the first candidate in the existing action order.
-        for scores in (-q_st3, -policy_scores):
+        for scores in (-q_objective, -policy_scores):
             minimum = tf.math.unsorted_segment_min(
                 scores, state_rows, state_count
             )
@@ -42,7 +42,7 @@ def root_scorer(network):
             selected.append(
                 tf.math.unsorted_segment_min(
                     tf.where(
-                        tied_for_minimum, action_positions, tf.size(q_st3)
+                        tied_for_minimum, action_positions, tf.size(q_objective)
                     ),
                     state_rows,
                     state_count,
@@ -50,10 +50,18 @@ def root_scorer(network):
             )
         best, preferred = selected
         different_actions = best != preferred
-        q_gap_st3 = tf.gather(q_st3, best) - tf.gather(q_st3, preferred)
+        q_gap_objective = tf.gather(q_objective, best) - tf.gather(
+            q_objective, preferred
+        )
         return {
+            "q_values": tf.tensor_scatter_nd_update(
+                tf.fill([state_count, 37], tf.constant(-float("inf"))),
+                outputs["critic_action_indices"],
+                q_objective,
+            ),
             "priority": tf.cast(
-                different_actions & (q_gap_st3 >= 0.25),
+                different_actions
+                & (q_gap_objective >= 0.25 / outcomes.OBJECTIVE_ST3_SCALE),
                 tf.float32,
             ),
             "actions": tf.where(

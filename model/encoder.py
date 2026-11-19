@@ -403,57 +403,6 @@ class HandBank(tf.keras.layers.Layer):
 
 
 @tf.keras.utils.register_keras_serializable(package="nejimakidori")
-class RiverSelfAttention(tf.keras.layers.Layer):
-    """Mix observed events across all opponent pre/post-riichi streams."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.stream = tf.keras.layers.Embedding(6, 64, dtype=self.dtype_policy)
-        self.position = tf.keras.layers.Embedding(
-            32, 64, dtype=self.dtype_policy
-        )
-        self.normalization = tf.keras.layers.LayerNormalization(
-            dtype=self.dtype_policy
-        )
-        self.attention = tf.keras.layers.MultiHeadAttention(
-            num_heads=4,
-            key_dim=16,
-            use_bias=False,
-            dtype=self.dtype_policy,
-        )
-        self.correction = tf.keras.layers.Dense(
-            64,
-            use_bias=False,
-            kernel_initializer="zeros",
-            dtype=self.dtype_policy,
-        )
-
-    def build(self, input_shape):
-        self.stream.build((192,))
-        self.position.build((192,))
-        self.normalization.build((None, 192, 64))
-        self.attention.build(
-            query_shape=(None, 192, 64), value_shape=(None, 193, 64)
-        )
-        self.correction.build((None, 192, 64))
-        super().build(input_shape)
-
-    def call(self, values):
-        tokens, valid = values
-        queries = self.normalization(
-            tokens
-            + self.stream(tf.range(192) // 32)[None]
-            + self.position(tf.range(192) % 32)[None]
-        )
-        keys = tf.concat([queries, tf.zeros_like(queries[:, :1])], axis=1)
-        mask = tf.concat([valid, tf.ones_like(valid[:, :1])], axis=1)
-        correction = self.correction(
-            self.attention(queries, keys, attention_mask=mask[:, None, :])
-        )
-        return tf.where(valid[..., None], tokens + correction, 0)
-
-
-@tf.keras.utils.register_keras_serializable(package="nejimakidori")
 class RiverEncoding(tf.keras.layers.Layer):
     """Encode separately padded pre/post-riichi rivers with shared weights."""
 
@@ -488,7 +437,6 @@ class RiverEncoding(tf.keras.layers.Layer):
         self.projection = tf.keras.layers.Dense(
             64, activation="gelu", dtype=self.dtype_policy
         )
-        self.river_attention = RiverSelfAttention(dtype=self.dtype_policy)
 
     def build(self, input_shape):
         self.embedding.build(input_shape["river_pre_tile_id"])
@@ -499,7 +447,6 @@ class RiverEncoding(tf.keras.layers.Layer):
             convolution.build((None, 32, 64))
             normalization.build((None, 32, 64))
         self.projection.build((None, 33 * 64))
-        self.river_attention.build([(None, 192, 64), (None, 192)])
         super().build(input_shape)
 
     def call(self, inputs):
@@ -544,7 +491,7 @@ class RiverEncoding(tf.keras.layers.Layer):
             values = (
                 tf.nn.gelu(normalization(values + convolution(values))) * mask
             )
-        # Shared local summaries precede stream-specific cross-river context.
+        # Shared summaries retain each opponent's pre/post-riichi history.
         # Empty rivers remain identical regardless of their storage slot.
         local = tf.concat(
             [
@@ -560,15 +507,6 @@ class RiverEncoding(tf.keras.layers.Layer):
             ],
             axis=-1,
         )
-        values = tf.reshape(
-            self.river_attention(
-                [
-                    tf.reshape(values, (-1, 192, 64)),
-                    tf.reshape(mask > 0, (-1, 192)),
-                ]
-            ),
-            (-1, 32, 64),
-        )
         occupied = tf.reduce_any(mask > 0, axis=1)
         maximum = tf.where(
             occupied,
@@ -580,8 +518,6 @@ class RiverEncoding(tf.keras.layers.Layer):
         ) * tf.cast(occupied, self.compute_dtype)
         return (
             tf.reshape(encoded, (-1, 384)),
-            tf.reshape(values, (-1, 192, 64)),
-            tf.reshape(mask > 0, (-1, 192)),
             tf.reshape(local, (-1, 3, 256)),
         )
 
@@ -821,86 +757,6 @@ class DecisionCandidates(tf.keras.layers.Layer):
         )
 
 
-@tf.keras.utils.register_keras_serializable(package="nejimakidori")
-class CandidateRiverAttention(tf.keras.layers.Layer):
-    """Legal candidates query observed rivers without repeating their keys."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**{**kwargs, "autocast": False})
-        self.stream = tf.keras.layers.Embedding(6, 64, dtype=self.dtype_policy)
-        self.position = tf.keras.layers.Embedding(
-            32, 64, dtype=self.dtype_policy
-        )
-        self.normalization = tf.keras.layers.LayerNormalization(
-            dtype=self.dtype_policy
-        )
-        self.attention = tf.keras.layers.MultiHeadAttention(
-            num_heads=4,
-            key_dim=16,
-            output_shape=64,
-            use_bias=False,
-            dtype=self.dtype_policy,
-        )
-        self.correction = tf.keras.layers.Dense(
-            384,
-            use_bias=False,
-            kernel_initializer="zeros",
-            dtype=self.dtype_policy,
-        )
-
-    def build(self, input_shape):
-        self.stream.build((192,))
-        self.position.build((192,))
-        self.normalization.build((None, None, 384))
-        self.attention.build(
-            query_shape=(None, None, 384), value_shape=(None, 193, 64)
-        )
-        self.correction.build((None, None, 64))
-        super().build(input_shape)
-
-    def call(self, values):
-        candidates, selected, tokens, valid = values
-        batch = tf.shape(tokens)[0]
-        counts = tf.math.unsorted_segment_sum(
-            tf.ones_like(selected[:, 0]), selected[:, 0], batch
-        )
-        # selected is row-major. Pack only legal choices, not all 295 slots.
-        indices = tf.stack(
-            [
-                selected[:, 0],
-                tf.range(tf.shape(selected)[0])
-                - tf.gather(tf.cumsum(counts, exclusive=True), selected[:, 0]),
-            ],
-            axis=-1,
-        )
-        queries = tf.scatter_nd(
-            indices,
-            candidates,
-            (batch, tf.maximum(tf.reduce_max(counts), 1), 384),
-        )
-        tokens = (
-            tokens
-            + self.stream(tf.range(192) // 32)[None]
-            + self.position(tf.range(192) % 32)[None]
-        ) * tf.cast(valid[..., None], tokens.dtype)
-        # A zero-valued null key makes empty rivers finite and exactly neutral,
-        # including after training. It also permits ignoring observed history.
-        tokens = tf.concat(
-            [tokens, tf.zeros((batch, 1, 64), tokens.dtype)], axis=1
-        )
-        valid = tf.concat([valid, tf.ones((batch, 1), tf.bool)], axis=1)
-        return candidates + tf.gather_nd(
-            self.correction(
-                self.attention(
-                    self.normalization(queries),
-                    tokens,
-                    attention_mask=valid[:, None, :],
-                )
-            ),
-            indices,
-        )
-
-
 def encode_inputs():
     inputs = {
         name: tf.keras.Input(
@@ -909,9 +765,7 @@ def encode_inputs():
         for name, definition in _native_collection.INPUTS.items()
     }
     bank = HandBank(name="hand_bank")(inputs)
-    rivers, river_tokens, river_valid, critic_rivers = RiverEncoding(
-        name="river_encoder"
-    )(inputs)
+    rivers, critic_rivers = RiverEncoding(name="river_encoder")(inputs)
     encoded = [
         bank[:, 0],
         tf.keras.layers.GlobalAveragePooling1D()(bank),
@@ -966,9 +820,6 @@ def encode_inputs():
     candidates, selected, structure = DecisionCandidates(
         name="decision_candidates"
     )([inputs, bank, hidden])
-    candidates = CandidateRiverAttention(name="candidate_river_attention")(
-        [candidates, selected, river_tokens, river_valid]
-    )
     candidates = tf.keras.layers.LayerNormalization(
         center=False,
         scale=False,

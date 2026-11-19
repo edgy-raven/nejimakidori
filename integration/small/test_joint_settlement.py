@@ -2,6 +2,7 @@
 
 import numpy
 import tensorflow as tf
+
 from integration import settlement_reference
 from log_dataset import scoring
 from model import joint_settlement, losses, outcomes, payment_scoring
@@ -243,6 +244,35 @@ def test_payment_and_round_rank_supervise_single_and_double_ron():
     assert masked["settlement_supported_fraction"] == 1
     assert masked["payment_nll"] > 0
     assert masked["round_placement_loss"] > 0
+
+
+def test_policy_objective_adds_rank_bonuses_and_preserves_raw_st3():
+    scores = numpy.array(
+        [numpy.roll([40000.0, 30000, 20000, 10000], -seat) for seat in range(4)]
+    )
+    ranks = numpy.argsort(numpy.argsort(-scores, axis=1), axis=1)
+    st3, probability = joint_settlement.post_hand_forecast(
+        scores=tf.constant(scores, tf.float32),
+        ranks=tf.constant(ranks, tf.int64),
+        next_dealer=tf.zeros(4, tf.int64),
+        next_hand=tf.fill([4], 8),
+        terminal=tf.ones(4, tf.bool),
+        pot=tf.zeros(4),
+    )
+    numpy.testing.assert_array_equal(st3, [140, 65, -10, -270])
+    objective = joint_settlement.policy_objective(st3, probability)
+    numpy.testing.assert_allclose(objective, [2.4, 0.65, -0.1, -3.7], atol=1e-6)
+    # A forecast mixes terminal utilities; neither normalization nor bonuses
+    # may be applied to a hard predicted rank instead of the rank distribution.
+    weight = tf.constant([0.1, 0.2, 0.3, 0.4])
+    numpy.testing.assert_allclose(
+        joint_settlement.policy_objective(tf.reduce_sum(weight * st3), weight),
+        -1.14,
+        atol=1e-6,
+    )
+    numpy.testing.assert_allclose(
+        tf.reduce_sum(weight * objective), -1.14, atol=1e-6
+    )
 
 
 def test_terminal_st3_is_exact_and_draw_pot_goes_to_leader():

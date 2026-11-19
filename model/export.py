@@ -44,7 +44,7 @@ class ServingModel(tf.Module):
             name: outputs[name]
             for name in (
                 "critic_action_indices",
-                "critic_projected_st3",
+                "critic_objective",
                 "discard_policy_logits",
             )
         }
@@ -62,6 +62,7 @@ class ServingModel(tf.Module):
             payoffs = joint_settlement.gather_position_payoffs(
                 {**public, "dealer": features["dealer_relative_seat"]},
                 tf.range(tf.shape(features["decision_phase"])[0]),
+                objective=True,
             )
         probability = tf.TensorArray(
             tf.float32,
@@ -217,7 +218,7 @@ class ServingModel(tf.Module):
         if root_only:
             return {
                 "critic_action_indices": selected,
-                "critic_projected_st3": utility.concat(),
+                "critic_objective": utility.concat(),
                 "discard_policy_logits": outputs["discard_policy_logits"],
             }
         probability = probability.concat()

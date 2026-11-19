@@ -2,6 +2,7 @@
 
 import numpy
 import tensorflow as tf
+
 from log_dataset import scoring
 from model import (
     actions,
@@ -776,9 +777,11 @@ class PaymentCritic(tf.keras.Model):
         return result
 
     def projected_mean_downside(self, inputs, payoff=None, outputs=None):
-        """Mean ST3 and below-mean shortfall on net losing-hand outcomes."""
+        """Mean/downside pairs for supplied channels; default is raw ST3."""
         if payoff is None:
             payoff = joint_settlement.position_payoffs(inputs)
+        if payoff.shape.rank == 3:
+            payoff = payoff[..., None]
         if outputs is None:
             outputs = PaymentCritic.distributions(self, inputs)
         probability, _ = joint_settlement.probabilities({**inputs, **outputs})
@@ -787,24 +790,25 @@ class PaymentCritic(tf.keras.Model):
             joint_settlement.settlement_states(inputs)["joint_scores"][..., 0]
             < inputs["scores"][:, None, None, 0]
         )
-        return tf.stack(
+        statistics = tf.stack(
             [
                 mean,
                 tf.sqrt(
                     joint_settlement.expectation(
                         probability,
                         tf.where(
-                            losing,
+                            losing[..., None],
                             tf.square(
-                                tf.minimum(payoff - mean[:, None, None], 0.0)
+                                tf.minimum(payoff - mean[:, None, None, :], 0.0)
                             ),
                             0.0,
                         ),
                     )
                 ),
             ],
-            axis=1,
+            axis=-1,
         )
+        return tf.reshape(statistics, [tf.shape(mean)[0], -1])
 
     def candidate_chunk(self, inputs, payoff, weights, integer_fields):
         """Bounded, detached forecasts for actor objectives."""

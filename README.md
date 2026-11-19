@@ -3,49 +3,32 @@
 Nejimakidori (ねじまき鳥) is a four-player riichi mahjong model.
 This repository contains its network, dataset tools, training and release weights.
 
-This release uses a shared player critic with joint current-hand settlement
-predictions and Q-weighted policy training. It includes the evaluated first
-mixed-training checkpoint.
-See the [architecture](model/ARCHITECTURE.md) and
-[training objective](training/OBJECTIVE.md) for the complete method.
+The model combines tile-belief attention with a shared player critic for
+current-hand settlement. This checkpoint adds targeted paired decision
+corrections with a fixed-policy anchor.
 
-## Start here
+## Guides
 
 | Task | Guide |
 | --- | --- |
 | Install dependencies | [Source setup](SETUP.md) |
-| Build the training container | [Docker](docker/README.md) |
 | Download and verify weights | [Weights](weights/README.md) |
 | Prepare recorded games | [Datasets](log_dataset/README.md) |
-| Train the current candidate | [Training](training/README.md) |
+| Train paired corrections | [Training](training/README.md) |
 | Export and compare models | [Evaluation](training/EVALUATION.md) |
-| Understand predictions and constraints | [Model](model/README.md) |
+| Understand predictions | [Architecture](model/ARCHITECTURE.md) |
+| Build the training container | [Docker](docker/README.md) |
 
 ## Repository map
 
-| Directory | Owns |
+| Directory | Contents |
 | --- | --- |
 | `model/` | Network, losses, inference and export |
-| `log_dataset/` | Source games, features, labels and native simulator integration |
-| `training/` | Current candidate, collection, updates and evaluation |
+| `log_dataset/` | Features, labels and simulator integration |
+| `training/` | Collection, optimization and evaluation |
 | `weights/` | Release metadata and checksums |
 | `integration/` | Model and training verification |
-| `docker/` | Reproducible training environment |
+| `docker/` | Training environment |
 
-## Setup
-
-Follow [source setup](SETUP.md), then build a dataset or download weights.
-Shared Python dependencies are listed in [requirements.txt](requirements.txt).
-
-## Development
-
-`main` tracks the selected candidate. Alternative experiments belong on separate
-branches. Each folder keeps its own Markdown guides and source map.
-
-```sh
-python -m pip install pytest
-python smoke.py small
-python smoke.py big
-```
-
-The full suite includes CPU performance checks.
+Matching source is included with the release. Training weights contain no
+optimizer state. Each folder keeps its own usage guide and source map.

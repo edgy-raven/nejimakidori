@@ -1,39 +1,26 @@
 # Training
 
-`main` supports the current candidate: recorded and generated replay trained
-with Q-weighted expert imitation, magnetic self-play improvement and
-positive expert priors.
-
-Recorded imitation uses equal expert/distill policy shares with separate Q weights.
-The [hybrid workflow](HYBRID.md) describes reusable greedy labels and their
-Q-weighted objective.
+The released checkpoint uses targeted paired decision corrections.
+Only selected roots train the policy: each compares two actions using matched
+current-hand continuations and a fixed-policy KL anchor.
 
 ## Guides
 
-| Task | Read |
+| Task | Guide |
 | --- | --- |
-| Start a candidate and monitor progress | [Candidate](candidate/README.md) |
-| Understand losses, units and gradient boundaries | [Objective](OBJECTIVE.md) |
-| Understand which positions and action pairs are sampled | [Sampling](candidate/SAMPLING.md) |
-| Export weights and compare playing strength | [Evaluation](EVALUATION.md) |
-| Fit Q on completed match logs | [Match records](MATCH_RECORDS.md) |
+| Collect paired roots and train | [Corrections](corrections/README.md) |
+| Understand the objective | [Objective](OBJECTIVE.md) |
+| Export and compare checkpoints | [Evaluation](EVALUATION.md) |
+| Prepare recorded games | [Dataset guide](../log_dataset/README.md) |
 
 ## Source map
 
 | Module | Responsibility |
 | --- | --- |
-| [candidate/](candidate/) | Run scheduling, replay pools, collection and progress |
-| [trainer.py](trainer.py) | Source-specific actor gradients, optimizer steps and distribution across training devices |
-| [hybrid.py](hybrid.py) | Aligned expert records and distill-policy label reader |
-| [distill_policy.py](distill_policy.py) | Frozen upstream policy adapter |
-| [match_records.py](match_records.py) | Current-hand critic data from completed matches |
-| [temperature.py](temperature.py) | Rolling ESS calibration for expert and distill policy temperatures |
-| [self_play.py](self_play.py) | Simulator workers, action selection and paired continuations |
-| [evaluate.py](evaluate.py) | Seeded, seat-rotated matches between exports |
-| [frozen_policy.py](frozen_policy.py) | Frozen source snapshots and isolated opponent processes |
+| [corrections/](corrections/) | Root selection, paired outcomes and training |
+| [self_play.py](self_play.py) | Simulator workers and continuations |
+| [evaluate.py](evaluate.py) | Seeded, seat-rotated checkpoint matches |
+| [frozen_policy.py](frozen_policy.py) | Isolated frozen-policy inference |
+| [candidate/](candidate/) | Earlier candidate workflow and shared utilities |
 
-## Development policy
-
-Keep `main` aligned with the selected candidate. Develop alternative objectives,
-architectures and experiment runners on separate branches. Merge only the
-selected implementation, its necessary tests and its documentation.
+Earlier candidate workflows remain separate from the paired correction runner.

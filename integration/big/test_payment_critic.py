@@ -6,13 +6,13 @@ import types
 
 import numpy
 import pytest
+import riichienv
 import tensorflow as tf
+
 from log_dataset import _native_collection, scoring
-from model import actions, critic, export, inference
+from model import actions, critic, export, inference, joint_settlement
 from model import network as joint_network
 from model import outcomes, payment_scoring
-
-import riichienv
 
 
 def test_score_states_are_canonical_and_respect_win_methods():
@@ -325,9 +325,23 @@ def test_checkpoint_export_and_placement_inference(
         )
     # Independent serving traces can reorder the FP32 settlement reduction;
     # the absolute tolerance also covers values whose expectation is near zero.
+    weights = tf.gather_nd(
+        critic.candidate_probabilities(inputs[0], expected),
+        root_outputs["critic_action_indices"],
+    )
+    rows = root_outputs["critic_action_indices"][:, 0]
     numpy.testing.assert_allclose(
-        root_outputs["critic_projected_st3"],
-        expected["critic_projected_st3"],
+        tf.math.unsorted_segment_sum(
+            root_outputs["critic_objective"] * weights, rows, len(observations)
+        ),
+        joint_settlement.policy_objective(
+            tf.math.unsorted_segment_sum(
+                expected["critic_projected_st3"] * weights,
+                rows,
+                len(observations),
+            ),
+            expected["final_placement_probabilities"],
+        ),
         rtol=1e-5,
         atol=3e-5,
     )

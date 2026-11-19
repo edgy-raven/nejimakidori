@@ -4,6 +4,7 @@ import json
 
 import numpy
 import pytest
+
 from log_dataset import _native_collection
 from model import actions
 from training import self_play
@@ -225,10 +226,11 @@ def test_disagreement_compares_max_q_with_policy_choice(monkeypatch):
     import types
 
     import tensorflow as tf
+
     from training.candidate import collection
 
     outputs = {
-        "critic_projected_st3": tf.Variable([10.0, 0.0, 5.0, 5.0]),
+        "critic_objective": tf.Variable([0.1, 0.0, 0.05, 0.05]),
         actions.TRAIN_POLICY_HEADS[0]: tf.Variable(
             [[0.0, numpy.log(9.0)], [0.0, 0.0]]
         ),
@@ -244,9 +246,9 @@ def test_disagreement_compares_max_q_with_policy_choice(monkeypatch):
                 ],
                 axis=1,
             ),
-            "critic_projected_st3": tf.reshape(
+            "critic_objective": tf.reshape(
                 tf.gather(
-                    tf.reshape(outputs["critic_projected_st3"], [2, 2]), rows
+                    tf.reshape(outputs["critic_objective"], [2, 2]), rows
                 ),
                 [-1],
             ),
@@ -293,15 +295,15 @@ def test_disagreement_compares_max_q_with_policy_choice(monkeypatch):
         numpy.testing.assert_array_equal(priority["actions"][0], [0, 1])
         numpy.testing.assert_array_equal(priority["actions"][1], [-1, -1])
 
-    # Only distinct policy/max-Q actions with a 0.25 ST3 gap qualify.
-    outputs["critic_projected_st3"].assign([0.1, 0.0, 0.1, 0.0])
+    # Only distinct policy/max-Q actions with a 0.0025 objective gap qualify.
+    outputs["critic_objective"].assign([0.001, 0.0, 0.001, 0.0])
     outputs[actions.TRAIN_POLICY_HEADS[0]].assign([[0.0, 1.0], [0.0, 1.0]])
     features = {
         "decision_phase": numpy.zeros(2, numpy.int8),
         "live_wall_count": numpy.arange(2, dtype=numpy.int8),
     }
     numpy.testing.assert_array_equal(evaluate(features)["priority"], [0, 0])
-    outputs["critic_projected_st3"].assign([0.249, 0.0, 0.25, 0.0])
+    outputs["critic_objective"].assign([0.00249, 0.0, 0.0025, 0.0])
     numpy.testing.assert_array_equal(evaluate(features)["priority"], [0, 1])
     rows = numpy.zeros(2, self_play.FEATURE_DTYPE)
     for name in (

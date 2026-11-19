@@ -62,6 +62,11 @@ class Monitor:
                 "Risk penalty (ST3)": r"policy/risk_penalty_st3$",
                 "Local gradient norm": r"gradient/local_norm$",
             },
+            "Training objective": {
+                "Label Q gaps (objective)": r"policy/(expert|distill)_q_gap_objective$",
+                "Self-play gain (objective)": r"policy/self_play_gain_objective$",
+                "Risk penalty (objective)": r"policy/risk_penalty_objective$",
+            },
             "Replay": {
                 "Source shares": r"replay/(record|generated)_fraction$",
                 "Targeted shares within source": (

@@ -7,14 +7,15 @@ import pathlib
 import shutil
 import types
 
+import numpy
 import pytest
+import riichienv
 import tensorboard.backend.event_processing.event_accumulator as events
 import tensorflow as tf
+
 from log_dataset import _native_collection
 from model import actions
 from training import distill_policy, evaluate, frozen_policy
-
-import riichienv
 
 
 @pytest.mark.parametrize("opponent_kind", ["savedmodel", "distill"])
@@ -105,6 +106,26 @@ def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(
     summary = json.loads((tmp_path / "games/summary.json").read_text())
     assert summary["compared_games"] == 4
     assert summary["seed_groups"] == 1
+    assert summary["rank_point_offsets"] == [125, 60, -5, -255]
+    new_points, old_points = [], []
+    for row in rows:
+        points = numpy.ceil(
+            (numpy.array(row["scores"]) - 25000) / 1000
+            + numpy.array([125, 60, -5, -255])[numpy.array(row["ranks"]) - 1]
+        )
+        numpy.testing.assert_array_equal(row["rank_points"], points)
+        new_points.extend(points[row["new_seats"]])
+        old_points.extend(
+            [
+                value
+                for seat, value in enumerate(points)
+                if seat not in row["new_seats"]
+            ]
+        )
+    expected_st3 = numpy.mean(new_points) - numpy.mean(old_points)
+    assert summary["new_minus_old"]["rank_points"] == pytest.approx(
+        expected_st3
+    )
     assert summary["format"] == (
         "riichienv_standard_south"
         if opponent_kind == "distill"
@@ -118,6 +139,9 @@ def test_frozen_bundle_plays_all_seats_and_resumes_without_duplicates(
     assert history.Scalars("progress/completed_games")[-1].value == 4
     assert history.Scalars("progress/percent")[-1].value == 100
     assert history.Scalars("difference/rank_points")[-1].step == 4
+    assert history.Scalars("difference/rank_points")[-1].value == pytest.approx(
+        expected_st3
+    )
     if opponent_kind == "distill":
         fixture = json.loads(
             (

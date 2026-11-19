@@ -11,7 +11,8 @@ import time
 
 import numpy
 import tensorflow as tf
-from model import export, joint_settlement
+
+from model import export, joint_settlement, outcomes
 from training import self_play
 from training import trainer as trainers
 from training.candidate import collection, monitor, q_fit, replay
@@ -142,7 +143,7 @@ def run(args):
     features = self_play.initial_features(args.seed)
     with strategy.scope():
         network = export.load_network(args.initial, features)
-        reference = export.load_network(args.reference, features)
+        reference = tf.saved_model.load(args.reference)
         network.save_weights(root / "initial.weights.h5")
         previous = export.load_network(args.initial, features)
         trainer = trainers.DistributedTrainer(
@@ -151,7 +152,7 @@ def run(args):
                 args=args,
                 features=features,
                 mirror=previous.actor,
-                magnet=reference.actor,
+                magnet=reference.signatures["policy"],
             ),
             strategy,
         )
@@ -166,14 +167,20 @@ def run(args):
             "distill_weight": 0.5,
             "imitation_weighting": "q_gap_to_fixed_reference",
             "beta_mode": "rolling_ess",
+            "policy_objective": "ST3/100 + P(first) - P(fourth)",
+            "self_play_objective_weight": outcomes.OBJECTIVE_ST3_SCALE,
             "ess_target": 0.7,
             "evaluation_argv": evaluation_command,
             "initial_sha256": hashlib.sha256(
                 pathlib.Path(args.initial).read_bytes()
             ).hexdigest(),
-            "reference_sha256": hashlib.sha256(
-                pathlib.Path(args.reference).read_bytes()
-            ).hexdigest(),
+            "reference_files_sha256": {
+                str(path.relative_to(args.reference)): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in sorted(pathlib.Path(args.reference).rglob("*"))
+                if path.is_file()
+            },
             "root_source": "generated_games",
             "optimizer_restart": True,
             "reset_policy_weights": [],
@@ -479,7 +486,7 @@ def argument_parser():
         root_copies=1,
         learning_rate=2e-5,
         final_learning_rate=5e-6,
-        beta=16.0,
+        beta=16.0 / outcomes.OBJECTIVE_ST3_SCALE,
         mirror_coefficient=0.3,
         magnet_coefficient=0.3,
         risk_coefficient=0.1,

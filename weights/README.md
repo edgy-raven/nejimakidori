@@ -1,27 +1,27 @@
 # Model files
 
-Download [Nejimakidori v2](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2-mixed1-20261118)
+Download [Nejimakidori v2](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2-r1-20261119)
 and complete [source setup](../SETUP.md).
 
 The release contains two downloads:
 
 | Download | Contents |
 | --- | --- |
-| `nejimakidori-v2-mixed1-20261118.tar.gz` | Model, training weights, source and evaluation results. |
+| `nejimakidori-v2-r1-20261119.tar.gz` | Model, training weights, source and evaluation results. |
 | `SHA256SUMS` | SHA-256 checksum for the archive. |
 
 ## Download and verify
 
 Download the archive and checksum from the
-[release](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2-mixed1-20261118):
+[release](https://github.com/edgy-raven/nejimakidori/releases/tag/nejimakidori-v2-r1-20261119):
 
 ```sh
 mkdir -p artifacts
 cd artifacts
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2-mixed1-20261118/nejimakidori-v2-mixed1-20261118.tar.gz
-curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2-mixed1-20261118/SHA256SUMS
+curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2-r1-20261119/nejimakidori-v2-r1-20261119.tar.gz
+curl -fLO https://github.com/edgy-raven/nejimakidori/releases/download/nejimakidori-v2-r1-20261119/SHA256SUMS
 sha256sum -c SHA256SUMS
-tar -xzf nejimakidori-v2-mixed1-20261118.tar.gz
+tar -xzf nejimakidori-v2-r1-20261119.tar.gz
 cd ..
 ```
 
@@ -46,5 +46,4 @@ weights contain no optimizer state and require a compatible model architecture. 
 
 The release evaluation compares the selected checkpoint against the previous v2 release using
 10,000 games. See `evaluation.json` in the archive for the final results and
-paired uncertainty bounds. The archive contains the exact evaluated weights,
-before subsequent match-log critic fitting.
+paired uncertainty bounds. The archive contains the exact evaluated round-one correction weights.

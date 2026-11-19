@@ -488,10 +488,10 @@ def expectation(probability, values):
 
 
 @tf.function(jit_compile=True)
-def position_payoffs(inputs):
+def position_payoffs(inputs, objective=False, include_st3=False):
     """Project public settlement states once for all actions in a position."""
     states = settlement_states(inputs)
-    return continuation_payoffs(
+    st3, probability = continuation_forecast(
         scores=states["joint_scores"],
         ranks=states["joint_ranks"],
         support=states["joint_support"],
@@ -499,14 +499,19 @@ def position_payoffs(inputs):
         hand_number=inputs["hand_number"],
         pot=inputs["pot"],
     )
+    payoff = policy_objective(st3, probability) if objective else st3
+    return tf.stack([payoff, st3], axis=-1) if include_st3 else payoff
 
 
-def gather_position_payoffs(inputs, positions):
+def gather_position_payoffs(
+    inputs, positions, objective=False, include_st3=False
+):
     """Project each requested position once in bounded, fixed-size chunks."""
+    shape = [len(SUPPORT) // 4, 16] + ([2] if include_st3 else [])
     payoffs = tf.TensorArray(
         tf.float32,
         size=(tf.shape(positions)[0] + 31) // 32,
-        element_shape=[32, len(SUPPORT) // 4, 16],
+        element_shape=[32, *shape],
     )
     for begin in tf.range(0, tf.shape(positions)[0], 32):
         rows = tf.gather(
@@ -516,12 +521,15 @@ def gather_position_payoffs(inputs, positions):
         payoffs = payoffs.write(
             begin // 32,
             position_payoffs(
-                {name: tf.gather(value, rows) for name, value in inputs.items()}
+                {
+                    name: tf.gather(value, rows)
+                    for name, value in inputs.items()
+                },
+                objective=objective,
+                include_st3=include_st3,
             ),
         )
-    return tf.reshape(payoffs.stack(), [-1, len(SUPPORT) // 4, 16])[
-        : tf.shape(positions)[0]
-    ]
+    return tf.reshape(payoffs.stack(), [-1, *shape])[: tf.shape(positions)[0]]
 
 
 @tf.function(jit_compile=True)
@@ -596,6 +604,15 @@ def observed_payoffs(settlements):
         terminal=tf.cast(settlements[:, 10], tf.bool),
         pot=tf.cast(settlements[:, 11], tf.float32),
     )[0]
+
+
+def policy_objective(st3, probability):
+    """Normalized ST3 plus first-place reward and fourth-place penalty."""
+    return (
+        st3 / outcomes.OBJECTIVE_ST3_SCALE
+        + probability[..., 0]
+        - probability[..., 3]
+    )
 
 
 def post_hand_forecast(scores, ranks, next_dealer, next_hand, terminal, pot):

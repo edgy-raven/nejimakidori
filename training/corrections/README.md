@@ -36,9 +36,18 @@ already chooses a safer tile, the alternative tests pushing; targeting is not
 restricted to suspected excessive aggression.
 
 Discovery uses equal numbers of logged and fresh games. Logged games are
-sampled without replacement across rounds and replayed from their original
-seed and rules; every generated event must match the log. The recorded action
-only advances discovery and never becomes an imitation target.
+sampled without replacement across rounds. The recorded action only advances
+discovery and never becomes an imitation target.
+
+Use `--matches` for completed simulator matches: their original seeds and rules
+reconstruct the trajectory, with exact event validation. Use `--expert-corpus`
+for expert ZIP archives. Every archived game is eligible for sampling. Expert
+roots reconstruct the current hand from its observed prefix, including initial
+hands, draws, calls and public indicators. The simulator executes that prefix
+to recover transition state; root features must match the log replay exactly.
+Unknown wall tiles are sampled from the remaining physical tiles, without
+conditioning on future logged draws or outcomes. Both alternatives use the
+same sampled wall. Discovery does not add expert imitation labels.
 
 Categories receive balanced discovery-game assignments. A uniform reservoir
 keeps at most one eligible root per game. Disagreement games retain up to
@@ -99,6 +108,12 @@ Create `STOP` in the output directory to stop after the current collection chunk
 or update batch. The runner saves the current weights before exiting. This is a
 weights checkpoint, not an optimizer-resume contract.
 
+To continue after a completed round, initialize from its saved weights in a
+new output directory and set `--start-round` to the next round. Keep the same
+seed, match inputs, game budget and total `--rounds`; earlier source slices and
+evaluation seeds are skipped. Optimizer, exposure counters and TensorBoard
+history start fresh.
+
 | File | Responsibility |
 | --- | --- |
 | [collection.py](collection.py) | Public root categories and paired outcomes |
@@ -114,6 +129,15 @@ CUDA_VISIBLE_DEVICES=GPU-TRAIN python -m training.corrections \
   --evaluation-command evaluation-command.json \
   --rounds 5 --games 2048 --batch-size 64 --seed 2084000
 ```
+
+For expert logs, replace `--matches` with:
+
+```sh
+--expert-corpus /path/to/2024.zip /path/to/2025.zip
+```
+
+These source options are mutually exclusive. `--rounds` and `--games` set the
+sample budget; supplying the full corpus does not imply a complete sweep.
 
 `--games` counts discovery games per round, half logged and half fresh. The
 match directories must contain completed evaluator manifests and original

@@ -1,6 +1,3 @@
-> Historical workflow; the released checkpoint uses
-> [paired corrections](../corrections/README.md).
-
 # Candidate training
 
 ## Prerequisites

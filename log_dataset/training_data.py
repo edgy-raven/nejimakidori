@@ -291,8 +291,6 @@ def process_shard(task):
             if raw.startswith(b"\x1f\x8b"):
                 raw = gzip.decompress(raw)
             events = [json.loads(line) for line in raw.splitlines()]
-            if "riichilab" in events[0]:
-                outcomes.normalize_draw_payments(events)
             seats = events[0]["player_ranks"]["retained_seats"]
             if not seats:
                 continue

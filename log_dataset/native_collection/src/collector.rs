@@ -134,7 +134,10 @@ impl Game {
                     if candidate["type"] != event["type"] {
                         return false;
                     }
-                    if candidate.get("pai").is_some() && candidate["pai"] != event["pai"] {
+                    if action.action_type != ActionType::Ankan
+                        && candidate.get("pai").is_some()
+                        && candidate["pai"] != event["pai"]
+                    {
                         return false;
                     }
                     if let Some(consumed) = candidate.get("consumed") {
@@ -406,6 +409,71 @@ impl Game {
         }
     }
 }
+/// Build a valid physical wall using only the current-hand observed prefix.
+fn expert_wall(events: &[Value]) -> Vec<u8> {
+    let mut assigned = [None; 136];
+    let mut available = (0..136u8).collect::<Vec<_>>();
+    let mut put = |position: usize, value: &Value| {
+        let code = crate::history::code(value);
+        let index = available
+            .iter()
+            .position(|&tile| crate::history::tile_code(tile) == code)
+            .expect("expert prefix contains too many copies of a tile");
+        assert!(assigned[position].is_none());
+        assigned[position] = Some(available.remove(index));
+    };
+    let start = &events[0];
+    assert_eq!(start["type"], "start_kyoku");
+    let dealer = start["oya"].as_u64().unwrap() as usize;
+    let mut position = 0;
+    for block in 0..3 {
+        for offset in 0..4 {
+            for tile in 0..4 {
+                put(
+                    position,
+                    &start["tehais"][(dealer + offset) % 4][block * 4 + tile],
+                );
+                position += 1;
+            }
+        }
+    }
+    for offset in 0..4 {
+        put(position, &start["tehais"][(dealer + offset) % 4][12]);
+        position += 1;
+    }
+    put(131, &start["dora_marker"]);
+    let mut rinshan = false;
+    let mut replacements = 0;
+    let mut markers = 1;
+    for event in &events[1..] {
+        match event["type"].as_str().unwrap() {
+            "ankan" | "kakan" | "daiminkan" => rinshan = true,
+            "tsumo" => {
+                if rinshan {
+                    put(135 - replacements, &event["pai"]);
+                    replacements += 1;
+                    rinshan = false;
+                } else {
+                    put(position, &event["pai"]);
+                    position += 1;
+                }
+            }
+            "dora" => {
+                put(131 - 2 * markers, &event["dora_marker"]);
+                markers += 1;
+            }
+            _ => {}
+        }
+    }
+    // Unobserved positions are placeholders until NativeRoot::fork shuffles
+    // their complement once. Do not compose two permutations with one seed.
+    let mut remaining = available.into_iter();
+    assigned
+        .into_iter()
+        .map(|tile| tile.unwrap_or_else(|| remaining.next().unwrap()))
+        .collect()
+}
+
 #[derive(Clone)]
 struct Request {
     game: usize,
@@ -424,6 +492,127 @@ pub struct NativeRoot {
 }
 #[pymethods]
 impl NativeRoot {
+    /// Reconstruct simulation flags by executing the observed hand prefix.
+    #[staticmethod]
+    fn from_expert_prefix(events: &str, actor: usize, phase: u8, seed: u64) -> PyResult<Self> {
+        let events: Vec<Value> = serde_json::from_str(events)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let mut collector = NativeCollector::new(1, seed)?;
+        let game = &mut collector.games[0];
+        game.engine.event_buffer = Some(Vec::new());
+        game.engine._initialize_round(
+            events[0]["oya"].as_u64().unwrap() as u8,
+            match events[0]["bakaze"].as_str().unwrap() {
+                "E" => 0,
+                "S" => 1,
+                "W" => 2,
+                "N" => 3,
+                _ => unreachable!(),
+            },
+            events[0]["honba"].as_u64().unwrap() as u8,
+            events[0]["kyotaku"].as_u64().unwrap() as u32,
+            Some(expert_wall(&events)),
+            Some(
+                events[0]["scores"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_i64().unwrap() as i32)
+                    .collect(),
+            ),
+        );
+        loop {
+            let begin = game.logs.len();
+            game.sync(&mut collector.counts);
+            for (index, actual) in game.logs.iter().enumerate().skip(begin) {
+                let expected = &events[index];
+                for (key, value) in expected.as_object().unwrap() {
+                    if key == "tehais" || key == "consumed" {
+                        // Physical copies and consumed-tile order are irrelevant.
+                        let mut actual = actual[key].clone();
+                        let mut expected = value.clone();
+                        if key == "tehais" {
+                            for hand in actual.as_array_mut().unwrap() {
+                                hand.as_array_mut().unwrap().sort_by_key(|v| v.to_string());
+                            }
+                            for hand in expected.as_array_mut().unwrap() {
+                                hand.as_array_mut().unwrap().sort_by_key(|v| v.to_string());
+                            }
+                        } else {
+                            actual
+                                .as_array_mut()
+                                .unwrap()
+                                .sort_by_key(|v| v.to_string());
+                            expected
+                                .as_array_mut()
+                                .unwrap()
+                                .sort_by_key(|v| v.to_string());
+                        }
+                        assert_eq!(actual, expected, "expert prefix event {index} field {key}");
+                    } else {
+                        assert_eq!(
+                            &actual[key], value,
+                            "expert prefix event {index} field {key}"
+                        );
+                    }
+                }
+            }
+            if game.logs.len() == events.len() {
+                break;
+            }
+            if events[game.logs.len()]["type"] == "dora" {
+                // Expert logs may reveal an open-kan indicator immediately
+                // after rinshan, while this simulator defers it to discard.
+                assert!(game.engine.wall.pending_kan_dora_count > 0);
+                game.engine.wall.pending_kan_dora_count -= 1;
+                game.engine._reveal_kan_dora();
+                continue;
+            }
+            game.recorded = Some(events.clone());
+            let choices = game
+                .engine
+                .active_players
+                .clone()
+                .into_iter()
+                .map(|seat| {
+                    let obs = game.engine.get_observation(seat);
+                    (seat, game.recorded_action(&obs, seat as usize))
+                })
+                .collect();
+            game.recorded = None;
+            game.engine.step(&choices);
+            if let Some(error) = game.engine.last_error.take() {
+                return Err(pyo3::exceptions::PyValueError::new_err(error));
+            }
+        }
+        // Preserve the corpus's public representation (including consumed-tile
+        // order), while retaining the fully simulated hidden transition state.
+        game.history = PublicHistory::new();
+        for event in &events {
+            game.history.apply(event);
+        }
+        game.logs = events;
+        collector.prepare();
+        let decision = collector
+            .requests
+            .iter()
+            .position(|request| request.seat == actor)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("expert root has no policy decision")
+            })?;
+        assert_eq!(
+            collector.requests[decision].phase, phase,
+            "expert root decision phase"
+        );
+        collector.submitted = false;
+        collector.snapshot(decision)
+    }
+
+    #[getter]
+    fn features<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.requests[self.decision].row.bytes)
+    }
+
     #[getter]
     fn decision(&self) -> usize {
         self.decision
@@ -938,6 +1127,48 @@ impl NativeCollector {
 #[cfg(test)]
 mod root_tests {
     use super::*;
+
+    #[test]
+    fn expert_prefix_preserves_public_state_and_physical_inventory() {
+        let mut collector = NativeCollector::new(1, 941).unwrap();
+        collector.prepare();
+        let request = &collector.requests[0];
+        let events = serde_json::to_string(&collector.games[0].history.events).unwrap();
+        let root =
+            NativeRoot::from_expert_prefix(&events, request.seat, request.phase, 123).unwrap();
+        assert_eq!(root.requests[root.decision].row.bytes, request.row.bytes);
+        let other_seed =
+            NativeRoot::from_expert_prefix(&events, request.seat, request.phase, 124).unwrap();
+        assert_eq!(
+            root.game.engine.wall.tiles,
+            other_seed.game.engine.wall.tiles
+        );
+        let mut inventory = root.game.engine.wall.tiles.clone();
+        for player in &root.game.engine.players {
+            inventory.extend(&player.hand);
+        }
+        inventory.sort();
+        assert_eq!(inventory, (0..136u8).collect::<Vec<_>>());
+        let first = root.fork(1, 17, true, true).unwrap();
+        let second = root.fork(1, 17, true, true).unwrap();
+        assert_eq!(
+            first.games[0].engine.wall.tiles,
+            second.games[0].engine.wall.tiles
+        );
+        assert_eq!(
+            first.games[0].engine.wall.dora_indicators,
+            root.game.engine.wall.dora_indicators
+        );
+        for (before, after) in root
+            .game
+            .engine
+            .players
+            .iter()
+            .zip(&first.games[0].engine.players)
+        {
+            assert_eq!(before.hand, after.hand);
+        }
+    }
 
     #[test]
     fn recorded_triple_ron_restores_all_three_claims() {

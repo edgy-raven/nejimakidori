@@ -160,6 +160,25 @@ the log records one draw event rather than three individual wins. Unobserved
 losing claims are replayed as passes only to reconstruct the public trajectory. They are not action labels. Snapshots fork out of replay mode,
 and simultaneous claims in counterfactual branches follow the supplied policy.
 
+`NativeRoot.from_expert_prefix(events_json, actor, phase, seed)` reconstructs
+an archived expert decision without a simulator seed. Its input starts at the
+current hand's `start_kyoku` and ends at the observed decision. Initial hands,
+observed draws and revealed indicators constrain a unique-copy physical wall;
+the remaining tiles fill a canonical placeholder wall until `fork` samples
+its unseen complement uniformly. It executes the recorded prefix
+through the simulator to recover riichi, furiten, kan and simultaneous-response
+state. It never consumes a future log suffix. Public feature rows retain the
+original recorded event representation, including consumed-tile order.
+
+Expert open-kan logs may reveal dora after the replacement draw and before the
+discard; prefix reconstruction applies that observed reveal before exposing the
+root. No future indicator is revealed. Concealed-kan actions are identified by
+their consumed tiles even when the expert event omits the redundant `pai` field.
+Both canonical replay implementations retain the replacement-draw flag, so a
+rinshan-only win enters the win head rather than discard correction sampling.
+The Python adapter checks every root feature against canonical replay before
+forking. Both branches then use the same ordinary `NativeRoot.fork` contract.
+
 Action heads and dimensions are defined in
 [model/actions.py](../../model/actions.py). SavedModel exports expose their
 input and output schemas through the `serving_default` signature.

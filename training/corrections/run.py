@@ -65,6 +65,8 @@ def match_sources(directories):
 
 
 def run(args):
+    if not 1 <= args.start_round <= args.rounds:
+        raise ValueError("Start round must be within the planned rounds")
     if min(args.rounds, args.games, args.batch_size) <= 0:
         raise ValueError(
             "Rounds, discovery games and batch size must be positive"
@@ -85,7 +87,11 @@ def run(args):
     for device in devices:
         tf.config.experimental.set_memory_growth(device, True)
     tf.keras.utils.set_random_seed(args.seed)
-    recorded = match_sources(args.matches)
+    recorded = (
+        matches.expert_sources(args.expert_corpus)
+        if args.expert_corpus
+        else match_sources(args.matches)
+    )
     if args.rounds * (args.games // 2) > len(recorded):
         raise ValueError("Not enough logged games for fresh roots each round")
     root = pathlib.Path(args.output).resolve()
@@ -158,7 +164,7 @@ def run(args):
         writer.flush()
 
     report("initialized", 0, {})
-    for round_number in range(1, args.rounds + 1):
+    for round_number in range(args.start_round, args.rounds + 1):
         if (root / "STOP").exists():
             break
         report("collecting-pairs", round_number, {})
@@ -314,8 +320,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("initial", "reference", "output", "evaluation-command"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--matches", nargs="+", required=True)
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--matches", nargs="+")
+    sources.add_argument("--expert-corpus", nargs="+")
     parser.add_argument("--rounds", type=int, default=5)
+    parser.add_argument("--start-round", type=int, default=1)
     parser.add_argument("--games", type=int, default=2048)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--seed", type=int, required=True)

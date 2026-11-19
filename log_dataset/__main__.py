@@ -7,7 +7,7 @@ import os
 import pathlib
 import types
 
-from log_dataset import download, player_ranks, riichilab
+from log_dataset import download, player_ranks
 
 
 def run(args):
@@ -41,21 +41,6 @@ def run(args):
             if not (enriched / "player_ranks.json").exists():
                 player_ranks.run(archives, args.databases, enriched)
             archives = enriched
-        extra = list(args.extra_archives)
-        if args.own_bots:
-            teachers = root / "teachers"
-            if not (teachers / "player_ranks.json").exists():
-                riichilab.run(
-                    types.SimpleNamespace(
-                        own_bots=args.own_bots,
-                        teachers=[
-                            f"{bot}:{dan}"
-                            for bot, dan in riichilab.TEACHERS.items()
-                        ],
-                        output=str(teachers),
-                    )
-                )
-            extra.append(str(teachers))
         # Record building is CPU work, including its spawned workers.
         os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
         from log_dataset import training_data
@@ -63,7 +48,7 @@ def run(args):
         training_data.run(
             types.SimpleNamespace(
                 archives=str(archives),
-                extra_archives=extra,
+                extra_archives=args.extra_archives,
                 output=str(root / "data"),
                 reserve=args.reserve,
                 workers=args.workers,
@@ -84,7 +69,6 @@ def main():
         help="Historical rank databases; omit for enriched archives",
     )
     parser.add_argument("--extra-archives", action="append", default=[])
-    parser.add_argument("--own-bots", nargs="+", type=int)
     parser.add_argument("--reserve", required=True)
     parser.add_argument("--workers", type=int, default=24)
     parser.add_argument("--limit-games", type=int)

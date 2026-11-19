@@ -26,8 +26,8 @@ from recorded choices and action-conditioned current-hand forecasts.
 
 [actor.py](actor.py) applies opening symmetry and final-wall safety rules.
 Its other heuristic prior outputs are training diagnostics.
-Earlier candidate training used positive-only first-riichi and call priors.
-The paired correction runner does not apply these imitation losses.
+Positive-only first-riichi and call priors add an expert cross-entropy term
+under the [candidate objective](../training/OBJECTIVE.md#fixed-policy-pull).
 Their threat and post-action scoring facts bypass learned encoder projections;
 they neither change inference logits nor introduce new trained parameters.
 

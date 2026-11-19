@@ -5,10 +5,10 @@ import inspect
 import json
 
 import numpy
+import riichienv
+
 from log_dataset import records, shanten
 from model import actions
-
-import riichienv
 
 CALL_TYPES = {"chi", "pon", "daiminkan"}
 OBSERVATION_FIELDS = tuple(
@@ -297,6 +297,12 @@ class Replay:
         elif kind == "dora":
             self.dora_markers.append(event["dora_marker"])
         self.native_env.apply_event(event)
+        if kind == "tsumo":
+            self.native_env.is_rinshan_flag = (
+                self.rinshan_actor == event["actor"]
+            )
+        elif kind == "dahai":
+            self.native_env.is_rinshan_flag = False
 
     def replay_events(self):
         index = 0

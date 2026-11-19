@@ -235,6 +235,12 @@ impl PublicHistory {
         }
         self.replay
             .apply_mjai_event(serde_json::from_value::<MjaiEvent>(event.clone()).unwrap());
+        if kind == "tsumo" {
+            self.replay.is_rinshan_flag =
+                self.rinshan_actor == Some(event["actor"].as_u64().unwrap() as usize);
+        } else if kind == "dahai" {
+            self.replay.is_rinshan_flag = false;
+        }
     }
     pub fn public_tiles(&self) -> impl Iterator<Item = usize> + '_ {
         self.dora_markers

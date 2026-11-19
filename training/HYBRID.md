@@ -1,6 +1,3 @@
-> Historical workflow; the released checkpoint uses
-> [paired corrections](corrections/README.md).
-
 # Q-weighted expert and distill policy imitation
 
 The selected candidate uses the [six-pass recipe](candidate/README.md): one

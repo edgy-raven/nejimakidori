@@ -122,9 +122,7 @@ def parse_batch(examples):
 
     parsed = tf.io.parse_example(
         examples,
-        {
-            **{name: tf.io.FixedLenFeature([], tf.string) for name in FIELDS},
-        },
+        {name: tf.io.FixedLenFeature([], tf.string) for name in FIELDS},
     )
     return decode_batch(parsed)
 

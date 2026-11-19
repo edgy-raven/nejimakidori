@@ -24,25 +24,22 @@ class JointPolicyPayment(tf.keras.Model):
         belief_probability = beliefs.Probabilities(dtype="float32")(
             belief_logits
         )
-        self.encoder = tf.keras.Model(
-            inputs,
-            dict(
-                candidate=candidates,
-                board=board,
-                selected=selected,
-                structure=structure,
-                critic_rivers=critic_rivers,
-                **belief_logits,
-                belief_context=tf.keras.layers.Concatenate(dtype="float32")(
-                    [
-                        tf.keras.layers.Flatten(dtype="float32")(
-                            belief_probability[name]
-                        )
-                        for name in beliefs.BELIEF_HEADS
-                    ]
-                ),
+        encoded = {
+            "candidate": candidates,
+            "board": board,
+            "selected": selected,
+            "structure": structure,
+            "critic_rivers": critic_rivers,
+            **belief_logits,
+            "belief_context": tf.keras.layers.Concatenate(dtype="float32")(
+                [
+                    tf.keras.layers.Flatten(dtype="float32")(
+                        belief_probability[name]
+                    )
+                    for name in beliefs.BELIEF_HEADS
+                ]
             ),
-        )
+        }
         tf.keras.mixed_precision.set_global_policy("float32")
         self.context = critic.HandContext(dtype="float32")
         self.public = critic.PublicContext(dtype="float32")
@@ -54,16 +51,10 @@ class JointPolicyPayment(tf.keras.Model):
             ).shape[-1],
         )
 
-        inputs = self.encoder.input
-        encoded = self.encoder.output
-        probability = beliefs.Probabilities(dtype="float32")(encoded)
         outputs, context = actor_layers.build_board_heads(
             inputs=inputs,
-            hidden=encoded["board"],
-            predictions={
-                name: (encoded[name], probability[name])
-                for name in beliefs.BELIEF_HEADS
-            },
+            hidden=board,
+            belief_probability=belief_probability,
         )
         outputs.update(
             actor_layers.build_policy_heads(
@@ -74,7 +65,11 @@ class JointPolicyPayment(tf.keras.Model):
                 context=context,
             )
         )
-        outputs.update(actor_layers.PolicySummaries(dtype="float32")(outputs))
+        outputs.update(
+            actor_layers.PolicySummaries(dtype="float32")(
+                {**outputs, **belief_logits}
+            )
+        )
         outputs["constraint_loss"] = tf.keras.layers.Add(dtype="float32")(
             [
                 encoded["belief_constraint_loss"],
@@ -211,9 +206,8 @@ class JointPolicyPayment(tf.keras.Model):
             self.critic(
                 {name: value[:1] for name, value in recorded_inputs.items()}
             )
-        outputs = {
+        return {
             "critic_statistics": self.critic.supervised_statistics(
                 recorded_inputs, inputs[2]
             )
         }
-        return outputs

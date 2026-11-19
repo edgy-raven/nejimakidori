@@ -105,8 +105,7 @@ class PolicyPrior(tf.keras.layers.Layer):
 
 @tf.keras.utils.register_keras_serializable(package="nejimakidori")
 class PolicySummaries(tf.keras.layers.Layer):
-    def call(self, values):
-        outputs = values
+    def call(self, outputs):
         riichi = tf.reshape(outputs["riichi_policy_logits"], (-1, 2, 37))
         response = outputs["response_policy_logits"]
         chii = tf.reshape(response[:, 1:112], (-1, 3, 37))
@@ -196,7 +195,7 @@ def build_policy_heads(inputs, hidden, candidates, selected, context):
     return outputs
 
 
-def build_board_heads(inputs, hidden, predictions):
+def build_board_heads(inputs, hidden, belief_probability):
     win = tf.keras.layers.Dense(2, dtype="float32", name="win_decision_logits")(
         hidden
     )
@@ -208,8 +207,9 @@ def build_board_heads(inputs, hidden, predictions):
     outputs["win_decision_logits_prior_loss"] = PolicyPrior(
         "win_decision_logits", dtype="float32"
     )([outputs["win_decision_logits"], inputs])
-    outputs.update({name: values for name, (values, _) in predictions.items()})
-    auxiliary_logits = [probability for _, probability in predictions.values()]
+    context_probability = [
+        belief_probability[name] for name in beliefs.BELIEF_HEADS
+    ]
     for name in (
         "round_completion_yaku_logits",
         "round_completion_score_logits",
@@ -225,7 +225,7 @@ def build_board_heads(inputs, hidden, predictions):
             values = payment_scoring.CompletionMask(dtype="float32")(
                 [values, inputs]
             )
-            auxiliary_logits.append(
+            context_probability.append(
                 tf.keras.layers.Activation("sigmoid")(values)
             )
         else:
@@ -235,7 +235,7 @@ def build_board_heads(inputs, hidden, predictions):
             values = payment_scoring.CompletionScoreCoupling(dtype="float32")(
                 [values, outputs["round_completion_yaku_logits"], inputs]
             )
-            auxiliary_logits.append(tf.keras.layers.Softmax()(values))
+            context_probability.append(tf.keras.layers.Softmax()(values))
         outputs[name + "_constraint_loss"] = losses.ConstraintLoss(
             binary=name == "round_completion_yaku_logits", dtype="float32"
         )([raw, values])
@@ -244,7 +244,7 @@ def build_board_heads(inputs, hidden, predictions):
     # Other heads retain their established representation.
     context = tf.keras.layers.Dense(128, activation="gelu")(
         tf.keras.layers.Concatenate()(
-            [hidden, encoder.numeric_features(auxiliary_logits)]
+            [hidden, encoder.numeric_features(context_probability)]
         )
     )
     context = tf.keras.layers.Concatenate()([hidden, context])

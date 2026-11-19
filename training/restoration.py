@@ -2,13 +2,7 @@
 
 import tensorflow as tf
 
-from log_dataset import records
 from model import actions
-
-
-def decode_expert(raw):
-    features, labels = records.parse_batch(raw)
-    return features, *policy_choices(features, labels)
 
 
 def policy_choices(features, labels):

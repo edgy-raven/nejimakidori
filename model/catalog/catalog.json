@@ -2,7 +2,7 @@
   "meta": {
     "title": "Nejimakidori model catalog",
     "scope": "Current working source; not a production checkpoint inventory",
-    "source_digest": "6e31a53dccff2829f8bdd95cbdcc8ec924c50baee17efac44d8e1cace00bf027",
+    "source_digest": "1d2543ae539f06a2db01b7e69fe27a988d44f268a9d3277f0f67f60b63bd3351",
     "feature_count": 127,
     "feature_elements": 34976,
     "feature_bytes": 43368,
@@ -5704,7 +5704,7 @@
         ],
         "source": {
           "path": "model/actor.py",
-          "line": 130
+          "line": 129
         }
       },
       {
@@ -7612,7 +7612,7 @@
         "residual": "None",
         "source": {
           "path": "model/actor.py",
-          "line": 130
+          "line": 129
         },
         "operations": [
           {
@@ -7626,7 +7626,7 @@
             "sharing": "Within this block",
             "source": {
               "path": "model/actor.py",
-              "line": 132
+              "line": 131
             }
           },
           {
@@ -7640,7 +7640,7 @@
             "sharing": "Within this block",
             "source": {
               "path": "model/actor.py",
-              "line": 137
+              "line": 136
             }
           }
         ],
@@ -7674,7 +7674,7 @@
         "residual": "None",
         "source": {
           "path": "model/actor.py",
-          "line": 199
+          "line": 198
         },
         "operations": [
           {
@@ -7745,7 +7745,7 @@
         "residual": "None",
         "source": {
           "path": "model/actor.py",
-          "line": 147
+          "line": 146
         },
         "operations": [
           {
@@ -7773,7 +7773,7 @@
             "sharing": "Within this block",
             "source": {
               "path": "model/actor.py",
-              "line": 160
+              "line": 159
             }
           },
           {
@@ -7787,7 +7787,7 @@
             "sharing": "Parameter-free",
             "source": {
               "path": "model/actor.py",
-              "line": 168
+              "line": 167
             }
           },
           {
@@ -7801,7 +7801,7 @@
             "sharing": "Within this block",
             "source": {
               "path": "model/actor.py",
-              "line": 174
+              "line": 173
             }
           },
           {
@@ -7815,7 +7815,7 @@
             "sharing": "No separate learned per-phase candidate scorer",
             "source": {
               "path": "model/actor.py",
-              "line": 181
+              "line": 180
             }
           }
         ],
@@ -7848,7 +7848,7 @@
         "residual": "None",
         "source": {
           "path": "model/actor.py",
-          "line": 200
+          "line": 199
         },
         "operations": [
           {
@@ -7862,7 +7862,7 @@
             "sharing": "Within this block",
             "source": {
               "path": "model/actor.py",
-              "line": 200
+              "line": 199
             }
           },
           {
@@ -7876,7 +7876,7 @@
             "sharing": "Deterministic mask",
             "source": {
               "path": "model/actor.py",
-              "line": 205
+              "line": 204
             }
           }
         ],
@@ -7977,7 +7977,7 @@
             "sharing": "Shared actor/encoder predictions enter the critic",
             "source": {
               "path": "model/network.py",
-              "line": 132
+              "line": 127
             }
           },
           {
@@ -8885,7 +8885,7 @@
         "kind": "state",
         "source": {
           "path": "model/actor.py",
-          "line": 132
+          "line": 131
         }
       },
       {
@@ -8895,7 +8895,7 @@
         "kind": "constraint",
         "source": {
           "path": "model/actor.py",
-          "line": 136
+          "line": 135
         }
       },
       {
@@ -8915,7 +8915,7 @@
         "kind": "state",
         "source": {
           "path": "model/actor.py",
-          "line": 212
+          "line": 210
         }
       },
       {
@@ -8935,7 +8935,7 @@
         "kind": "state",
         "source": {
           "path": "model/actor.py",
-          "line": 130
+          "line": 129
         }
       },
       {
@@ -8945,7 +8945,7 @@
         "kind": "state",
         "source": {
           "path": "model/actor.py",
-          "line": 152
+          "line": 151
         }
       },
       {
@@ -8955,7 +8955,7 @@
         "kind": "state",
         "source": {
           "path": "model/actor.py",
-          "line": 156
+          "line": 155
         }
       },
       {
@@ -8965,7 +8965,7 @@
         "kind": "constraint",
         "source": {
           "path": "model/actor.py",
-          "line": 190
+          "line": 189
         }
       },
       {
@@ -8975,7 +8975,7 @@
         "kind": "state",
         "source": {
           "path": "model/actor.py",
-          "line": 200
+          "line": 199
         }
       },
       {
@@ -8985,7 +8985,7 @@
         "kind": "constraint",
         "source": {
           "path": "model/actor.py",
-          "line": 205
+          "line": 204
         }
       },
       {
@@ -8995,7 +8995,7 @@
         "kind": "state",
         "source": {
           "path": "model/network.py",
-          "line": 169
+          "line": 164
         }
       },
       {
@@ -9015,7 +9015,7 @@
         "kind": "features",
         "source": {
           "path": "model/network.py",
-          "line": 52
+          "line": 49
         }
       },
       {
@@ -9025,7 +9025,7 @@
         "kind": "state",
         "source": {
           "path": "model/network.py",
-          "line": 72
+          "line": 63
         }
       },
       {
@@ -9035,7 +9035,7 @@
         "kind": "state",
         "source": {
           "path": "model/network.py",
-          "line": 137
+          "line": 132
         }
       },
       {
@@ -9045,7 +9045,7 @@
         "kind": "state",
         "source": {
           "path": "model/network.py",
-          "line": 136
+          "line": 131
         }
       },
       {
@@ -9055,7 +9055,7 @@
         "kind": "state",
         "source": {
           "path": "model/network.py",
-          "line": 150
+          "line": 145
         }
       },
       {
@@ -9065,7 +9065,7 @@
         "kind": "state",
         "source": {
           "path": "model/network.py",
-          "line": 153
+          "line": 148
         }
       },
       {
@@ -9075,7 +9075,7 @@
         "kind": "features",
         "source": {
           "path": "model/network.py",
-          "line": 138
+          "line": 133
         }
       },
       {
@@ -9767,7 +9767,7 @@
             "label": "Route-affinity branch only; ron branch disconnected",
             "source": {
               "path": "model/actor.py",
-              "line": 132
+              "line": 131
             },
             "id": "critic-backward-actor-candidate-aux-candidate-projection"
           },
@@ -9789,7 +9789,7 @@
             "label": "VJP through three 256-channel opponent river summaries",
             "source": {
               "path": "model/network.py",
-              "line": 169
+              "line": 164
             },
             "id": "critic-backward-player-descriptors-river-summaries"
           },
@@ -9800,7 +9800,7 @@
             "label": "VJP through candidate states and action structure",
             "source": {
               "path": "model/network.py",
-              "line": 72
+              "line": 63
             },
             "id": "critic-backward-critic-common-projection-candidate-projection"
           },
@@ -9811,7 +9811,7 @@
             "label": "VJP through shared board state",
             "source": {
               "path": "model/network.py",
-              "line": 137
+              "line": 132
             },
             "id": "critic-backward-critic-common-projection-board-output"
           },
@@ -9822,7 +9822,7 @@
             "label": "VJP through flattened constrained belief probabilities",
             "source": {
               "path": "model/network.py",
-              "line": 136
+              "line": 131
             },
             "id": "critic-backward-critic-common-projection-belief-constraints"
           },
@@ -9833,7 +9833,7 @@
             "label": "VJP through route probabilities only; not final policy logits",
             "source": {
               "path": "model/network.py",
-              "line": 150
+              "line": 145
             },
             "id": "critic-backward-critic-common-projection-actor-candidate-aux"
           },
@@ -9844,7 +9844,7 @@
             "label": "VJP through completion-yaku and score probabilities",
             "source": {
               "path": "model/network.py",
-              "line": 153
+              "line": 148
             },
             "id": "critic-backward-critic-common-projection-actor-completion"
           },
@@ -10665,7 +10665,7 @@
             "label": "VJP through normalized 384-channel action states",
             "source": {
               "path": "model/actor.py",
-              "line": 132
+              "line": 131
             },
             "id": "actor-backward-actor-candidate-aux-candidate-projection"
           },
@@ -10687,7 +10687,7 @@
             "label": "VJP through constrained belief probabilities into policy context",
             "source": {
               "path": "model/actor.py",
-              "line": 212
+              "line": 210
             },
             "id": "actor-backward-actor-completion-belief-constraints"
           },
@@ -10698,7 +10698,7 @@
             "label": "VJP through 384-channel candidate representation",
             "source": {
               "path": "model/actor.py",
-              "line": 130
+              "line": 129
             },
             "id": "actor-backward-actor-final-score-candidate-projection"
           },
@@ -10709,7 +10709,7 @@
             "label": "VJP through route probabilities and ron logits",
             "source": {
               "path": "model/actor.py",
-              "line": 152
+              "line": 151
             },
             "id": "actor-backward-actor-final-score-actor-candidate-aux"
           },
@@ -10720,7 +10720,7 @@
             "label": "VJP through 640-channel gathered policy context",
             "source": {
               "path": "model/actor.py",
-              "line": 156
+              "line": 155
             },
             "id": "actor-backward-actor-final-score-actor-completion"
           },
@@ -10731,7 +10731,7 @@
             "label": "VJP through shared board state for independent win/pass readout",
             "source": {
               "path": "model/actor.py",
-              "line": 200
+              "line": 199
             },
             "id": "actor-backward-actor-win-board-output"
           },
@@ -11091,7 +11091,7 @@
             "description": "Named auxiliary predictions followed by one action policy.",
             "source": {
               "path": "model/actor.py",
-              "line": 130
+              "line": 129
             },
             "layers": [
               "tf.keras.layers.Dense(3, dtype=\"float32\", name=\"route_affinity\")",
@@ -11107,7 +11107,7 @@
             "description": "",
             "source": {
               "path": "model/actor.py",
-              "line": 199
+              "line": 198
             },
             "layers": [
               "tf.keras.layers.Dense(2, dtype=\"float32\", name=\"win_decision_logits\")",
@@ -12690,7 +12690,7 @@
         "label": "Route-affinity branch only; ron branch disconnected",
         "source": {
           "path": "model/actor.py",
-          "line": 132
+          "line": 131
         },
         "id": "critic-backward-actor-candidate-aux-candidate-projection",
         "phase": "critic",
@@ -12722,7 +12722,7 @@
         "label": "VJP through three 256-channel opponent river summaries",
         "source": {
           "path": "model/network.py",
-          "line": 169
+          "line": 164
         },
         "id": "critic-backward-player-descriptors-river-summaries",
         "phase": "critic",
@@ -12738,7 +12738,7 @@
         "label": "VJP through candidate states and action structure",
         "source": {
           "path": "model/network.py",
-          "line": 72
+          "line": 63
         },
         "id": "critic-backward-critic-common-projection-candidate-projection",
         "phase": "critic",
@@ -12754,7 +12754,7 @@
         "label": "VJP through shared board state",
         "source": {
           "path": "model/network.py",
-          "line": 137
+          "line": 132
         },
         "id": "critic-backward-critic-common-projection-board-output",
         "phase": "critic",
@@ -12770,7 +12770,7 @@
         "label": "VJP through flattened constrained belief probabilities",
         "source": {
           "path": "model/network.py",
-          "line": 136
+          "line": 131
         },
         "id": "critic-backward-critic-common-projection-belief-constraints",
         "phase": "critic",
@@ -12786,7 +12786,7 @@
         "label": "VJP through route probabilities only; not final policy logits",
         "source": {
           "path": "model/network.py",
-          "line": 150
+          "line": 145
         },
         "id": "critic-backward-critic-common-projection-actor-candidate-aux",
         "phase": "critic",
@@ -12802,7 +12802,7 @@
         "label": "VJP through completion-yaku and score probabilities",
         "source": {
           "path": "model/network.py",
-          "line": 153
+          "line": 148
         },
         "id": "critic-backward-critic-common-projection-actor-completion",
         "phase": "critic",
@@ -13650,7 +13650,7 @@
         "label": "VJP through normalized 384-channel action states",
         "source": {
           "path": "model/actor.py",
-          "line": 132
+          "line": 131
         },
         "id": "actor-backward-actor-candidate-aux-candidate-projection",
         "phase": "actor",
@@ -13682,7 +13682,7 @@
         "label": "VJP through constrained belief probabilities into policy context",
         "source": {
           "path": "model/actor.py",
-          "line": 212
+          "line": 210
         },
         "id": "actor-backward-actor-completion-belief-constraints",
         "phase": "actor",
@@ -13698,7 +13698,7 @@
         "label": "VJP through 384-channel candidate representation",
         "source": {
           "path": "model/actor.py",
-          "line": 130
+          "line": 129
         },
         "id": "actor-backward-actor-final-score-candidate-projection",
         "phase": "actor",
@@ -13714,7 +13714,7 @@
         "label": "VJP through route probabilities and ron logits",
         "source": {
           "path": "model/actor.py",
-          "line": 152
+          "line": 151
         },
         "id": "actor-backward-actor-final-score-actor-candidate-aux",
         "phase": "actor",
@@ -13730,7 +13730,7 @@
         "label": "VJP through 640-channel gathered policy context",
         "source": {
           "path": "model/actor.py",
-          "line": 156
+          "line": 155
         },
         "id": "actor-backward-actor-final-score-actor-completion",
         "phase": "actor",
@@ -13746,7 +13746,7 @@
         "label": "VJP through shared board state for independent win/pass readout",
         "source": {
           "path": "model/actor.py",
-          "line": 200
+          "line": 199
         },
         "id": "actor-backward-actor-win-board-output",
         "phase": "actor",
@@ -14296,7 +14296,7 @@
       "signatures": [],
       "source": {
         "path": "model/actor.py",
-        "line": 132
+        "line": 131
       }
     },
     {
@@ -14312,7 +14312,7 @@
       "signatures": [],
       "source": {
         "path": "model/actor.py",
-        "line": 137
+        "line": 136
       }
     },
     {
@@ -14326,7 +14326,7 @@
       "signatures": [],
       "source": {
         "path": "model/network.py",
-        "line": 78
+        "line": 73
       }
     },
     {
@@ -14514,7 +14514,7 @@
       "formula": "restoration ≠ MMD improvement",
       "source": {
         "path": "training/restoration.py",
-        "line": 14
+        "line": 8
       }
     }
   ],
@@ -15184,7 +15184,7 @@
       ],
       "source": {
         "path": "model/actor.py",
-        "line": 130
+        "line": 129
       }
     },
     {
@@ -15371,8 +15371,8 @@
     },
     {
       "path": "log_dataset/records.py",
-      "text": "\"\"\"Single numeric TFRecord contract for training and inference.\"\"\"\n\nimport hashlib\nimport json\nimport math\nimport pathlib\n\nimport numpy\n\nfrom log_dataset import _native_collection\n\nLABELS = {\n    \"ron_payments\": {\"shape\": [3, 37], \"dtype\": \"int32\"},\n    \"ron_legal\": {\"shape\": [3, 37], \"dtype\": \"int8\"},\n    \"win_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"candidate_yaku_affinity\": {\"shape\": [96, 3], \"dtype\": \"float16\"},\n    \"opponent_shanten\": {\"shape\": [3], \"dtype\": \"int8\"},\n    \"opponent_ukeire\": {\"shape\": [3, 34], \"dtype\": \"int8\"},\n    \"opponent_hand_counts\": {\"shape\": [3, 37], \"dtype\": \"int8\"},\n    \"terminal_payment\": {\"shape\": [4, 4, 4], \"dtype\": \"int32\"},\n    \"round_completion_yaku\": {\"shape\": [4, 2, 23], \"dtype\": \"int8\"},\n    \"round_completion_score\": {\"shape\": [4, 2], \"dtype\": \"int16\"},\n    \"discard_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"continuation_discard\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"riichi_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"response_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"chi_pattern\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"kan_action\": {\"shape\": [], \"dtype\": \"int8\"},\n}\n\n\nPACKING = {\n    \"feature/last_tedashi_tile\": (1, 0),\n    \"feature/river_pre_tsumogiri\": (1, 0),\n    \"feature/river_pre_tedashi_relation\": (2, 0),\n    \"feature/river_pre_tedashi_gap\": (5, 0),\n    \"feature/river_pre_current_dora_multiplicity\": (3, 0),\n    \"feature/river_pre_dora_multiplicity_at_discard\": (3, 0),\n    \"feature/river_post_tsumogiri\": (1, 0),\n    \"feature/river_post_tedashi_relation\": (2, 0),\n    \"feature/river_post_tedashi_gap\": (5, 0),\n    \"feature/river_post_current_dora_multiplicity\": (3, 0),\n    \"feature/river_post_dora_multiplicity_at_discard\": (3, 0),\n    \"feature/self_yaku_possibility\": (1, 0),\n    \"feature/open_opponent_yaku_possibility\": (1, 0),\n    \"feature/opponent_called_tile_count\": (5, 0),\n    \"feature/opponent_discard_count\": (6, 0),\n    \"feature/riichi_push_count\": (7, 0),\n    \"feature/genbutsu_to_seat\": (1, 0),\n    \"feature/passed_unchanged_to_seat\": (1, 0),\n    \"feature/blocker_counts\": (2, 0),\n    \"feature/sotogawa_earliest_turn_to_seat\": (3, 0),\n    \"feature/chi_call_yaku_possibility\": (1, 0),\n    \"feature/pon_call_yaku_possibility\": (1, 0),\n    \"feature/kan_yaku_possibility\": (1, 0),\n    \"feature/discard_action_yaku_possibility\": (1, 0),\n    \"label/opponent_ukeire\": (2, 1),\n    \"label/round_completion_yaku\": (2, 1),\n}\n\nFIELDS = {\n    prefix + \"/\" + name: definition\n    for prefix, fields in (\n        (\"feature\", _native_collection.INPUTS),\n        (\"label\", LABELS),\n    )\n    for name, definition in fields.items()\n}\n\n\ndef game_partition(game_id):\n    \"\"\"Keep original games in the same corpus and rollout holdout bucket.\"\"\"\n    return int.from_bytes(hashlib.sha256(game_id.encode()).digest()[:4]) % 10\n\n\ndef encode(name, value):\n    value = numpy.asarray(value)\n    if name in PACKING:\n        width, offset = PACKING[name]\n        values = value.reshape(-1).astype(numpy.int64) + offset\n        bits = ((values[:, None] >> numpy.arange(width)) & 1).reshape(-1)\n        raw = numpy.packbits(\n            bits.astype(numpy.uint8), bitorder=\"little\"\n        ).tobytes()\n    else:\n        raw = value.tobytes()\n    return raw.rstrip(b\"\\0\")\n\n\ndef serialize_observation(observation):\n    import tensorflow as tf\n\n    example = tf.train.Example()\n    for prefix, values, definitions in (\n        (\"feature\", observation.features, _native_collection.INPUTS),\n        (\"label\", vars(observation), LABELS),\n    ):\n        for name, definition in definitions.items():\n            example.features.feature[\n                prefix + \"/\" + name\n            ].bytes_list.value.append(\n                encode(\n                    prefix + \"/\" + name,\n                    numpy.asarray(\n                        values[name], dtype=definition[\"dtype\"]\n                    ).reshape(definition[\"shape\"]),\n                )\n            )\n    for name in (\"game_id\", \"kyoku_id\"):\n        example.features.feature[\"meta/\" + name].bytes_list.value.append(\n            getattr(observation, name).encode()\n        )\n    for name in (\"decision_index\", \"actor\"):\n        example.features.feature[\"meta/\" + name].int64_list.value.append(\n            int(getattr(observation, name))\n        )\n    return example.SerializeToString()\n\n\ndef parse_batch(examples):\n    import tensorflow as tf\n\n    parsed = tf.io.parse_example(\n        examples,\n        {\n            **{name: tf.io.FixedLenFeature([], tf.string) for name in FIELDS},\n        },\n    )\n    return decode_batch(parsed)\n\n\ndef decode_batch(parsed):\n    \"\"\"Decode shared numeric fields from one parsed Example batch.\"\"\"\n    import tensorflow as tf\n\n    decoded = {}\n    for name, definition in FIELDS.items():\n        size = math.prod(definition[\"shape\"])\n        dtype = tf.as_dtype(definition[\"dtype\"])\n        if name in PACKING:\n            width, offset = PACKING[name]\n            bit = numpy.arange(size) * width\n            raw = tf.io.decode_raw(\n                parsed[name], tf.uint8, fixed_length=(size * width + 7) // 8\n            )\n            if 8 % width == 0:\n                words = tf.gather(raw, bit // 8, axis=1)\n            else:\n                # Read at most two bytes per value, including crossings.\n                raw = tf.pad(tf.cast(raw, tf.uint16), [[0, 0], [0, 1]])\n                words = tf.bitwise.bitwise_or(\n                    tf.gather(raw, bit // 8, axis=1),\n                    tf.bitwise.left_shift(\n                        tf.gather(raw, bit // 8 + 1, axis=1), 8\n                    ),\n                )\n            values = (\n                tf.cast(\n                    tf.bitwise.bitwise_and(\n                        tf.bitwise.right_shift(\n                            words, tf.constant(bit % 8, words.dtype)\n                        ),\n                        (1 << width) - 1,\n                    ),\n                    tf.int32,\n                )\n                - offset\n            )\n            values = tf.cast(values, dtype)\n        else:\n            values = tf.io.decode_raw(\n                parsed[name],\n                tf.uint16 if dtype == tf.float16 else dtype,\n                fixed_length=size * dtype.size,\n            )\n            if dtype == tf.float16:\n                values = tf.bitcast(values, tf.float16)\n        decoded[name] = tf.reshape(values, [-1, *definition[\"shape\"]])\n    inputs = {\n        name: decoded[\"feature/\" + name] for name in _native_collection.INPUTS\n    }\n    labels = {name: decoded[\"label/\" + name] for name in LABELS}\n    labels.update(\n        {\n            \"win_decision_logits\": labels[\"win_action\"],\n            \"discard_policy_logits\": labels[\"discard_action\"],\n            \"riichi_policy_logits\": tf.where(\n                labels[\"riichi_action\"] >= 0,\n                tf.cast(labels[\"riichi_action\"], tf.int32) * 37\n                + tf.cast(labels[\"continuation_discard\"], tf.int32),\n                -1,\n            ),\n            \"response_policy_logits\": tf.where(\n                labels[\"response_action\"] == 0,\n                0,\n                tf.where(\n                    labels[\"response_action\"] == 1,\n                    1\n                    + tf.cast(labels[\"chi_pattern\"], tf.int32) * 37\n                    + tf.cast(labels[\"continuation_discard\"], tf.int32),\n                    tf.where(\n                        labels[\"response_action\"] == 2,\n                        112 + tf.cast(labels[\"continuation_discard\"], tf.int32),\n                        tf.where(labels[\"response_action\"] == 3, 149, -1),\n                    ),\n                ),\n            ),\n            \"kan_action_logits\": labels[\"kan_action\"],\n        }\n    )\n    return inputs, labels\n\n\ndef validate_summary(data):\n    summary = json.loads(\n        (pathlib.Path(data) / \"dataset_summary.json\").read_text()\n    )\n    for name, expected in {\n        \"input_schema\": _native_collection.INPUTS,\n        \"label_schema\": LABELS,\n    }.items():\n        if name not in summary or summary[name] != expected:\n            raise ValueError(f\"dataset {name} requires regeneration\")\n",
-      "sha256": "a2a8de386e6ed044770a317c4420726c479061e3e87d9b963bcad21c27b3dc35"
+      "text": "\"\"\"Single numeric TFRecord contract for training and inference.\"\"\"\n\nimport hashlib\nimport json\nimport math\nimport pathlib\n\nimport numpy\n\nfrom log_dataset import _native_collection\n\nLABELS = {\n    \"ron_payments\": {\"shape\": [3, 37], \"dtype\": \"int32\"},\n    \"ron_legal\": {\"shape\": [3, 37], \"dtype\": \"int8\"},\n    \"win_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"candidate_yaku_affinity\": {\"shape\": [96, 3], \"dtype\": \"float16\"},\n    \"opponent_shanten\": {\"shape\": [3], \"dtype\": \"int8\"},\n    \"opponent_ukeire\": {\"shape\": [3, 34], \"dtype\": \"int8\"},\n    \"opponent_hand_counts\": {\"shape\": [3, 37], \"dtype\": \"int8\"},\n    \"terminal_payment\": {\"shape\": [4, 4, 4], \"dtype\": \"int32\"},\n    \"round_completion_yaku\": {\"shape\": [4, 2, 23], \"dtype\": \"int8\"},\n    \"round_completion_score\": {\"shape\": [4, 2], \"dtype\": \"int16\"},\n    \"discard_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"continuation_discard\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"riichi_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"response_action\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"chi_pattern\": {\"shape\": [], \"dtype\": \"int8\"},\n    \"kan_action\": {\"shape\": [], \"dtype\": \"int8\"},\n}\n\n\nPACKING = {\n    \"feature/last_tedashi_tile\": (1, 0),\n    \"feature/river_pre_tsumogiri\": (1, 0),\n    \"feature/river_pre_tedashi_relation\": (2, 0),\n    \"feature/river_pre_tedashi_gap\": (5, 0),\n    \"feature/river_pre_current_dora_multiplicity\": (3, 0),\n    \"feature/river_pre_dora_multiplicity_at_discard\": (3, 0),\n    \"feature/river_post_tsumogiri\": (1, 0),\n    \"feature/river_post_tedashi_relation\": (2, 0),\n    \"feature/river_post_tedashi_gap\": (5, 0),\n    \"feature/river_post_current_dora_multiplicity\": (3, 0),\n    \"feature/river_post_dora_multiplicity_at_discard\": (3, 0),\n    \"feature/self_yaku_possibility\": (1, 0),\n    \"feature/open_opponent_yaku_possibility\": (1, 0),\n    \"feature/opponent_called_tile_count\": (5, 0),\n    \"feature/opponent_discard_count\": (6, 0),\n    \"feature/riichi_push_count\": (7, 0),\n    \"feature/genbutsu_to_seat\": (1, 0),\n    \"feature/passed_unchanged_to_seat\": (1, 0),\n    \"feature/blocker_counts\": (2, 0),\n    \"feature/sotogawa_earliest_turn_to_seat\": (3, 0),\n    \"feature/chi_call_yaku_possibility\": (1, 0),\n    \"feature/pon_call_yaku_possibility\": (1, 0),\n    \"feature/kan_yaku_possibility\": (1, 0),\n    \"feature/discard_action_yaku_possibility\": (1, 0),\n    \"label/opponent_ukeire\": (2, 1),\n    \"label/round_completion_yaku\": (2, 1),\n}\n\nFIELDS = {\n    prefix + \"/\" + name: definition\n    for prefix, fields in (\n        (\"feature\", _native_collection.INPUTS),\n        (\"label\", LABELS),\n    )\n    for name, definition in fields.items()\n}\n\n\ndef game_partition(game_id):\n    \"\"\"Keep original games in the same corpus and rollout holdout bucket.\"\"\"\n    return int.from_bytes(hashlib.sha256(game_id.encode()).digest()[:4]) % 10\n\n\ndef encode(name, value):\n    value = numpy.asarray(value)\n    if name in PACKING:\n        width, offset = PACKING[name]\n        values = value.reshape(-1).astype(numpy.int64) + offset\n        bits = ((values[:, None] >> numpy.arange(width)) & 1).reshape(-1)\n        raw = numpy.packbits(\n            bits.astype(numpy.uint8), bitorder=\"little\"\n        ).tobytes()\n    else:\n        raw = value.tobytes()\n    return raw.rstrip(b\"\\0\")\n\n\ndef serialize_observation(observation):\n    import tensorflow as tf\n\n    example = tf.train.Example()\n    for prefix, values, definitions in (\n        (\"feature\", observation.features, _native_collection.INPUTS),\n        (\"label\", vars(observation), LABELS),\n    ):\n        for name, definition in definitions.items():\n            example.features.feature[\n                prefix + \"/\" + name\n            ].bytes_list.value.append(\n                encode(\n                    prefix + \"/\" + name,\n                    numpy.asarray(\n                        values[name], dtype=definition[\"dtype\"]\n                    ).reshape(definition[\"shape\"]),\n                )\n            )\n    for name in (\"game_id\", \"kyoku_id\"):\n        example.features.feature[\"meta/\" + name].bytes_list.value.append(\n            getattr(observation, name).encode()\n        )\n    for name in (\"decision_index\", \"actor\"):\n        example.features.feature[\"meta/\" + name].int64_list.value.append(\n            int(getattr(observation, name))\n        )\n    return example.SerializeToString()\n\n\ndef parse_batch(examples):\n    import tensorflow as tf\n\n    parsed = tf.io.parse_example(\n        examples,\n        {name: tf.io.FixedLenFeature([], tf.string) for name in FIELDS},\n    )\n    return decode_batch(parsed)\n\n\ndef decode_batch(parsed):\n    \"\"\"Decode shared numeric fields from one parsed Example batch.\"\"\"\n    import tensorflow as tf\n\n    decoded = {}\n    for name, definition in FIELDS.items():\n        size = math.prod(definition[\"shape\"])\n        dtype = tf.as_dtype(definition[\"dtype\"])\n        if name in PACKING:\n            width, offset = PACKING[name]\n            bit = numpy.arange(size) * width\n            raw = tf.io.decode_raw(\n                parsed[name], tf.uint8, fixed_length=(size * width + 7) // 8\n            )\n            if 8 % width == 0:\n                words = tf.gather(raw, bit // 8, axis=1)\n            else:\n                # Read at most two bytes per value, including crossings.\n                raw = tf.pad(tf.cast(raw, tf.uint16), [[0, 0], [0, 1]])\n                words = tf.bitwise.bitwise_or(\n                    tf.gather(raw, bit // 8, axis=1),\n                    tf.bitwise.left_shift(\n                        tf.gather(raw, bit // 8 + 1, axis=1), 8\n                    ),\n                )\n            values = (\n                tf.cast(\n                    tf.bitwise.bitwise_and(\n                        tf.bitwise.right_shift(\n                            words, tf.constant(bit % 8, words.dtype)\n                        ),\n                        (1 << width) - 1,\n                    ),\n                    tf.int32,\n                )\n                - offset\n            )\n            values = tf.cast(values, dtype)\n        else:\n            values = tf.io.decode_raw(\n                parsed[name],\n                tf.uint16 if dtype == tf.float16 else dtype,\n                fixed_length=size * dtype.size,\n            )\n            if dtype == tf.float16:\n                values = tf.bitcast(values, tf.float16)\n        decoded[name] = tf.reshape(values, [-1, *definition[\"shape\"]])\n    inputs = {\n        name: decoded[\"feature/\" + name] for name in _native_collection.INPUTS\n    }\n    labels = {name: decoded[\"label/\" + name] for name in LABELS}\n    labels.update(\n        {\n            \"win_decision_logits\": labels[\"win_action\"],\n            \"discard_policy_logits\": labels[\"discard_action\"],\n            \"riichi_policy_logits\": tf.where(\n                labels[\"riichi_action\"] >= 0,\n                tf.cast(labels[\"riichi_action\"], tf.int32) * 37\n                + tf.cast(labels[\"continuation_discard\"], tf.int32),\n                -1,\n            ),\n            \"response_policy_logits\": tf.where(\n                labels[\"response_action\"] == 0,\n                0,\n                tf.where(\n                    labels[\"response_action\"] == 1,\n                    1\n                    + tf.cast(labels[\"chi_pattern\"], tf.int32) * 37\n                    + tf.cast(labels[\"continuation_discard\"], tf.int32),\n                    tf.where(\n                        labels[\"response_action\"] == 2,\n                        112 + tf.cast(labels[\"continuation_discard\"], tf.int32),\n                        tf.where(labels[\"response_action\"] == 3, 149, -1),\n                    ),\n                ),\n            ),\n            \"kan_action_logits\": labels[\"kan_action\"],\n        }\n    )\n    return inputs, labels\n\n\ndef validate_summary(data):\n    summary = json.loads(\n        (pathlib.Path(data) / \"dataset_summary.json\").read_text()\n    )\n    for name, expected in {\n        \"input_schema\": _native_collection.INPUTS,\n        \"label_schema\": LABELS,\n    }.items():\n        if name not in summary or summary[name] != expected:\n            raise ValueError(f\"dataset {name} requires regeneration\")\n",
+      "sha256": "3d9bfa352aa7a46c3b8ee07f97bd0223036bd05db79bf38a3462dcb29ee05dac"
     },
     {
       "path": "log_dataset/replay.py",
@@ -15436,8 +15436,8 @@
     },
     {
       "path": "model/actor.py",
-      "text": "\"\"\"Policy heads, action priors and final candidate scoring.\"\"\"\n\nimport math\n\nimport tensorflow as tf\n\nfrom model import actions, beliefs, encoder, losses, payment_scoring\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass PolicyMask(tf.keras.layers.Layer):\n    def __init__(self, head, **kwargs):\n        super().__init__(**kwargs)\n        self.head = head\n\n    def get_config(self):\n        return {**super().get_config(), \"head\": self.head}\n\n    def call(self, values):\n        logits, inputs = values\n        mask = actions.legal_choices(inputs)[self.head]\n        if self.head in (\"discard_policy_logits\", \"riichi_policy_logits\"):\n            branches = []\n            for start in range(\n                0, 74 if self.head == \"riichi_policy_logits\" else 37, 37\n            ):\n                branch = logits[:, start : start + 37]\n                legal = mask[:, start : start + 37]\n                branch = tf.where(\n                    (\n                        (inputs[\"opponent_discard_count\"][:, 0] == 0)\n                        & (inputs[\"dealer_relative_seat\"] == 0)\n                    )[:, None],\n                    opening_discard_symmetry(branch, inputs, legal),\n                    branch,\n                )\n                if start == 0:\n                    branch = tf.where(\n                        (inputs[\"live_wall_count\"] == 0)[:, None],\n                        late_noten_safety(branch, inputs, legal),\n                        branch,\n                    )\n                branches.append(branch)\n            logits = tf.concat(branches, axis=-1)\n        return tf.where(\n            tf.reduce_any(mask, -1, keepdims=True),\n            tf.where(mask, logits, -1e4),\n            tf.zeros_like(logits),\n        )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass PolicyPrior(tf.keras.layers.Layer):\n    def __init__(self, head, **kwargs):\n        super().__init__(**kwargs)\n        self.head = head\n\n    def get_config(self):\n        return {**super().get_config(), \"head\": self.head}\n\n    def call(self, values):\n        logits, inputs = values\n        mask = actions.legal_choices(inputs)[self.head]\n        raw = tf.where(mask, logits, -1e4)\n        if self.head == \"discard_policy_logits\":\n            logits = opening_discard_symmetry(\n                opening_discard_efficiency(logits, inputs, mask),\n                inputs,\n                mask,\n            )\n        elif self.head == \"riichi_policy_logits\":\n            logits = tf.concat(\n                [\n                    opening_discard_symmetry(\n                        opening_discard_efficiency(\n                            logits[:, start : start + 37],\n                            inputs,\n                            mask[:, :37],\n                        ),\n                        inputs,\n                        mask[:, start : start + 37],\n                    )\n                    for start in (0, 37)\n                ],\n                axis=-1,\n            )\n        if self.head == \"discard_policy_logits\":\n            logits = late_noten_safety(logits, inputs, mask)\n        elif self.head == \"riichi_policy_logits\":\n            # Only the dama branch can contain noten choices.\n            logits = tf.concat(\n                [\n                    late_noten_safety(logits[:, :37], inputs, mask[:, :37]),\n                    logits[:, 37:],\n                ],\n                axis=-1,\n            )\n        target = tf.stop_gradient(\n            tf.nn.log_softmax(tf.where(mask, logits, -1e4))\n        )\n        return tf.reduce_sum(\n            tf.exp(target) * (target - tf.nn.log_softmax(raw)), axis=-1\n        )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass PolicySummaries(tf.keras.layers.Layer):\n    def call(self, values):\n        outputs = values\n        riichi = tf.reshape(outputs[\"riichi_policy_logits\"], (-1, 2, 37))\n        response = outputs[\"response_policy_logits\"]\n        chii = tf.reshape(response[:, 1:112], (-1, 3, 37))\n        pon = tf.reshape(response[:, 112:149], (-1, 1, 37))\n        return {\n            **beliefs.opponent_summaries(outputs),\n            \"riichi_action_logits\": tf.reduce_logsumexp(riichi, -1),\n            \"response_action_logits\": tf.stack(\n                [\n                    response[:, 0],\n                    tf.reduce_logsumexp(chii, (1, 2)),\n                    tf.reduce_logsumexp(pon, (1, 2)),\n                    response[:, 149],\n                ],\n                axis=-1,\n            ),\n            \"chi_pattern_logits\": tf.reduce_logsumexp(chii, -1),\n        }\n\n\ndef build_policy_heads(inputs, hidden, candidates, selected, context):\n    \"\"\"Named auxiliary predictions followed by one action policy.\"\"\"\n    route = tf.keras.layers.Dense(3, dtype=\"float32\", name=\"route_affinity\")(\n        candidates\n    )\n    raw_route = route\n    route = RouteMask(dtype=\"float32\")([route, inputs, selected])\n    ron = tf.keras.layers.Dense(3, dtype=\"float32\", name=\"candidate_ron\")(\n        candidates\n    )\n    outputs = {\n        \"route_affinity_logits\": route,\n        \"route_constraint_loss\": losses.ConstraintLoss(\n            binary=True, dtype=\"float32\"\n        )([raw_route, route, selected[:, 0]]),\n        \"candidate_ron_logits\": ron,\n    }\n    final = FinalCandidates()(\n        [\n            tf.keras.layers.Concatenate()(\n                [\n                    candidates,\n                    tf.keras.layers.Activation(\"sigmoid\")(route),\n                    ron,\n                ]\n            ),\n            context,\n            selected,\n        ]\n    )\n    final = tf.keras.layers.Dense(256, activation=\"gelu\", name=\"final_pass\")(\n        final\n    )\n    final = tf.keras.layers.LayerNormalization(\n        center=False,\n        scale=False,\n        epsilon=1e-5,\n        dtype=\"float32\",\n        name=\"final_pass_normalized\",\n    )(final)\n    # Uncomputed actions are constant padding, not learned illegal logits.\n    # Only the legal candidate scores participate in policy training.\n    final = UnpackCandidates()(\n        [\n            tf.keras.layers.Dense(1, dtype=\"float32\", name=\"final_scores\")(\n                final\n            ),\n            selected,\n            hidden,\n        ]\n    )[:, :, 0]\n    for name, values in (\n        (\"discard_policy_logits\", final[:, :37]),\n        (\"riichi_policy_logits\", final[:, 37:111]),\n        (\n            \"response_policy_logits\",\n            ResponseKan(dtype=\"float32\")([final, inputs]),\n        ),\n        (\"kan_action_logits\", final[:, 260:295]),\n    ):\n        outputs[name] = PolicyMask(name, name=name, dtype=\"float32\")(\n            [values, inputs]\n        )\n        outputs[name + \"_prior_loss\"] = PolicyPrior(\n            name, name=name + \"_prior_loss\", dtype=\"float32\"\n        )([values, inputs])\n    return outputs\n\n\ndef build_board_heads(inputs, hidden, predictions):\n    win = tf.keras.layers.Dense(2, dtype=\"float32\", name=\"win_decision_logits\")(\n        hidden\n    )\n    outputs = {\n        \"win_decision_logits\": PolicyMask(\n            \"win_decision_logits\", name=\"win_legality\", dtype=\"float32\"\n        )([win, inputs]),\n    }\n    outputs[\"win_decision_logits_prior_loss\"] = PolicyPrior(\n        \"win_decision_logits\", dtype=\"float32\"\n    )([outputs[\"win_decision_logits\"], inputs])\n    outputs.update({name: values for name, (values, _) in predictions.items()})\n    auxiliary_logits = [probability for _, probability in predictions.values()]\n    for name in (\n        \"round_completion_yaku_logits\",\n        \"round_completion_score_logits\",\n    ):\n        values = tf.keras.layers.Dense(\n            math.prod(actions.ACTOR_OUTPUTS[name]), dtype=\"float32\"\n        )(hidden)\n        values = tf.keras.layers.Reshape(\n            actions.ACTOR_OUTPUTS[name], dtype=\"float32\"\n        )(values)\n        raw = values\n        if name == \"round_completion_yaku_logits\":\n            values = payment_scoring.CompletionMask(dtype=\"float32\")(\n                [values, inputs]\n            )\n            auxiliary_logits.append(\n                tf.keras.layers.Activation(\"sigmoid\")(values)\n            )\n        else:\n            values = payment_scoring.CompletionScoreMask(dtype=\"float32\")(\n                [values, inputs]\n            )\n            values = payment_scoring.CompletionScoreCoupling(dtype=\"float32\")(\n                [values, outputs[\"round_completion_yaku_logits\"], inputs]\n            )\n            auxiliary_logits.append(tf.keras.layers.Softmax()(values))\n        outputs[name + \"_constraint_loss\"] = losses.ConstraintLoss(\n            binary=name == \"round_completion_yaku_logits\", dtype=\"float32\"\n        )([raw, values])\n        outputs[name] = values\n    # Completion probabilities carry the same constraints into the policy.\n    # Other heads retain their established representation.\n    context = tf.keras.layers.Dense(128, activation=\"gelu\")(\n        tf.keras.layers.Concatenate()(\n            [hidden, encoder.numeric_features(auxiliary_logits)]\n        )\n    )\n    context = tf.keras.layers.Concatenate()([hidden, context])\n    return outputs, context\n\n\ndef late_noten_safety(logits, inputs, legal):\n    \"\"\"Mix in uniform proven-safe discards; fully override at exhaustion.\"\"\"\n    safe = legal & tf.gather(\n        tf.reduce_all(actions.guaranteed_safe_tiles(inputs), axis=1),\n        list(range(34)) + [4, 13, 22],\n        axis=1,\n    )\n    # With an all-terminal/honor river, discarding a middle tile can forfeit\n    # nagashi mangan. The feature contract does not record own called rivers,\n    # so conservatively retain that possibility rather than infer it away.\n    middle = tf.constant([i for i in range(27) if 0 < i % 9 < 8])\n    nagashi_possible = ~tf.reduce_any(\n        tf.gather(inputs[\"genbutsu_to_seat\"][:, 0] > 0, middle, axis=1), axis=1\n    )\n    terminal_or_honor = tf.constant(\n        [i >= 27 or i % 9 in (0, 8) for i in range(34)] + [False] * 3\n    )\n    safe &= ~nagashi_possible[:, None] | terminal_or_honor[None]\n    active = tf.reduce_any(safe, axis=-1) & ~tf.reduce_any(\n        legal & (inputs[\"discard_action_all_shanten\"] <= 1), axis=-1\n    )\n    strength = tf.where(\n        active,\n        1\n        - tf.square(\n            tf.clip_by_value(\n                tf.cast(inputs[\"live_wall_count\"], tf.float32) / 8, 0, 1\n            )\n        ),\n        0.0,\n    )[:, None]\n    total = tf.reduce_logsumexp(\n        tf.where(legal, logits, -1e4), axis=-1, keepdims=True\n    )\n    uniform = total - tf.math.log(\n        tf.maximum(\n            1.0,\n            tf.reduce_sum(tf.cast(safe, tf.float32), axis=-1, keepdims=True),\n        )\n    )\n    target = tf.where(safe, uniform, -1e4)\n    mixed = tf.reduce_logsumexp(\n        tf.stack(\n            [\n                logits + tf.math.log(tf.maximum(1 - strength, 1e-30)),\n                target + tf.math.log(tf.maximum(strength, 1e-30)),\n            ],\n            axis=-1,\n        ),\n        axis=-1,\n    )\n    return tf.where(\n        strength == 0, logits, tf.where(strength == 1, target, mixed)\n    )\n\n\ndef opening_discard_efficiency(logits, inputs, legal):\n    \"\"\"Bounded efficiency bias, gone after five discards by any opponent.\"\"\"\n    score = -tf.cast(\n        inputs[\"discard_action_all_shanten\"], tf.float32\n    ) + 0.35 * tf.math.log1p(\n        tf.cast(inputs[\"discard_action_all_ukeire_count\"], tf.float32)\n    ) / math.log(\n        137.0\n    )\n    strength = tf.maximum(\n        0.0,\n        1.0\n        - tf.reduce_max(\n            tf.cast(inputs[\"opponent_discard_count\"][:, 1:], tf.float32),\n            axis=-1,\n            keepdims=True,\n        )\n        / 5.0,\n    )\n    bias = tf.clip_by_value(\n        score\n        - tf.reduce_max(tf.where(legal, score, -1e4), axis=-1, keepdims=True),\n        -1.5,\n        0.0,\n    )\n    return logits + tf.where(legal, strength * bias, 0.0)\n\n\ndef opening_discard_symmetry(logits, inputs, legal):\n    \"\"\"Exact dealer first-cut pooling; otherwise fade with opponent discards.\"\"\"\n    counts = inputs[\"candidate_hand_counts\"][:, 0]\n    suited = tf.reshape(counts[:, :27], (-1, 3, 9))\n    non_dora = ~tf.reduce_any(\n        tf.reshape(inputs[\"dora_multiplicity\"][:, :27] > 0, (-1, 3, 9)),\n        axis=-1,\n    )\n    terminals = tf.reshape(\n        tf.stack(\n            [\n                non_dora\n                & (suited[:, :, 0] == 1)\n                & tf.reduce_all(suited[:, :, 1:5] == 0, -1),\n                non_dora\n                & (suited[:, :, 8] == 1)\n                & tf.reduce_all(suited[:, :, 4:8] == 0, -1),\n            ],\n            axis=-1,\n        ),\n        (-1, 6),\n    )\n    floating = (\n        tf.linalg.matmul(\n            tf.cast(terminals, tf.float32),\n            tf.one_hot([0, 8, 9, 17, 18, 26], 37),\n        )\n        > 0\n    ) & legal\n    symmetric = (\n        non_dora\n        & (suited[:, :, 0] == 1)\n        & tf.reduce_all(suited == tf.reverse(suited, axis=[-1]), axis=-1)\n        & tf.reduce_all(suited[:, :, 1:3] == 0, axis=-1)\n        & ~tf.reduce_any(floating, axis=-1, keepdims=True)\n    )\n    winds = tf.constant([[0, 1, 2, 3]], dtype=tf.int8)\n    groups = (\n        tf.concat(\n            [\n                floating[:, None, :],\n                tf.pad(\n                    (counts[:, 31:34] == 1)\n                    & (inputs[\"dora_multiplicity\"][:, 31:34] == 0),\n                    [[0, 0], [31, 3]],\n                )[:, None, :],\n                tf.pad(\n                    (counts[:, 27:31] == 1)\n                    & (inputs[\"dora_multiplicity\"][:, 27:31] == 0)\n                    & (winds != inputs[\"seat_wind\"][:, 0, None])\n                    & (winds != inputs[\"seat_wind\"][:, 1, None])\n                    & (winds != inputs[\"prevailing_wind\"][:, None]),\n                    [[0, 0], [27, 6]],\n                )[:, None, :],\n                symmetric[:, :, None]\n                & tf.cast(\n                    tf.one_hot([0, 9, 18], 37) + tf.one_hot([8, 17, 26], 37),\n                    tf.bool,\n                )[None],\n            ],\n            axis=1,\n        )\n        & legal[:, None, :]\n    )\n    strength = tf.where(\n        (inputs[\"opponent_discard_count\"][:, 0] == 0)\n        & (inputs[\"dealer_relative_seat\"] == 0),\n        1.0,\n        tf.clip_by_value(\n            1.0\n            - tf.reduce_sum(\n                tf.cast(inputs[\"opponent_discard_count\"][:, 1:], tf.float32),\n                axis=-1,\n            )\n            / 6.0,\n            0.0,\n            5.0 / 6.0,\n        ),\n    )\n    # Log-space arithmetic preserves tiny probabilities and group mass.\n    group_mean = tf.reduce_logsumexp(\n        tf.where(groups, logits[:, None, :], -1e9), axis=-1\n    ) - tf.math.log(\n        tf.maximum(1.0, tf.reduce_sum(tf.cast(groups, tf.float32), axis=-1))\n    )\n    pooled = tf.reduce_sum(\n        tf.where(groups, group_mean[:, :, None], 0.0), axis=1\n    )\n    mixed = tf.reduce_logsumexp(\n        tf.stack(\n            [\n                logits + tf.math.log(1.0 - strength[:, None]),\n                pooled + tf.math.log(strength[:, None]),\n            ],\n            axis=-1,\n        ),\n        axis=-1,\n    )\n    return tf.where(\n        tf.reduce_any(groups, axis=1) & (strength[:, None] > 0), mixed, logits\n    )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass FinalCandidates(tf.keras.layers.Layer):\n    def call(self, values):\n        candidates, context, selected = values\n        return tf.concat(\n            [candidates, tf.gather(context, selected[:, 0])],\n            axis=-1,\n        )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass ResponseKan(tf.keras.layers.Layer):\n    def call(self, values):\n        scores, inputs = values\n        # A response kan refers to the triggering discard's base tile.\n        return tf.concat(\n            [\n                scores[:, 111:260],\n                tf.gather(\n                    scores[:, 261:295],\n                    tf.cast(inputs[\"trigger_tile_id\"], tf.int32),\n                    batch_dims=1,\n                )[:, None],\n            ],\n            axis=-1,\n        )\n\n\ndef policy_loss(labels, logits, mean=losses.mean_valid):\n    nll = tf.add_n(\n        [\n            tf.nn.sparse_softmax_cross_entropy_with_logits(\n                labels=tf.maximum(tf.cast(labels[name], tf.int32), 0),\n                logits=tf.cast(logits[name], tf.float32),\n            )\n            * tf.cast(labels[name] >= 0, tf.float32)\n            for name in actions.TRAIN_POLICY_HEADS\n        ]\n    )\n    return mean(\n        nll,\n        tf.reduce_any(\n            tf.stack(\n                [labels[name] >= 0 for name in actions.TRAIN_POLICY_HEADS]\n            ),\n            axis=0,\n        ),\n    )\n\n\ndef distribution(outputs, heads, legal):\n    \"\"\"Normalize over the exact native candidates used by the collector.\"\"\"\n    logits = tf.stack(\n        [\n            tf.pad(outputs[name], [[0, 0], [0, 150 - outputs[name].shape[-1]]])\n            for name in actions.TRAIN_POLICY_HEADS\n        ],\n        axis=1,\n    )\n    logits = tf.gather(logits, heads, batch_dims=1)\n    return tf.nn.log_softmax(tf.where(legal, logits, -1e9), axis=-1)\n\n\ndef greedy_choices(log_probability, heads):\n    \"\"\"Marginal branch selection on device, with lowest-index tie breaks.\"\"\"\n    chosen = tf.argmax(log_probability, axis=1, output_type=tf.int32)\n    for head, levels in (\n        (1, ((37, 37),)),\n        (2, ((1, 111, 37, 1), (1, 37, 37, 37, 37, 1))),\n    ):\n        scores = log_probability[:, : sum(levels[0])]\n        for sizes in levels:\n            branch = tf.argmax(\n                tf.stack(\n                    [\n                        tf.reduce_logsumexp(part, axis=1)\n                        for part in tf.split(scores, sizes, axis=1)\n                    ],\n                    axis=1,\n                ),\n                axis=1,\n                output_type=tf.int32,\n            )\n            scores = tf.where(\n                tf.repeat(tf.range(len(sizes)), sizes)[None] == branch[:, None],\n                scores,\n                -float(\"inf\"),\n            )\n        chosen = tf.where(\n            heads == head,\n            tf.argmax(scores, axis=1, output_type=tf.int32),\n            chosen,\n        )\n    return chosen\n\n\ndef offline_loss_terms(inputs, outputs, mean=losses.mean_valid):\n    metrics = {}\n    metrics[\"policy_loss\"] = policy_loss(inputs[1], outputs, mean=mean)\n    metrics[\"policy_prior_loss\"] = mean(\n        tf.add_n(\n            [\n                outputs[name + \"_prior_loss\"]\n                * tf.cast(inputs[1][name] >= 0, tf.float32)\n                for name in actions.TRAIN_POLICY_HEADS\n            ]\n        ),\n        tf.reduce_any(\n            tf.stack(\n                [inputs[1][name] >= 0 for name in actions.TRAIN_POLICY_HEADS]\n            ),\n            axis=0,\n        ),\n    )\n    metrics[\"completion_yaku_loss\"] = mean(\n        tf.nn.sigmoid_cross_entropy_with_logits(\n            labels=tf.maximum(\n                tf.cast(inputs[1][\"round_completion_yaku\"], tf.float32), 0\n            ),\n            logits=outputs[\"round_completion_yaku_logits\"],\n        ),\n        inputs[1][\"round_completion_yaku\"] >= 0,\n    )\n    metrics[\"completion_score_loss\"] = mean(\n        tf.nn.sparse_softmax_cross_entropy_with_logits(\n            labels=tf.maximum(\n                tf.cast(inputs[1][\"round_completion_score\"], tf.int32), 0\n            ),\n            logits=outputs[\"round_completion_score_logits\"],\n        ),\n        inputs[1][\"round_completion_score\"] >= 0,\n    )\n    return metrics\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass UnpackCandidates(tf.keras.layers.Layer):\n    def call(self, values):\n        packed, selected, board = values\n        return tf.scatter_nd(\n            selected,\n            packed,\n            (tf.shape(board)[0], 295, packed.shape[-1]),\n        )\n\n\nclass RouteMask(tf.keras.layers.Layer):\n    def call(self, values):\n        logits, inputs, selected = values\n        hands = tf.stack(\n            [\n                selected[:, 0],\n                tf.cast(\n                    tf.gather_nd(\n                        actions.candidate_hand_indices(inputs),\n                        selected,\n                    ),\n                    tf.int32,\n                ),\n            ],\n            axis=1,\n        )\n        allowed = payment_scoring.support(\n            tf.gather_nd(tf.cast(inputs[\"candidate_melds\"], tf.float32), hands)\n        )\n        # Outside routes include sequence-free honroutou/chinroutou.\n        return tf.where(\n            tf.stack(\n                [\n                    allowed[..., 1],\n                    allowed[..., 18],\n                    allowed[..., 10] | allowed[..., 11],\n                ],\n                axis=-1,\n            ),\n            logits,\n            -1e9,\n        )\n\n\ndef ron_risk_labels(labels, selected, structure):\n    \"\"\"Legal discard ron, including unknown amounts but excluding triple ron.\"\"\"\n    legal = tf.gather_nd(\n        tf.transpose(labels[\"ron_legal\"], [0, 2, 1]),\n        tf.stack(\n            [\n                selected[:, 0],\n                tf.minimum(tf.cast(structure[:, -1], tf.int32), 36),\n            ],\n            axis=1,\n        ),\n    )\n    risk = legal == 1\n    return risk & ~tf.reduce_all(risk, axis=1)[:, None]\n\n\ndef auxiliary_loss_terms(inputs, outputs, mean=losses.mean_valid):\n    features, labels, _ = inputs\n    selected = outputs[\"selected\"]\n    hand_indices = actions.candidate_hand_indices(features)\n    affinity = tf.cast(\n        tf.gather_nd(\n            labels[\"candidate_yaku_affinity\"],\n            tf.stack(\n                [\n                    selected[:, 0],\n                    tf.cast(tf.gather_nd(hand_indices, selected), tf.int32),\n                ],\n                axis=1,\n            ),\n        ),\n        tf.float32,\n    )\n    terms = {\n        \"route_affinity_loss\": losses.candidate_mean(\n            tf.nn.sigmoid_cross_entropy_with_logits(\n                labels=tf.maximum(affinity, 0.0),\n                logits=outputs[\"route_affinity_logits\"],\n            ),\n            affinity >= 0,\n            selected[:, 0],\n            mean=mean,\n        ),\n    }\n    risk = ron_risk_labels(labels, selected, outputs[\"structure\"])\n    terms[\"candidate_ron_loss\"] = losses.candidate_mean(\n        tf.nn.sigmoid_cross_entropy_with_logits(\n            labels=tf.cast(risk, tf.float32),\n            logits=outputs[\"candidate_ron_logits\"],\n        ),\n        tf.broadcast_to(\n            actions.discard_decisions(features, selected)[:, None],\n            tf.shape(risk),\n        ),\n        selected[:, 0],\n        mean=mean,\n    )\n    return terms\n",
-      "sha256": "98075459b225a26c7deb4d26cbc9700c5e38629ffb898a05f79b8c28cc76947a"
+      "text": "\"\"\"Policy heads, action priors and final candidate scoring.\"\"\"\n\nimport math\n\nimport tensorflow as tf\n\nfrom model import actions, beliefs, encoder, losses, payment_scoring\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass PolicyMask(tf.keras.layers.Layer):\n    def __init__(self, head, **kwargs):\n        super().__init__(**kwargs)\n        self.head = head\n\n    def get_config(self):\n        return {**super().get_config(), \"head\": self.head}\n\n    def call(self, values):\n        logits, inputs = values\n        mask = actions.legal_choices(inputs)[self.head]\n        if self.head in (\"discard_policy_logits\", \"riichi_policy_logits\"):\n            branches = []\n            for start in range(\n                0, 74 if self.head == \"riichi_policy_logits\" else 37, 37\n            ):\n                branch = logits[:, start : start + 37]\n                legal = mask[:, start : start + 37]\n                branch = tf.where(\n                    (\n                        (inputs[\"opponent_discard_count\"][:, 0] == 0)\n                        & (inputs[\"dealer_relative_seat\"] == 0)\n                    )[:, None],\n                    opening_discard_symmetry(branch, inputs, legal),\n                    branch,\n                )\n                if start == 0:\n                    branch = tf.where(\n                        (inputs[\"live_wall_count\"] == 0)[:, None],\n                        late_noten_safety(branch, inputs, legal),\n                        branch,\n                    )\n                branches.append(branch)\n            logits = tf.concat(branches, axis=-1)\n        return tf.where(\n            tf.reduce_any(mask, -1, keepdims=True),\n            tf.where(mask, logits, -1e4),\n            tf.zeros_like(logits),\n        )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass PolicyPrior(tf.keras.layers.Layer):\n    def __init__(self, head, **kwargs):\n        super().__init__(**kwargs)\n        self.head = head\n\n    def get_config(self):\n        return {**super().get_config(), \"head\": self.head}\n\n    def call(self, values):\n        logits, inputs = values\n        mask = actions.legal_choices(inputs)[self.head]\n        raw = tf.where(mask, logits, -1e4)\n        if self.head == \"discard_policy_logits\":\n            logits = opening_discard_symmetry(\n                opening_discard_efficiency(logits, inputs, mask),\n                inputs,\n                mask,\n            )\n        elif self.head == \"riichi_policy_logits\":\n            logits = tf.concat(\n                [\n                    opening_discard_symmetry(\n                        opening_discard_efficiency(\n                            logits[:, start : start + 37],\n                            inputs,\n                            mask[:, :37],\n                        ),\n                        inputs,\n                        mask[:, start : start + 37],\n                    )\n                    for start in (0, 37)\n                ],\n                axis=-1,\n            )\n        if self.head == \"discard_policy_logits\":\n            logits = late_noten_safety(logits, inputs, mask)\n        elif self.head == \"riichi_policy_logits\":\n            # Only the dama branch can contain noten choices.\n            logits = tf.concat(\n                [\n                    late_noten_safety(logits[:, :37], inputs, mask[:, :37]),\n                    logits[:, 37:],\n                ],\n                axis=-1,\n            )\n        target = tf.stop_gradient(\n            tf.nn.log_softmax(tf.where(mask, logits, -1e4))\n        )\n        return tf.reduce_sum(\n            tf.exp(target) * (target - tf.nn.log_softmax(raw)), axis=-1\n        )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass PolicySummaries(tf.keras.layers.Layer):\n    def call(self, outputs):\n        riichi = tf.reshape(outputs[\"riichi_policy_logits\"], (-1, 2, 37))\n        response = outputs[\"response_policy_logits\"]\n        chii = tf.reshape(response[:, 1:112], (-1, 3, 37))\n        pon = tf.reshape(response[:, 112:149], (-1, 1, 37))\n        return {\n            **beliefs.opponent_summaries(outputs),\n            \"riichi_action_logits\": tf.reduce_logsumexp(riichi, -1),\n            \"response_action_logits\": tf.stack(\n                [\n                    response[:, 0],\n                    tf.reduce_logsumexp(chii, (1, 2)),\n                    tf.reduce_logsumexp(pon, (1, 2)),\n                    response[:, 149],\n                ],\n                axis=-1,\n            ),\n            \"chi_pattern_logits\": tf.reduce_logsumexp(chii, -1),\n        }\n\n\ndef build_policy_heads(inputs, hidden, candidates, selected, context):\n    \"\"\"Named auxiliary predictions followed by one action policy.\"\"\"\n    route = tf.keras.layers.Dense(3, dtype=\"float32\", name=\"route_affinity\")(\n        candidates\n    )\n    raw_route = route\n    route = RouteMask(dtype=\"float32\")([route, inputs, selected])\n    ron = tf.keras.layers.Dense(3, dtype=\"float32\", name=\"candidate_ron\")(\n        candidates\n    )\n    outputs = {\n        \"route_affinity_logits\": route,\n        \"route_constraint_loss\": losses.ConstraintLoss(\n            binary=True, dtype=\"float32\"\n        )([raw_route, route, selected[:, 0]]),\n        \"candidate_ron_logits\": ron,\n    }\n    final = FinalCandidates()(\n        [\n            tf.keras.layers.Concatenate()(\n                [\n                    candidates,\n                    tf.keras.layers.Activation(\"sigmoid\")(route),\n                    ron,\n                ]\n            ),\n            context,\n            selected,\n        ]\n    )\n    final = tf.keras.layers.Dense(256, activation=\"gelu\", name=\"final_pass\")(\n        final\n    )\n    final = tf.keras.layers.LayerNormalization(\n        center=False,\n        scale=False,\n        epsilon=1e-5,\n        dtype=\"float32\",\n        name=\"final_pass_normalized\",\n    )(final)\n    # Uncomputed actions are constant padding, not learned illegal logits.\n    # Only the legal candidate scores participate in policy training.\n    final = UnpackCandidates()(\n        [\n            tf.keras.layers.Dense(1, dtype=\"float32\", name=\"final_scores\")(\n                final\n            ),\n            selected,\n            hidden,\n        ]\n    )[:, :, 0]\n    for name, values in (\n        (\"discard_policy_logits\", final[:, :37]),\n        (\"riichi_policy_logits\", final[:, 37:111]),\n        (\n            \"response_policy_logits\",\n            ResponseKan(dtype=\"float32\")([final, inputs]),\n        ),\n        (\"kan_action_logits\", final[:, 260:295]),\n    ):\n        outputs[name] = PolicyMask(name, name=name, dtype=\"float32\")(\n            [values, inputs]\n        )\n        outputs[name + \"_prior_loss\"] = PolicyPrior(\n            name, name=name + \"_prior_loss\", dtype=\"float32\"\n        )([values, inputs])\n    return outputs\n\n\ndef build_board_heads(inputs, hidden, belief_probability):\n    win = tf.keras.layers.Dense(2, dtype=\"float32\", name=\"win_decision_logits\")(\n        hidden\n    )\n    outputs = {\n        \"win_decision_logits\": PolicyMask(\n            \"win_decision_logits\", name=\"win_legality\", dtype=\"float32\"\n        )([win, inputs]),\n    }\n    outputs[\"win_decision_logits_prior_loss\"] = PolicyPrior(\n        \"win_decision_logits\", dtype=\"float32\"\n    )([outputs[\"win_decision_logits\"], inputs])\n    context_probability = [\n        belief_probability[name] for name in beliefs.BELIEF_HEADS\n    ]\n    for name in (\n        \"round_completion_yaku_logits\",\n        \"round_completion_score_logits\",\n    ):\n        values = tf.keras.layers.Dense(\n            math.prod(actions.ACTOR_OUTPUTS[name]), dtype=\"float32\"\n        )(hidden)\n        values = tf.keras.layers.Reshape(\n            actions.ACTOR_OUTPUTS[name], dtype=\"float32\"\n        )(values)\n        raw = values\n        if name == \"round_completion_yaku_logits\":\n            values = payment_scoring.CompletionMask(dtype=\"float32\")(\n                [values, inputs]\n            )\n            context_probability.append(\n                tf.keras.layers.Activation(\"sigmoid\")(values)\n            )\n        else:\n            values = payment_scoring.CompletionScoreMask(dtype=\"float32\")(\n                [values, inputs]\n            )\n            values = payment_scoring.CompletionScoreCoupling(dtype=\"float32\")(\n                [values, outputs[\"round_completion_yaku_logits\"], inputs]\n            )\n            context_probability.append(tf.keras.layers.Softmax()(values))\n        outputs[name + \"_constraint_loss\"] = losses.ConstraintLoss(\n            binary=name == \"round_completion_yaku_logits\", dtype=\"float32\"\n        )([raw, values])\n        outputs[name] = values\n    # Completion probabilities carry the same constraints into the policy.\n    # Other heads retain their established representation.\n    context = tf.keras.layers.Dense(128, activation=\"gelu\")(\n        tf.keras.layers.Concatenate()(\n            [hidden, encoder.numeric_features(context_probability)]\n        )\n    )\n    context = tf.keras.layers.Concatenate()([hidden, context])\n    return outputs, context\n\n\ndef late_noten_safety(logits, inputs, legal):\n    \"\"\"Mix in uniform proven-safe discards; fully override at exhaustion.\"\"\"\n    safe = legal & tf.gather(\n        tf.reduce_all(actions.guaranteed_safe_tiles(inputs), axis=1),\n        list(range(34)) + [4, 13, 22],\n        axis=1,\n    )\n    # With an all-terminal/honor river, discarding a middle tile can forfeit\n    # nagashi mangan. The feature contract does not record own called rivers,\n    # so conservatively retain that possibility rather than infer it away.\n    middle = tf.constant([i for i in range(27) if 0 < i % 9 < 8])\n    nagashi_possible = ~tf.reduce_any(\n        tf.gather(inputs[\"genbutsu_to_seat\"][:, 0] > 0, middle, axis=1), axis=1\n    )\n    terminal_or_honor = tf.constant(\n        [i >= 27 or i % 9 in (0, 8) for i in range(34)] + [False] * 3\n    )\n    safe &= ~nagashi_possible[:, None] | terminal_or_honor[None]\n    active = tf.reduce_any(safe, axis=-1) & ~tf.reduce_any(\n        legal & (inputs[\"discard_action_all_shanten\"] <= 1), axis=-1\n    )\n    strength = tf.where(\n        active,\n        1\n        - tf.square(\n            tf.clip_by_value(\n                tf.cast(inputs[\"live_wall_count\"], tf.float32) / 8, 0, 1\n            )\n        ),\n        0.0,\n    )[:, None]\n    total = tf.reduce_logsumexp(\n        tf.where(legal, logits, -1e4), axis=-1, keepdims=True\n    )\n    uniform = total - tf.math.log(\n        tf.maximum(\n            1.0,\n            tf.reduce_sum(tf.cast(safe, tf.float32), axis=-1, keepdims=True),\n        )\n    )\n    target = tf.where(safe, uniform, -1e4)\n    mixed = tf.reduce_logsumexp(\n        tf.stack(\n            [\n                logits + tf.math.log(tf.maximum(1 - strength, 1e-30)),\n                target + tf.math.log(tf.maximum(strength, 1e-30)),\n            ],\n            axis=-1,\n        ),\n        axis=-1,\n    )\n    return tf.where(\n        strength == 0, logits, tf.where(strength == 1, target, mixed)\n    )\n\n\ndef opening_discard_efficiency(logits, inputs, legal):\n    \"\"\"Bounded efficiency bias, gone after five discards by any opponent.\"\"\"\n    score = -tf.cast(\n        inputs[\"discard_action_all_shanten\"], tf.float32\n    ) + 0.35 * tf.math.log1p(\n        tf.cast(inputs[\"discard_action_all_ukeire_count\"], tf.float32)\n    ) / math.log(\n        137.0\n    )\n    strength = tf.maximum(\n        0.0,\n        1.0\n        - tf.reduce_max(\n            tf.cast(inputs[\"opponent_discard_count\"][:, 1:], tf.float32),\n            axis=-1,\n            keepdims=True,\n        )\n        / 5.0,\n    )\n    bias = tf.clip_by_value(\n        score\n        - tf.reduce_max(tf.where(legal, score, -1e4), axis=-1, keepdims=True),\n        -1.5,\n        0.0,\n    )\n    return logits + tf.where(legal, strength * bias, 0.0)\n\n\ndef opening_discard_symmetry(logits, inputs, legal):\n    \"\"\"Exact dealer first-cut pooling; otherwise fade with opponent discards.\"\"\"\n    counts = inputs[\"candidate_hand_counts\"][:, 0]\n    suited = tf.reshape(counts[:, :27], (-1, 3, 9))\n    non_dora = ~tf.reduce_any(\n        tf.reshape(inputs[\"dora_multiplicity\"][:, :27] > 0, (-1, 3, 9)),\n        axis=-1,\n    )\n    terminals = tf.reshape(\n        tf.stack(\n            [\n                non_dora\n                & (suited[:, :, 0] == 1)\n                & tf.reduce_all(suited[:, :, 1:5] == 0, -1),\n                non_dora\n                & (suited[:, :, 8] == 1)\n                & tf.reduce_all(suited[:, :, 4:8] == 0, -1),\n            ],\n            axis=-1,\n        ),\n        (-1, 6),\n    )\n    floating = (\n        tf.linalg.matmul(\n            tf.cast(terminals, tf.float32),\n            tf.one_hot([0, 8, 9, 17, 18, 26], 37),\n        )\n        > 0\n    ) & legal\n    symmetric = (\n        non_dora\n        & (suited[:, :, 0] == 1)\n        & tf.reduce_all(suited == tf.reverse(suited, axis=[-1]), axis=-1)\n        & tf.reduce_all(suited[:, :, 1:3] == 0, axis=-1)\n        & ~tf.reduce_any(floating, axis=-1, keepdims=True)\n    )\n    winds = tf.constant([[0, 1, 2, 3]], dtype=tf.int8)\n    groups = (\n        tf.concat(\n            [\n                floating[:, None, :],\n                tf.pad(\n                    (counts[:, 31:34] == 1)\n                    & (inputs[\"dora_multiplicity\"][:, 31:34] == 0),\n                    [[0, 0], [31, 3]],\n                )[:, None, :],\n                tf.pad(\n                    (counts[:, 27:31] == 1)\n                    & (inputs[\"dora_multiplicity\"][:, 27:31] == 0)\n                    & (winds != inputs[\"seat_wind\"][:, 0, None])\n                    & (winds != inputs[\"seat_wind\"][:, 1, None])\n                    & (winds != inputs[\"prevailing_wind\"][:, None]),\n                    [[0, 0], [27, 6]],\n                )[:, None, :],\n                symmetric[:, :, None]\n                & tf.cast(\n                    tf.one_hot([0, 9, 18], 37) + tf.one_hot([8, 17, 26], 37),\n                    tf.bool,\n                )[None],\n            ],\n            axis=1,\n        )\n        & legal[:, None, :]\n    )\n    strength = tf.where(\n        (inputs[\"opponent_discard_count\"][:, 0] == 0)\n        & (inputs[\"dealer_relative_seat\"] == 0),\n        1.0,\n        tf.clip_by_value(\n            1.0\n            - tf.reduce_sum(\n                tf.cast(inputs[\"opponent_discard_count\"][:, 1:], tf.float32),\n                axis=-1,\n            )\n            / 6.0,\n            0.0,\n            5.0 / 6.0,\n        ),\n    )\n    # Log-space arithmetic preserves tiny probabilities and group mass.\n    group_mean = tf.reduce_logsumexp(\n        tf.where(groups, logits[:, None, :], -1e9), axis=-1\n    ) - tf.math.log(\n        tf.maximum(1.0, tf.reduce_sum(tf.cast(groups, tf.float32), axis=-1))\n    )\n    pooled = tf.reduce_sum(\n        tf.where(groups, group_mean[:, :, None], 0.0), axis=1\n    )\n    mixed = tf.reduce_logsumexp(\n        tf.stack(\n            [\n                logits + tf.math.log(1.0 - strength[:, None]),\n                pooled + tf.math.log(strength[:, None]),\n            ],\n            axis=-1,\n        ),\n        axis=-1,\n    )\n    return tf.where(\n        tf.reduce_any(groups, axis=1) & (strength[:, None] > 0), mixed, logits\n    )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass FinalCandidates(tf.keras.layers.Layer):\n    def call(self, values):\n        candidates, context, selected = values\n        return tf.concat(\n            [candidates, tf.gather(context, selected[:, 0])],\n            axis=-1,\n        )\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass ResponseKan(tf.keras.layers.Layer):\n    def call(self, values):\n        scores, inputs = values\n        # A response kan refers to the triggering discard's base tile.\n        return tf.concat(\n            [\n                scores[:, 111:260],\n                tf.gather(\n                    scores[:, 261:295],\n                    tf.cast(inputs[\"trigger_tile_id\"], tf.int32),\n                    batch_dims=1,\n                )[:, None],\n            ],\n            axis=-1,\n        )\n\n\ndef policy_loss(labels, logits, mean=losses.mean_valid):\n    nll = tf.add_n(\n        [\n            tf.nn.sparse_softmax_cross_entropy_with_logits(\n                labels=tf.maximum(tf.cast(labels[name], tf.int32), 0),\n                logits=tf.cast(logits[name], tf.float32),\n            )\n            * tf.cast(labels[name] >= 0, tf.float32)\n            for name in actions.TRAIN_POLICY_HEADS\n        ]\n    )\n    return mean(\n        nll,\n        tf.reduce_any(\n            tf.stack(\n                [labels[name] >= 0 for name in actions.TRAIN_POLICY_HEADS]\n            ),\n            axis=0,\n        ),\n    )\n\n\ndef distribution(outputs, heads, legal):\n    \"\"\"Normalize over the exact native candidates used by the collector.\"\"\"\n    logits = tf.stack(\n        [\n            tf.pad(outputs[name], [[0, 0], [0, 150 - outputs[name].shape[-1]]])\n            for name in actions.TRAIN_POLICY_HEADS\n        ],\n        axis=1,\n    )\n    logits = tf.gather(logits, heads, batch_dims=1)\n    return tf.nn.log_softmax(tf.where(legal, logits, -1e9), axis=-1)\n\n\ndef greedy_choices(log_probability, heads):\n    \"\"\"Marginal branch selection on device, with lowest-index tie breaks.\"\"\"\n    chosen = tf.argmax(log_probability, axis=1, output_type=tf.int32)\n    for head, levels in (\n        (1, ((37, 37),)),\n        (2, ((1, 111, 37, 1), (1, 37, 37, 37, 37, 1))),\n    ):\n        scores = log_probability[:, : sum(levels[0])]\n        for sizes in levels:\n            branch = tf.argmax(\n                tf.stack(\n                    [\n                        tf.reduce_logsumexp(part, axis=1)\n                        for part in tf.split(scores, sizes, axis=1)\n                    ],\n                    axis=1,\n                ),\n                axis=1,\n                output_type=tf.int32,\n            )\n            scores = tf.where(\n                tf.repeat(tf.range(len(sizes)), sizes)[None] == branch[:, None],\n                scores,\n                -float(\"inf\"),\n            )\n        chosen = tf.where(\n            heads == head,\n            tf.argmax(scores, axis=1, output_type=tf.int32),\n            chosen,\n        )\n    return chosen\n\n\ndef offline_loss_terms(inputs, outputs, mean=losses.mean_valid):\n    metrics = {}\n    metrics[\"policy_loss\"] = policy_loss(inputs[1], outputs, mean=mean)\n    metrics[\"policy_prior_loss\"] = mean(\n        tf.add_n(\n            [\n                outputs[name + \"_prior_loss\"]\n                * tf.cast(inputs[1][name] >= 0, tf.float32)\n                for name in actions.TRAIN_POLICY_HEADS\n            ]\n        ),\n        tf.reduce_any(\n            tf.stack(\n                [inputs[1][name] >= 0 for name in actions.TRAIN_POLICY_HEADS]\n            ),\n            axis=0,\n        ),\n    )\n    metrics[\"completion_yaku_loss\"] = mean(\n        tf.nn.sigmoid_cross_entropy_with_logits(\n            labels=tf.maximum(\n                tf.cast(inputs[1][\"round_completion_yaku\"], tf.float32), 0\n            ),\n            logits=outputs[\"round_completion_yaku_logits\"],\n        ),\n        inputs[1][\"round_completion_yaku\"] >= 0,\n    )\n    metrics[\"completion_score_loss\"] = mean(\n        tf.nn.sparse_softmax_cross_entropy_with_logits(\n            labels=tf.maximum(\n                tf.cast(inputs[1][\"round_completion_score\"], tf.int32), 0\n            ),\n            logits=outputs[\"round_completion_score_logits\"],\n        ),\n        inputs[1][\"round_completion_score\"] >= 0,\n    )\n    return metrics\n\n\n@tf.keras.utils.register_keras_serializable(package=\"nejimakidori\")\nclass UnpackCandidates(tf.keras.layers.Layer):\n    def call(self, values):\n        packed, selected, board = values\n        return tf.scatter_nd(\n            selected,\n            packed,\n            (tf.shape(board)[0], 295, packed.shape[-1]),\n        )\n\n\nclass RouteMask(tf.keras.layers.Layer):\n    def call(self, values):\n        logits, inputs, selected = values\n        hands = tf.stack(\n            [\n                selected[:, 0],\n                tf.cast(\n                    tf.gather_nd(\n                        actions.candidate_hand_indices(inputs),\n                        selected,\n                    ),\n                    tf.int32,\n                ),\n            ],\n            axis=1,\n        )\n        allowed = payment_scoring.support(\n            tf.gather_nd(tf.cast(inputs[\"candidate_melds\"], tf.float32), hands)\n        )\n        # Outside routes include sequence-free honroutou/chinroutou.\n        return tf.where(\n            tf.stack(\n                [\n                    allowed[..., 1],\n                    allowed[..., 18],\n                    allowed[..., 10] | allowed[..., 11],\n                ],\n                axis=-1,\n            ),\n            logits,\n            -1e9,\n        )\n\n\ndef ron_risk_labels(labels, selected, structure):\n    \"\"\"Legal discard ron, including unknown amounts but excluding triple ron.\"\"\"\n    legal = tf.gather_nd(\n        tf.transpose(labels[\"ron_legal\"], [0, 2, 1]),\n        tf.stack(\n            [\n                selected[:, 0],\n                tf.minimum(tf.cast(structure[:, -1], tf.int32), 36),\n            ],\n            axis=1,\n        ),\n    )\n    risk = legal == 1\n    return risk & ~tf.reduce_all(risk, axis=1)[:, None]\n\n\ndef auxiliary_loss_terms(inputs, outputs, mean=losses.mean_valid):\n    features, labels, _ = inputs\n    selected = outputs[\"selected\"]\n    hand_indices = actions.candidate_hand_indices(features)\n    affinity = tf.cast(\n        tf.gather_nd(\n            labels[\"candidate_yaku_affinity\"],\n            tf.stack(\n                [\n                    selected[:, 0],\n                    tf.cast(tf.gather_nd(hand_indices, selected), tf.int32),\n                ],\n                axis=1,\n            ),\n        ),\n        tf.float32,\n    )\n    terms = {\n        \"route_affinity_loss\": losses.candidate_mean(\n            tf.nn.sigmoid_cross_entropy_with_logits(\n                labels=tf.maximum(affinity, 0.0),\n                logits=outputs[\"route_affinity_logits\"],\n            ),\n            affinity >= 0,\n            selected[:, 0],\n            mean=mean,\n        ),\n    }\n    risk = ron_risk_labels(labels, selected, outputs[\"structure\"])\n    terms[\"candidate_ron_loss\"] = losses.candidate_mean(\n        tf.nn.sigmoid_cross_entropy_with_logits(\n            labels=tf.cast(risk, tf.float32),\n            logits=outputs[\"candidate_ron_logits\"],\n        ),\n        tf.broadcast_to(\n            actions.discard_decisions(features, selected)[:, None],\n            tf.shape(risk),\n        ),\n        selected[:, 0],\n        mean=mean,\n    )\n    return terms\n",
+      "sha256": "e41e10f18fb54b9858bd3d8e72ae576ec6fb8f891c80ee3f60d6ac246df4a020"
     },
     {
       "path": "model/beliefs.py",
@@ -15476,8 +15476,8 @@
     },
     {
       "path": "model/network.py",
-      "text": "\"\"\"Assembly of the shared actor, beliefs and payment critic.\"\"\"\n\nimport tensorflow as tf\n\nfrom model import actor as actor_layers\nfrom model import beliefs, critic, encoder, joint_settlement, payment_scoring\n\n\nclass JointPolicyPayment(tf.keras.Model):\n    \"\"\"Shared policy, beliefs, auxiliaries and payment critic.\"\"\"\n\n    def __init__(self):\n        super().__init__(autocast=False)\n        tf.keras.mixed_precision.set_global_policy(\"mixed_bfloat16\")\n        inputs, board, candidates, selected, structure, critic_rivers = (\n            encoder.encode_inputs()\n        )\n        self.beliefs = beliefs.OpponentBeliefs(\n            encoder=tf.keras.Model(\n                inputs, board, name=\"belief_encoder\", autocast=False\n            ),\n        )\n        belief_logits = self.beliefs(inputs, hidden=board)\n        belief_probability = beliefs.Probabilities(dtype=\"float32\")(\n            belief_logits\n        )\n        self.encoder = tf.keras.Model(\n            inputs,\n            dict(\n                candidate=candidates,\n                board=board,\n                selected=selected,\n                structure=structure,\n                critic_rivers=critic_rivers,\n                **belief_logits,\n                belief_context=tf.keras.layers.Concatenate(dtype=\"float32\")(\n                    [\n                        tf.keras.layers.Flatten(dtype=\"float32\")(\n                            belief_probability[name]\n                        )\n                        for name in beliefs.BELIEF_HEADS\n                    ]\n                ),\n            ),\n        )\n        tf.keras.mixed_precision.set_global_policy(\"float32\")\n        self.context = critic.HandContext(dtype=\"float32\")\n        self.public = critic.PublicContext(dtype=\"float32\")\n        self.player_context = critic.PlayerContext(dtype=\"float32\")\n        self.critic = critic.PaymentCritic(\n            belief_offset=candidates.shape[-1],\n            player_width=self.player_context(\n                [inputs, critic_rivers, selected]\n            ).shape[-1],\n        )\n\n        inputs = self.encoder.input\n        encoded = self.encoder.output\n        probability = beliefs.Probabilities(dtype=\"float32\")(encoded)\n        outputs, context = actor_layers.build_board_heads(\n            inputs=inputs,\n            hidden=encoded[\"board\"],\n            predictions={\n                name: (encoded[name], probability[name])\n                for name in beliefs.BELIEF_HEADS\n            },\n        )\n        outputs.update(\n            actor_layers.build_policy_heads(\n                inputs=inputs,\n                hidden=encoded[\"board\"],\n                candidates=encoded[\"candidate\"],\n                selected=encoded[\"selected\"],\n                context=context,\n            )\n        )\n        outputs.update(actor_layers.PolicySummaries(dtype=\"float32\")(outputs))\n        outputs[\"constraint_loss\"] = tf.keras.layers.Add(dtype=\"float32\")(\n            [\n                encoded[\"belief_constraint_loss\"],\n                outputs[\"route_constraint_loss\"],\n                outputs[\"round_completion_yaku_logits_constraint_loss\"],\n                outputs[\"round_completion_score_logits_constraint_loss\"],\n            ]\n        )\n        # Auxiliary heads have visible-route and hindsight targets.\n        # Only predictions enter the actor; labels stay in the trainer.\n        self.actor = tf.keras.Model(inputs, {**outputs, **encoded})\n        # Rollout encoding and serving use the same yaku-conditioned critic.\n        self.encoder = tf.keras.Model(\n            inputs,\n            {\n                **encoded,\n                \"route_affinity_logits\": outputs[\"route_affinity_logits\"],\n                \"round_completion_yaku_logits\": outputs[\n                    \"round_completion_yaku_logits\"\n                ],\n                \"round_completion_score_logits\": outputs[\n                    \"round_completion_score_logits\"\n                ],\n            },\n        )\n\n    def compile_training(self):\n        \"\"\"Call after initialization so tracing binds live Keras variables.\"\"\"\n        self.critic.distributions = tf.function(\n            self.critic.distributions, jit_compile=True\n        )\n        self.critic.joint_distributions = tf.function(\n            self.critic.joint_distributions, jit_compile=True\n        )\n        self.critic.chunk_statistics = tf.function(\n            self.critic.chunk_statistics, jit_compile=True\n        )\n        self.critic.chunk_gradients = tf.function(\n            self.critic.chunk_gradients, jit_compile=True\n        )\n        self.critic.candidate_chunk = tf.function(\n            self.critic.candidate_chunk, jit_compile=True\n        )\n        self.critic.supervised_statistics = tf.function(\n            self.critic.supervised_statistics\n        )\n        for block in self.encoder.get_layer(\"hand_bank\").suits:\n            block.call = tf.function(block.call, jit_compile=True)\n        river = self.encoder.get_layer(\"river_encoder\")\n        river.encode = tf.function(river.encode, jit_compile=True)\n        self.beliefs.tile_attention.call = tf.function(\n            self.beliefs.tile_attention.call, jit_compile=True\n        )\n\n    def candidate_context(self, features, encoded):\n        state = tf.concat(\n            [\n                encoded[\"candidate\"],\n                tf.gather(encoded[\"belief_context\"], encoded[\"selected\"][:, 0]),\n                tf.gather(encoded[\"board\"], encoded[\"selected\"][:, 0]),\n                self.context(\n                    [features, encoded[\"selected\"], encoded[\"structure\"]]\n                ),\n                self.public(\n                    [features, encoded[\"selected\"], encoded[\"structure\"]]\n                ),\n            ],\n            axis=-1,\n        )\n        return encoded, tf.concat(\n            [\n                state,\n                tf.sigmoid(encoded[\"route_affinity_logits\"]),\n                tf.reshape(\n                    tf.gather(\n                        tf.sigmoid(encoded[\"round_completion_yaku_logits\"]),\n                        encoded[\"selected\"][:, 0],\n                    ),\n                    (-1, 4 * 2 * 23),\n                ),\n                tf.reshape(\n                    tf.gather(\n                        tf.nn.softmax(encoded[\"round_completion_score_logits\"]),\n                        encoded[\"selected\"][:, 0],\n                    ),\n                    (-1, 4 * 2 * len(payment_scoring.SCORES)),\n                ),\n                tf.reshape(\n                    self.player_context(\n                        [\n                            features,\n                            encoded[\"critic_rivers\"],\n                            encoded[\"selected\"],\n                        ]\n                    ),\n                    (-1, 4 * self.critic.player_width),\n                ),\n            ],\n            axis=-1,\n        )\n\n    def call(self, inputs):\n        outputs = self.actor(inputs[0])\n        # Reuse the actor encoder output for critic supervision.\n        encoded, state = self.candidate_context(inputs[0], outputs)\n        return {\n            **outputs,\n            **self.supervised_outputs(inputs, encoded, state),\n        }\n\n    def chosen_inputs(self, features, encoded, state, chosen):\n        \"\"\"One observed action per row, with the shared transition contract.\"\"\"\n        recorded = (\n            tf.gather(chosen, encoded[\"selected\"][:, 0])\n            == encoded[\"selected\"][:, 1]\n        )\n        tf.debugging.assert_equal(\n            tf.boolean_mask(encoded[\"selected\"][:, 0], recorded),\n            tf.range(tf.shape(chosen)[0]),\n        )\n        selected = tf.boolean_mask(encoded[\"selected\"], recorded)\n        return {\n            **joint_settlement.public_inputs(features),\n            \"state\": tf.boolean_mask(state, recorded),\n            **critic.public_inputs(features, selected),\n        }\n\n    def supervised_outputs(self, inputs, encoded, state):\n        features, labels, _ = inputs\n        recorded_inputs = self.chosen_inputs(\n            features, encoded, state, critic.chosen_actions(features, labels)\n        )\n        if not self.critic.built:\n            self.critic(\n                {name: value[:1] for name, value in recorded_inputs.items()}\n            )\n        outputs = {\n            \"critic_statistics\": self.critic.supervised_statistics(\n                recorded_inputs, inputs[2]\n            )\n        }\n        return outputs\n",
-      "sha256": "c625301cac53e1dd5647b16e4a1843264ccdd0410b4dbe525989c77b88b7e560"
+      "text": "\"\"\"Assembly of the shared actor, beliefs and payment critic.\"\"\"\n\nimport tensorflow as tf\n\nfrom model import actor as actor_layers\nfrom model import beliefs, critic, encoder, joint_settlement, payment_scoring\n\n\nclass JointPolicyPayment(tf.keras.Model):\n    \"\"\"Shared policy, beliefs, auxiliaries and payment critic.\"\"\"\n\n    def __init__(self):\n        super().__init__(autocast=False)\n        tf.keras.mixed_precision.set_global_policy(\"mixed_bfloat16\")\n        inputs, board, candidates, selected, structure, critic_rivers = (\n            encoder.encode_inputs()\n        )\n        self.beliefs = beliefs.OpponentBeliefs(\n            encoder=tf.keras.Model(\n                inputs, board, name=\"belief_encoder\", autocast=False\n            ),\n        )\n        belief_logits = self.beliefs(inputs, hidden=board)\n        belief_probability = beliefs.Probabilities(dtype=\"float32\")(\n            belief_logits\n        )\n        encoded = {\n            \"candidate\": candidates,\n            \"board\": board,\n            \"selected\": selected,\n            \"structure\": structure,\n            \"critic_rivers\": critic_rivers,\n            **belief_logits,\n            \"belief_context\": tf.keras.layers.Concatenate(dtype=\"float32\")(\n                [\n                    tf.keras.layers.Flatten(dtype=\"float32\")(\n                        belief_probability[name]\n                    )\n                    for name in beliefs.BELIEF_HEADS\n                ]\n            ),\n        }\n        tf.keras.mixed_precision.set_global_policy(\"float32\")\n        self.context = critic.HandContext(dtype=\"float32\")\n        self.public = critic.PublicContext(dtype=\"float32\")\n        self.player_context = critic.PlayerContext(dtype=\"float32\")\n        self.critic = critic.PaymentCritic(\n            belief_offset=candidates.shape[-1],\n            player_width=self.player_context(\n                [inputs, critic_rivers, selected]\n            ).shape[-1],\n        )\n\n        outputs, context = actor_layers.build_board_heads(\n            inputs=inputs,\n            hidden=board,\n            belief_probability=belief_probability,\n        )\n        outputs.update(\n            actor_layers.build_policy_heads(\n                inputs=inputs,\n                hidden=encoded[\"board\"],\n                candidates=encoded[\"candidate\"],\n                selected=encoded[\"selected\"],\n                context=context,\n            )\n        )\n        outputs.update(\n            actor_layers.PolicySummaries(dtype=\"float32\")(\n                {**outputs, **belief_logits}\n            )\n        )\n        outputs[\"constraint_loss\"] = tf.keras.layers.Add(dtype=\"float32\")(\n            [\n                encoded[\"belief_constraint_loss\"],\n                outputs[\"route_constraint_loss\"],\n                outputs[\"round_completion_yaku_logits_constraint_loss\"],\n                outputs[\"round_completion_score_logits_constraint_loss\"],\n            ]\n        )\n        # Auxiliary heads have visible-route and hindsight targets.\n        # Only predictions enter the actor; labels stay in the trainer.\n        self.actor = tf.keras.Model(inputs, {**outputs, **encoded})\n        # Rollout encoding and serving use the same yaku-conditioned critic.\n        self.encoder = tf.keras.Model(\n            inputs,\n            {\n                **encoded,\n                \"route_affinity_logits\": outputs[\"route_affinity_logits\"],\n                \"round_completion_yaku_logits\": outputs[\n                    \"round_completion_yaku_logits\"\n                ],\n                \"round_completion_score_logits\": outputs[\n                    \"round_completion_score_logits\"\n                ],\n            },\n        )\n\n    def compile_training(self):\n        \"\"\"Call after initialization so tracing binds live Keras variables.\"\"\"\n        self.critic.distributions = tf.function(\n            self.critic.distributions, jit_compile=True\n        )\n        self.critic.joint_distributions = tf.function(\n            self.critic.joint_distributions, jit_compile=True\n        )\n        self.critic.chunk_statistics = tf.function(\n            self.critic.chunk_statistics, jit_compile=True\n        )\n        self.critic.chunk_gradients = tf.function(\n            self.critic.chunk_gradients, jit_compile=True\n        )\n        self.critic.candidate_chunk = tf.function(\n            self.critic.candidate_chunk, jit_compile=True\n        )\n        self.critic.supervised_statistics = tf.function(\n            self.critic.supervised_statistics\n        )\n        for block in self.encoder.get_layer(\"hand_bank\").suits:\n            block.call = tf.function(block.call, jit_compile=True)\n        river = self.encoder.get_layer(\"river_encoder\")\n        river.encode = tf.function(river.encode, jit_compile=True)\n        self.beliefs.tile_attention.call = tf.function(\n            self.beliefs.tile_attention.call, jit_compile=True\n        )\n\n    def candidate_context(self, features, encoded):\n        state = tf.concat(\n            [\n                encoded[\"candidate\"],\n                tf.gather(encoded[\"belief_context\"], encoded[\"selected\"][:, 0]),\n                tf.gather(encoded[\"board\"], encoded[\"selected\"][:, 0]),\n                self.context(\n                    [features, encoded[\"selected\"], encoded[\"structure\"]]\n                ),\n                self.public(\n                    [features, encoded[\"selected\"], encoded[\"structure\"]]\n                ),\n            ],\n            axis=-1,\n        )\n        return encoded, tf.concat(\n            [\n                state,\n                tf.sigmoid(encoded[\"route_affinity_logits\"]),\n                tf.reshape(\n                    tf.gather(\n                        tf.sigmoid(encoded[\"round_completion_yaku_logits\"]),\n                        encoded[\"selected\"][:, 0],\n                    ),\n                    (-1, 4 * 2 * 23),\n                ),\n                tf.reshape(\n                    tf.gather(\n                        tf.nn.softmax(encoded[\"round_completion_score_logits\"]),\n                        encoded[\"selected\"][:, 0],\n                    ),\n                    (-1, 4 * 2 * len(payment_scoring.SCORES)),\n                ),\n                tf.reshape(\n                    self.player_context(\n                        [\n                            features,\n                            encoded[\"critic_rivers\"],\n                            encoded[\"selected\"],\n                        ]\n                    ),\n                    (-1, 4 * self.critic.player_width),\n                ),\n            ],\n            axis=-1,\n        )\n\n    def call(self, inputs):\n        outputs = self.actor(inputs[0])\n        # Reuse the actor encoder output for critic supervision.\n        encoded, state = self.candidate_context(inputs[0], outputs)\n        return {\n            **outputs,\n            **self.supervised_outputs(inputs, encoded, state),\n        }\n\n    def chosen_inputs(self, features, encoded, state, chosen):\n        \"\"\"One observed action per row, with the shared transition contract.\"\"\"\n        recorded = (\n            tf.gather(chosen, encoded[\"selected\"][:, 0])\n            == encoded[\"selected\"][:, 1]\n        )\n        tf.debugging.assert_equal(\n            tf.boolean_mask(encoded[\"selected\"][:, 0], recorded),\n            tf.range(tf.shape(chosen)[0]),\n        )\n        selected = tf.boolean_mask(encoded[\"selected\"], recorded)\n        return {\n            **joint_settlement.public_inputs(features),\n            \"state\": tf.boolean_mask(state, recorded),\n            **critic.public_inputs(features, selected),\n        }\n\n    def supervised_outputs(self, inputs, encoded, state):\n        features, labels, _ = inputs\n        recorded_inputs = self.chosen_inputs(\n            features, encoded, state, critic.chosen_actions(features, labels)\n        )\n        if not self.critic.built:\n            self.critic(\n                {name: value[:1] for name, value in recorded_inputs.items()}\n            )\n        return {\n            \"critic_statistics\": self.critic.supervised_statistics(\n                recorded_inputs, inputs[2]\n            )\n        }\n",
+      "sha256": "7548406431e4e2c13f752e85f001d86e1509bd204dacb36fcae506d281d21405"
     },
     {
       "path": "model/outcomes.py",
@@ -15591,8 +15591,8 @@
     },
     {
       "path": "training/restoration.py",
-      "text": "\"\"\"Expert records and policy labels for structural restoration.\"\"\"\n\nimport tensorflow as tf\n\nfrom log_dataset import records\nfrom model import actions\n\n\ndef decode_expert(raw):\n    features, labels = records.parse_batch(raw)\n    return features, *policy_choices(features, labels)\n\n\ndef policy_choices(features, labels):\n    \"\"\"Recover the active policy head, observed choice and legal mask.\"\"\"\n    choices = tf.stack(\n        [\n            tf.cast(labels[name], tf.int32)\n            for name in actions.TRAIN_POLICY_HEADS\n        ],\n        axis=1,\n    )\n    tf.debugging.assert_equal(\n        tf.reduce_sum(tf.cast(choices >= 0, tf.int32), axis=1), 1\n    )\n    head = tf.argmax(choices >= 0, axis=1, output_type=tf.int32)\n    expert = tf.gather(choices, head, batch_dims=1)\n    masks = actions.legal_choices(features)\n    legal = tf.gather(\n        tf.stack(\n            [\n                tf.pad(masks[name], [[0, 0], [0, 150 - masks[name].shape[-1]]])\n                for name in actions.TRAIN_POLICY_HEADS\n            ],\n            axis=1,\n        ),\n        head,\n        batch_dims=1,\n    )\n    tf.debugging.assert_equal(tf.gather(legal, expert, batch_dims=1), True)\n    return head, expert, legal\n",
-      "sha256": "bb5afd59207b9955bcb7fcfc957a472f91cf982e749704c0761bf8d1a6381b11"
+      "text": "\"\"\"Expert records and policy labels for structural restoration.\"\"\"\n\nimport tensorflow as tf\n\nfrom model import actions\n\n\ndef policy_choices(features, labels):\n    \"\"\"Recover the active policy head, observed choice and legal mask.\"\"\"\n    choices = tf.stack(\n        [\n            tf.cast(labels[name], tf.int32)\n            for name in actions.TRAIN_POLICY_HEADS\n        ],\n        axis=1,\n    )\n    tf.debugging.assert_equal(\n        tf.reduce_sum(tf.cast(choices >= 0, tf.int32), axis=1), 1\n    )\n    head = tf.argmax(choices >= 0, axis=1, output_type=tf.int32)\n    expert = tf.gather(choices, head, batch_dims=1)\n    masks = actions.legal_choices(features)\n    legal = tf.gather(\n        tf.stack(\n            [\n                tf.pad(masks[name], [[0, 0], [0, 150 - masks[name].shape[-1]]])\n                for name in actions.TRAIN_POLICY_HEADS\n            ],\n            axis=1,\n        ),\n        head,\n        batch_dims=1,\n    )\n    tf.debugging.assert_equal(tf.gather(legal, expert, batch_dims=1), True)\n    return head, expert, legal\n",
+      "sha256": "ab82913b0e41e69125c647b1cc4c1c3176780cba9f2b6af57e2a800fd3bfd072"
     },
     {
       "path": "training/self_play.py",

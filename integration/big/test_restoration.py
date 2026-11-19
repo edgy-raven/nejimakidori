@@ -31,8 +31,7 @@ def test_recorded_structures_restore_policy_and_beliefs():
         ]
     )
     features, labels, _ = training_data.parse_batch(raw)
-    restored, head, chosen, legal = restoration.decode_expert(raw)
-    tf.nest.map_structure(numpy.testing.assert_array_equal, restored, features)
+    head, chosen, legal = restoration.policy_choices(features, labels)
     numpy.testing.assert_array_equal(
         tf.gather(legal, chosen, batch_dims=1), True
     )

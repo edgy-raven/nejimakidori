@@ -4230,7 +4230,7 @@
         "kind": "state",
         "source": {
           "path": "model/actor.py",
-          "symbol": "auxiliary_logits = [probability",
+          "symbol": "context_probability = [",
           "scope": "build_board_heads"
         }
       },
@@ -6021,7 +6021,7 @@
             "label": "VJP through constrained belief probabilities into policy context",
             "source": {
               "path": "model/actor.py",
-              "symbol": "auxiliary_logits = [probability",
+              "symbol": "context_probability = [",
               "scope": "build_board_heads"
             }
           },

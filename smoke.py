@@ -1,0 +1,59 @@
+"""Run correctness checks and an optional local performance comparison."""
+
+import argparse
+import os
+import pathlib
+import subprocess
+import sys
+
+
+def run():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("size", choices=("small", "big"))
+    parser.add_argument("--performance-baseline", type=pathlib.Path)
+    args = parser.parse_args()
+    if args.size == "small" and args.performance_baseline:
+        parser.error("--performance-baseline requires big")
+    root = pathlib.Path(__file__).resolve().parent
+    environment = {
+        **os.environ,
+        "CUDA_VISIBLE_DEVICES": "-1",
+        "TF_NUM_INTRAOP_THREADS": "2",
+        "TF_NUM_INTEROP_THREADS": "2",
+        "OMP_NUM_THREADS": "2",
+        "OPENBLAS_NUM_THREADS": "2",
+    }
+    if args.performance_baseline:
+        subprocess.run(
+            args=[
+                sys.executable,
+                "-m",
+                "integration.performance",
+                "--baseline",
+                str(args.performance_baseline.resolve()),
+            ],
+            cwd=root,
+            env=environment,
+            check=True,
+        )
+    for tier in (("small", "big") if args.size == "big" else ("small",)):
+        for path in sorted((root / "integration" / tier).glob("test_*.py")):
+            print(path.relative_to(root), flush=True)
+            # Separate processes release TensorFlow graphs between workflows.
+            subprocess.run(
+                args=[
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "--disable-warnings",
+                    str(path),
+                ],
+                cwd=root,
+                env=environment,
+                check=True,
+            )
+
+
+if __name__ == "__main__":
+    run()

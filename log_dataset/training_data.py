@@ -1,0 +1,466 @@
+"""Streamable full-corpus critic records with same-hand scoring labels."""
+
+import concurrent.futures
+import contextlib
+import fcntl
+import gzip
+import hashlib
+import json
+import multiprocessing
+import pathlib
+import shutil
+import time
+
+import numpy
+import tensorflow as tf
+
+from log_dataset import (
+    _native_collection,
+    afk,
+    archives,
+    focus_sampling,
+    records,
+    replay,
+    scoring,
+    shanten,
+)
+from model import critic, joint_settlement, payment_scoring
+
+AUXILIARY = {
+    "bonus": [24],
+    "score": [24, len(scoring.BONUS_HAN)],
+}
+
+
+SAMPLING_FIELDS = ("meta/focused_priority", "meta/placement_gap")
+
+
+VALIDATION_SAMPLE = {
+    "partition": 7,
+    "decision_hash_modulus": 16,
+    "hash": "sha256:validation-941:game_id:kyoku_id:decision_index:actor",
+}
+
+
+def serialize(observation, target):
+    example = tf.train.Example.FromString(
+        records.serialize_observation(observation)
+    )
+    example.features.feature["critic/partition"].int64_list.value[:] = [
+        records.game_partition(observation.game_id)
+    ]
+    order = (observation.actor + numpy.arange(4)) % 4
+    cells = numpy.asarray(scoring.CELLS[:24])
+    numpy.testing.assert_array_equal(
+        observation.terminal_payment[:2],
+        target["payment"][:2, order][:, :, order],
+    )
+    for name in AUXILIARY:
+        value = target[name][:, order][:, :, order][
+            cells[:, 0], cells[:, 1], cells[:, 2]
+        ]
+        example.features.feature["critic/" + name].bytes_list.value[:] = [
+            value.astype("int16").tobytes()
+        ]
+    return example.SerializeToString()
+
+
+def parse_batch(raw):
+    parsed = tf.io.parse_example(
+        raw,
+        {
+            **{
+                name: tf.io.FixedLenFeature([], tf.string)
+                for name in records.FIELDS
+            },
+            "critic/score": tf.io.FixedLenFeature([], tf.string),
+            "critic/bonus": tf.io.FixedLenFeature([], tf.string),
+        },
+    )
+    return decode_batch(parsed)
+
+
+def decode_batch(parsed):
+    """Decode rich recorded supervision from already parsed fields."""
+    features, labels = records.decode_batch(parsed)
+    auxiliary = {
+        name: tf.cast(
+            tf.reshape(
+                tf.io.decode_raw(
+                    parsed["critic/" + name],
+                    tf.int16,
+                ),
+                [-1, *shape],
+            ),
+            tf.int32,
+        )
+        for name, shape in AUXILIARY.items()
+    }
+    cells = numpy.asarray(scoring.CELLS)
+    payments = tf.gather(
+        tf.reshape(labels["terminal_payment"], [-1, 64]),
+        numpy.ravel_multi_index(cells.T, (4, 4, 4)),
+        axis=1,
+    )
+    public = joint_settlement.public_inputs(features)
+    auxiliary.update(
+        {
+            **critic.public_inputs(features),
+            **public,
+            **joint_settlement.payment_labels(payments, public),
+        }
+    )
+    return features, labels, auxiliary
+
+
+class PackedBatch:
+    """Transfer one buffer per dtype, then restore the existing input tree."""
+
+    def __init__(self, inputs):
+        self.structure = tf.nest.map_structure(
+            lambda value: tf.TensorSpec(value.shape[1:], value.dtype), inputs
+        )
+        self.specs = tf.nest.flatten(self.structure)
+        self.widths = [spec.shape.num_elements() for spec in self.specs]
+        self.groups = {
+            dtype: [
+                index
+                for index, spec in enumerate(self.specs)
+                if spec.dtype.name == dtype
+            ]
+            for dtype in sorted({spec.dtype.name for spec in self.specs})
+        }
+
+    def pack(self, inputs):
+        values = tf.nest.flatten(inputs)
+        batch = tf.shape(values[0])[0]
+        packed = {}
+        for dtype, indices in self.groups.items():
+            parts = []
+            for index in indices:
+                width = self.widths[index]
+                value = tf.reshape(values[index], (batch, width))
+                if dtype in ("bool", "int8", "int16", "int32"):
+                    slots = 4 // self.specs[index].dtype.size
+                    if dtype == "bool":
+                        value = tf.cast(value, tf.uint8)
+                    if slots > 1:
+                        value = tf.reshape(
+                            tf.pad(value, ((0, 0), (0, (-width) % slots))),
+                            (batch, -1, slots),
+                        )
+                    value = tf.bitcast(value, tf.float32)
+                parts.append(value)
+            packed[dtype] = tf.concat(parts, axis=1)
+        return packed
+
+    def pack_numpy(self, inputs):
+        """Pack CPU arrays without constructing a tensor for every field."""
+        values = tf.nest.flatten(inputs)
+        batch = values[0].shape[0]
+        packed = {}
+        for dtype, indices in self.groups.items():
+            slots = (
+                4 // self.specs[indices[0]].dtype.size
+                if dtype in ("bool", "int8", "int16", "int32")
+                else 1
+            )
+            widths = [
+                (self.widths[index] + slots - 1) // slots for index in indices
+            ]
+            packed[dtype] = numpy.zeros(
+                (batch, sum(widths)),
+                (
+                    "float32"
+                    if dtype in ("bool", "int8", "int16", "int32")
+                    else dtype
+                ),
+            )
+            offset = 0
+            for index, width in zip(indices, widths):
+                packed[dtype][:, offset : offset + width].view(dtype)[
+                    :, : self.widths[index]
+                ] = values[index].reshape(batch, self.widths[index])
+                offset += width
+        return packed
+
+    def unpack(self, inputs):
+        values = [None] * len(self.specs)
+        for dtype, indices in self.groups.items():
+            # Narrow integer/bool SplitV kernels run on the host. Transfer
+            # bit patterns in float32 buffers so splitting stays on device.
+            slots = (
+                4 // self.specs[indices[0]].dtype.size
+                if dtype in ("bool", "int8", "int16", "int32")
+                else 1
+            )
+            parts = tf.split(
+                inputs[dtype],
+                [
+                    (self.widths[index] + slots - 1) // slots
+                    for index in indices
+                ],
+                axis=1,
+            )
+            for index, value in zip(indices, parts):
+                if dtype == "int32":
+                    # Int32 Reshape places its data on the host. Reshape the
+                    # transported float bits first, then reinterpret on GPU.
+                    values[index] = tf.bitcast(
+                        tf.reshape(value, (-1, *self.specs[index].shape)),
+                        tf.int32,
+                    )
+                    continue
+                if dtype in ("bool", "int8", "int16"):
+                    value = tf.bitcast(
+                        value, tf.uint8 if dtype == "bool" else dtype
+                    )
+                    value = tf.reshape(value, (tf.shape(value)[0], -1))
+                    # Aligned fields have no padding to trim.
+                    if self.widths[index] % slots:
+                        value = value[:, : self.widths[index]]
+                    if dtype == "bool":
+                        value = tf.cast(value, tf.bool)
+                values[index] = tf.reshape(
+                    value, (-1, *self.specs[index].shape)
+                )
+        return tf.nest.pack_sequence_as(self.structure, values)
+
+
+def process_shard(task):
+    index, root, games = task
+    path = pathlib.Path(root) / f"train-{index:05d}.tfrecord.gz"
+    validation_path = pathlib.Path(root) / f"validation-{index:05d}.tfrecord.gz"
+    summary_path = path.with_suffix(".json")
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if (
+            path.stat().st_size != summary["bytes"]
+            or validation_path.stat().st_size != summary["validation_bytes"]
+        ):
+            raise ValueError(f"Incomplete dataset shard: {path}")
+        return summary
+    if shutil.disk_usage(root).free < 15 * 1024**3:
+        raise OSError("Corpus rebuild requires at least 15 GiB free space")
+    validation_count = 0
+    counts = numpy.zeros(10, numpy.int64)
+    sampling_counts = numpy.zeros((10, 2), numpy.int64)
+    with contextlib.ExitStack() as stack:
+        source_archives = {
+            path: archives.open_archive(path)
+            for path in {game.archive for game in games}
+        }
+        writer = stack.enter_context(
+            tf.io.TFRecordWriter(str(path) + ".partial", options="GZIP")
+        )
+        validation_writer = stack.enter_context(
+            tf.io.TFRecordWriter(
+                str(validation_path) + ".partial", options="GZIP"
+            )
+        )
+        for game in games:
+            raw = source_archives[game.archive].read(game.member)
+            if raw.startswith(b"\x1f\x8b"):
+                raw = gzip.decompress(raw)
+            events = [json.loads(line) for line in raw.splitlines()]
+            seats = events[0]["player_ranks"]["retained_seats"]
+            if not seats:
+                continue
+            targets = scoring.round_labels(events)
+            partition = records.game_partition(game.game_id)
+            for round_events in afk.retained_hands(events):
+                state = replay.Replay(game.game_id, round_events)
+                for observation in state.observations(actors=seats):
+                    sampling = focus_sampling.metadata(observation)
+                    example = tf.train.Example.FromString(
+                        serialize(observation, targets[observation.kyoku_id])
+                    )
+                    for name, value in zip(SAMPLING_FIELDS, sampling):
+                        example.features.feature[name].int64_list.value[:] = [
+                            int(value)
+                        ]
+                    raw = example.SerializeToString()
+                    sampling_counts[partition] += sampling
+                    writer.write(raw)
+                    if partition == VALIDATION_SAMPLE["partition"] and (
+                        int.from_bytes(
+                            hashlib.sha256(
+                                (
+                                    f"validation-941:{observation.game_id}:"
+                                    f"{observation.kyoku_id}:"
+                                    f"{observation.decision_index}:"
+                                    f"{observation.actor}"
+                                ).encode()
+                            ).digest()[:8]
+                        )
+                        % VALIDATION_SAMPLE["decision_hash_modulus"]
+                        == 0
+                    ):
+                        validation_writer.write(raw)
+                        validation_count += 1
+                    counts[partition] += 1
+    pathlib.Path(str(path) + ".partial").replace(path)
+    pathlib.Path(str(validation_path) + ".partial").replace(validation_path)
+    summary = {
+        "path": path.name,
+        "validation_path": validation_path.name,
+        "validation_count": validation_count,
+        "validation_bytes": validation_path.stat().st_size,
+        "games": len(games),
+        "counts": counts.tolist(),
+        "sampling_counts": sampling_counts.tolist(),
+        "bytes": path.stat().st_size,
+    }
+    write_json(summary_path, summary)
+    return summary
+
+
+def dataset(root, partition, batch_size, *, rank=0, replicas=1, seed=None):
+    """Read a natural partition, retaining its final partial batch."""
+    summary = json.loads(
+        (pathlib.Path(root) / "dataset_summary.json").read_text()
+    )
+    assert summary["critic_scoring_states"] == [
+        list(s) for s in payment_scoring.SCORES
+    ]
+    assert summary["critic_auxiliary"] == AUXILIARY
+    assert summary["critic_bonus_han"] == list(scoring.BONUS_HAN)
+    records.validate_summary(root)
+    assert summary["validation_sample"] == VALIDATION_SAMPLE
+    paths = [
+        str(
+            pathlib.Path(root)
+            / row["validation_path" if partition == "validation" else "path"]
+        )
+        for row in summary["shard_manifest"][rank::replicas]
+    ]
+    stream = tf.data.Dataset.from_tensor_slices(paths)
+    if seed is not None:
+        stream = stream.shuffle(len(paths), seed=seed)
+    stream = stream.interleave(
+        lambda path: tf.data.TFRecordDataset(path, compression_type="GZIP"),
+        cycle_length=min(8, len(paths)),
+        block_length=1,
+        num_parallel_calls=min(8, len(paths)),
+        deterministic=True,
+    )
+
+    def select(raw):
+        partitions = tf.io.parse_example(
+            raw, {"critic/partition": tf.io.FixedLenFeature([], tf.int64)}
+        )["critic/partition"]
+        selected = partitions < 7 if partition == "train" else partitions == 7
+        return tf.boolean_mask(raw, selected)
+
+    stream = stream.batch(1024).map(select, num_parallel_calls=2).unbatch()
+    options = tf.data.Options()
+    options.threading.private_threadpool_size = 12
+    return stream.batch(batch_size).with_options(options).prefetch(2)
+
+
+def write_json(path, value):
+    temporary = path.with_name(path.name + ".partial")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.replace(path)
+
+
+def run(args):
+    root = pathlib.Path(args.output)
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "build.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        games, ranks = archives.games(args.archives, args.extra_archives)
+        excluded = {
+            row["game_id"]
+            for row in json.loads(pathlib.Path(args.reserve).read_text())[
+                "games"
+            ]
+        }
+        games = [game for game in games if game.game_id not in excluded]
+        if not games:
+            raise ValueError(
+                "No eligible training games after reserve exclusion"
+            )
+        if args.limit_games and args.limit_games < len(games):
+            games = [
+                games[index]
+                for index in numpy.linspace(
+                    0, len(games) - 1, args.limit_games, dtype=int
+                )
+            ]
+        plan = {
+            "archives": str(pathlib.Path(args.archives).resolve()),
+            "games": len(games),
+            "excluded_reserve_games": sorted(excluded),
+            "critic_auxiliary": AUXILIARY,
+            "critic_bonus_han": list(scoring.BONUS_HAN),
+            "validation_sample": VALIDATION_SAMPLE,
+            "sampling_fields": list(SAMPLING_FIELDS),
+            "critic_scoring_states": [list(s) for s in payment_scoring.SCORES],
+            "limit_games": args.limit_games,
+            "player_ranks": ranks,
+            "input_schema": _native_collection.INPUTS,
+            "label_schema": records.LABELS,
+            "reference_schema": records.REFERENCE_INPUTS,
+        }
+        if (root / "build-plan.json").exists():
+            if json.loads((root / "build-plan.json").read_text()) != plan:
+                raise ValueError("Dataset inputs changed; use a fresh output")
+        write_json(root / "build-plan.json", plan)
+        (root / "games.jsonl").write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "game_id": game.game_id,
+                        "archive": str(game.archive),
+                        "member": game.member,
+                    }
+                )
+                + "\n"
+                for game in games
+            )
+        )
+        tasks = [
+            (index, str(root), tuple(games[start : start + 32]))
+            for index, start in enumerate(range(0, len(games), 32))
+        ]
+        shanten.native()
+        writer = tf.summary.create_file_writer(str(root / "tensorboard"))
+        started = time.monotonic()
+        results = []
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=args.workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as pool:
+            for row in pool.map(process_shard, tasks):
+                results.append(row)
+                status = {
+                    "stage": "building",
+                    "shards": len(results),
+                    "total_shards": len(tasks),
+                    "rows": sum(sum(r["counts"]) for r in results),
+                    "elapsed_seconds": time.monotonic() - started,
+                }
+                write_json(root / "status.json", status)
+                with writer.as_default():
+                    for name in ("shards", "rows", "elapsed_seconds"):
+                        tf.summary.scalar(
+                            "rebuild/" + name, status[name], step=len(results)
+                        )
+                writer.flush()
+                print(status, flush=True)
+        write_json(
+            root / "dataset_summary.json",
+            {
+                **plan,
+                "shard_manifest": results,
+                "partition_counts": numpy.sum(
+                    [row["counts"] for row in results], axis=0
+                ).tolist(),
+                "validation_examples": sum(
+                    row["validation_count"] for row in results
+                ),
+                "examples": sum(sum(row["counts"]) for row in results),
+            },
+        )
+        write_json(root / "status.json", {**status, "stage": "complete"})

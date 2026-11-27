@@ -1,0 +1,644 @@
+[
+  {
+    "bakaze": "E",
+    "dora_marker": "C",
+    "honba": 0,
+    "kyoku": 3,
+    "kyotaku": 0,
+    "oya": 2,
+    "scores": [
+      25000,
+      7800,
+      42200,
+      25000
+    ],
+    "tehais": [
+      [
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?"
+      ],
+      [
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?"
+      ],
+      [
+        "4m",
+        "7m",
+        "7m",
+        "8m",
+        "9m",
+        "9m",
+        "4p",
+        "1s",
+        "2s",
+        "E",
+        "N",
+        "C",
+        "C"
+      ],
+      [
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?",
+        "?"
+      ]
+    ],
+    "type": "start_kyoku"
+  },
+  {
+    "actor": 2,
+    "pai": "9s",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "9s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "W",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "N",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "S",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "7s",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "7s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "S",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "9s",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "E",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "4p",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "2s",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "4s",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "C",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "consumed": [
+      "C",
+      "C"
+    ],
+    "pai": "C",
+    "target": 0,
+    "type": "pon"
+  },
+  {
+    "actor": 2,
+    "pai": "1s",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "7s",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "2s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "F",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "5m",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "N",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "1s",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "W",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "E",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "8p",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "8p",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "5m",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "2p",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "1m",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "5m",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "E",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "4s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "1p",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "1p",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "P",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "P",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "consumed": [
+      "P",
+      "P"
+    ],
+    "pai": "P",
+    "target": 2,
+    "type": "pon"
+  },
+  {
+    "actor": 0,
+    "pai": "9p",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "F",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "F",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "F",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "4s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "9s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "2p",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "3p",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "3p",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "E",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "1m",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "2s",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "5s",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "5s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "9m",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "9p",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "W",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "1s",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "1s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "8s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "8p",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "8p",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "1s",
+    "type": "tsumo"
+  },
+  {
+    "actor": 2,
+    "pai": "1s",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 3,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 3,
+    "pai": "7m",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 0,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 0,
+    "pai": "S",
+    "tsumogiri": true,
+    "type": "dahai"
+  },
+  {
+    "actor": 1,
+    "pai": "?",
+    "type": "tsumo"
+  },
+  {
+    "actor": 1,
+    "pai": "5p",
+    "tsumogiri": false,
+    "type": "dahai"
+  },
+  {
+    "actor": 2,
+    "pai": "2m",
+    "type": "tsumo"
+  }
+]

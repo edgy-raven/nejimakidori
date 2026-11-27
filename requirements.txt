@@ -1,0 +1,4 @@
+numpy>=1.26,<3
+riichienv==0.4.10+duplicate
+tensorboard==2.21.0
+tensorflow[and-cuda]>=2.20,<2.22

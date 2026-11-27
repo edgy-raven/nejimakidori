@@ -1,0 +1,329 @@
+"""Export the joint actor, board heads and action payment critic."""
+
+import argparse
+import hashlib
+import json
+import pathlib
+import shutil
+
+import numpy
+import tensorflow as tf
+
+from log_dataset import call_states, scoring, training_data
+from model import actions, critic, joint_settlement
+from model import network as joint_network
+from model import outcomes
+
+
+class ServingModel(tf.Module):
+    def __init__(self, network):
+        super().__init__()
+        # Track weights without exporting Keras' training-only call signatures.
+        self.network = self._no_dependency(network)
+        self.parameters = [variable.value for variable in network.variables]
+
+    @tf.function
+    def policy(self, **features):
+        outputs = self.network.actor(features, training=False)
+        return {name: outputs[name] for name in actions.TRAIN_POLICY_HEADS}
+
+    @tf.function
+    def serve(self, **features):
+        chunk_size = 4
+        outputs = self.network.actor(features, training=False)
+        state = self.network.candidate_context(features, outputs)
+        active = critic.active_candidates(features, outputs["selected"])
+        selected = tf.boolean_mask(outputs["selected"], active)
+        state = tf.boolean_mask(state, active)
+        public = joint_settlement.public_inputs(features)
+        candidate_public = critic.public_inputs(features, selected)
+        probability = tf.TensorArray(
+            tf.float32,
+            size=0,
+            dynamic_size=True,
+            element_shape=[
+                None,
+                len(scoring.CELLS),
+                len(outcomes.PAYMENT_VALUES) + 4,
+            ],
+        )
+        review_outcomes = tf.TensorArray(
+            tf.float32, size=0, dynamic_size=True, element_shape=[None, 7]
+        )
+        final_ranks = tf.TensorArray(
+            tf.float32, size=0, dynamic_size=True, element_shape=[None, 4]
+        )
+        points = tf.TensorArray(
+            tf.float32, size=0, dynamic_size=True, element_shape=[None, 4]
+        )
+        settlement = tf.TensorArray(
+            tf.float32, size=0, dynamic_size=True, element_shape=[None, 2, 5]
+        )
+        for begin in tf.range(0, tf.shape(selected)[0], chunk_size):
+            rows = selected[begin : begin + chunk_size, 0]
+            inputs = {
+                "state": state[begin : begin + chunk_size],
+                **{
+                    name: tf.gather(value, rows)
+                    for name, value in public.items()
+                },
+            }
+            inputs.update(
+                {
+                    name: value[begin : begin + chunk_size]
+                    for name, value in candidate_public.items()
+                }
+            )
+            forecast = self.network.critic.joint_distributions(inputs)
+            _, final_probability = joint_settlement.continuation_forecast(
+                scores=forecast["joint_scores"],
+                ranks=forecast["joint_ranks"],
+                support=forecast["joint_support"],
+                dealer=inputs["dealer"],
+                hand_number=inputs["hand_number"],
+                pot=inputs["pot"],
+            )
+            # Mutually exclusive endings from the actor's perspective.
+            categories = tf.constant(
+                [
+                    (
+                        6
+                        if kind == 3 or (kind == 0 and mask.bit_count() == 3)
+                        else (
+                            2
+                            if kind == 2 and draw & 1
+                            else (
+                                3
+                                if kind == 2
+                                else (
+                                    1
+                                    if mask & 1
+                                    else (
+                                        0
+                                        if kind == 0 and payer == 0
+                                        else 4 if kind == 1 else 5
+                                    )
+                                )
+                            )
+                        )
+                    )
+                    for kind, payer, mask, draw in joint_settlement.EVENTS
+                ]
+            )
+            review_outcomes = review_outcomes.write(
+                begin // chunk_size,
+                tf.einsum(
+                    "ns,nsc->nc",
+                    tf.reduce_sum(forecast["joint_probability"], axis=-1),
+                    tf.one_hot(
+                        tf.gather(
+                            categories, forecast["joint_support"][..., 5]
+                        ),
+                        7,
+                    ),
+                ),
+            )
+            probability = probability.write(
+                begin // chunk_size, forecast["payment_probability"]
+            )
+            final_ranks = final_ranks.write(
+                begin // chunk_size,
+                joint_settlement.expectation(
+                    forecast["joint_probability"], final_probability
+                ),
+            )
+            points = points.write(
+                begin // chunk_size,
+                joint_settlement.expectation(
+                    forecast["joint_probability"],
+                    forecast["joint_scores"] - inputs["scores"][:, None, None],
+                ),
+            )
+            settlement = settlement.write(
+                begin // chunk_size,
+                tf.stack(joint_settlement.settlement_moments(forecast), axis=1),
+            )
+        probability = probability.concat()
+        weights = tf.gather_nd(
+            critic.candidate_probabilities(features, outputs), selected
+        )
+        count = tf.shape(features["decision_phase"])[0]
+        tf.debugging.assert_near(
+            tf.math.unsorted_segment_sum(weights, selected[:, 0], count),
+            tf.ones(count),
+            atol=1e-5,
+        )
+        mixture = tf.math.unsorted_segment_sum(
+            probability * weights[:, None, None], selected[:, 0], count
+        )
+        moments = tf.math.unsorted_segment_sum(
+            settlement.concat() * weights[:, None, None], selected[:, 0], count
+        )
+        return {
+            **{name: outputs[name] for name in actions.SERVING_ACTOR_OUTPUTS},
+            "payment_values": joint_settlement.payment_values(public),
+            "final_placement_probabilities": tf.math.unsorted_segment_sum(
+                final_ranks.concat() * weights[:, None], selected[:, 0], count
+            ),
+            "review_outcome_probabilities": tf.math.unsorted_segment_sum(
+                review_outcomes.concat() * weights[:, None],
+                selected[:, 0],
+                count,
+            ),
+            "settlement_mean": moments[:, 0],
+            "settlement_variance": tf.maximum(
+                moments[:, 1] - moments[:, 0] ** 2, 0
+            ),
+            "critic_expected_points": points.concat(),
+            "terminal_payment_probabilities": tf.einsum(
+                "ncv,ctpr->ntprv",
+                mixture,
+                tf.constant(
+                    numpy.eye(64, dtype=numpy.float32)[
+                        numpy.ravel_multi_index(
+                            numpy.array(scoring.CELLS).T, (4, 4, 4)
+                        )
+                    ].reshape(-1, 4, 4, 4)
+                ),
+            )
+            + tf.cast(~tf.constant(outcomes.PAYMENT_CELLS), tf.float32)[
+                None, ..., None
+            ]
+            * tf.one_hot(1, len(outcomes.PAYMENT_VALUES) + 4),
+            "critic_action_indices": selected,
+        }
+
+
+def build_network(inputs):
+    """Build every actor and critic variable before strict weight loading."""
+    network = joint_network.JointPolicyPayment()
+    outputs = network.actor(inputs, training=False)
+    state = network.candidate_context(inputs, outputs)
+    network.critic.joint_distributions(
+        {
+            **{
+                name: tf.gather(value, outputs["selected"][:1, 0])
+                for name, value in joint_settlement.public_inputs(
+                    inputs
+                ).items()
+            },
+            "state": state[:1],
+            **critic.public_inputs(inputs, outputs["selected"][:1]),
+        }
+    )
+    network.built = True
+    return network
+
+
+def load_network(weights, inputs):
+    network = build_network(inputs)
+    network.load_weights(weights)
+    network.compile_training()
+    return network
+
+
+def run(args):
+    from training import frozen_policy, self_play
+
+    for device in tf.config.list_physical_devices("GPU"):
+        tf.config.experimental.set_memory_growth(device, True)
+    if args.data is None:
+        inputs = self_play.initial_features(args.self_play_seed)
+    else:
+        inputs = training_data.parse_batch(
+            next(
+                iter(
+                    training_data.dataset(
+                        root=args.data,
+                        partition="train",
+                        batch_size=8,
+                    )
+                )
+            )
+        )[0]
+    network = load_network(args.weights, inputs)
+    module = ServingModel(network)
+    signature = module.serve.get_concrete_function(**call_states.input_specs())
+    root = pathlib.Path(args.output)
+    pending = root.with_name(root.name + ".pending")
+    if pending.exists():
+        shutil.rmtree(pending)
+    pending.mkdir(parents=True)
+    tf.saved_model.save(
+        module,
+        str(pending / "saved_model"),
+        signatures={
+            "serving_default": signature,
+            "policy": module.policy.get_concrete_function(
+                **signature.structured_input_signature[1]
+            ),
+        },
+    )
+    loaded = tf.saved_model.load(str(pending / "saved_model"))
+    actual = loaded.signatures["serving_default"](**inputs)
+    expected = module.serve(**inputs)
+    policy = loaded.signatures["policy"](**inputs)
+    for name, value in policy.items():
+        numpy.testing.assert_allclose(value, actual[name], rtol=1e-5, atol=1e-5)
+    errors = {}
+    for name in expected:
+        numpy.testing.assert_allclose(
+            actual[name], expected[name], rtol=1e-5, atol=1e-5
+        )
+        errors[name] = float(
+            tf.reduce_max(tf.abs(actual[name] - expected[name]))
+        )
+    for name in (
+        "terminal_payment_probabilities",
+        "review_outcome_probabilities",
+        "final_placement_probabilities",
+    ):
+        numpy.testing.assert_allclose(
+            tf.reduce_sum(actual[name], -1), 1, rtol=1e-4, atol=1e-5
+        )
+    for value in actual.values():
+        assert numpy.isfinite(value.numpy()).all()
+    with pathlib.Path(args.weights).open("rb") as stream:
+        weight_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+    (pending / "export-verification.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "weights": pathlib.Path(args.weights).name,
+                "weight_sha256": weight_hash,
+                "output_max_errors": errors,
+                "critic_candidates": int(
+                    tf.shape(actual["critic_action_indices"])[0]
+                ),
+                "payment_forecast": "active_policy_mixture_honba_free",
+                "policy_signature_matches_full_export": True,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+    for name in ("model", "training", "log_dataset"):
+        frozen_policy.freeze_source(
+            pathlib.Path(__file__).parents[1] / name,
+            pending / "source" / name,
+        )
+    shutil.copy2(
+        pathlib.Path(__file__).parents[1] / "requirements.txt",
+        pending / "source/requirements.txt",
+    )
+    pending.rename(root)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--weights", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--data")
+    source.add_argument("--self-play-seed", type=int)
+    parser.add_argument("--output", required=True)
+    run(parser.parse_args())
+
+
+if __name__ == "__main__":
+    main()
